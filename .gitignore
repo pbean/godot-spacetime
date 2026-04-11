@@ -1,0 +1,57 @@
+# Local agent/tool state
+.codex/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.sample
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+.vs/
+
+# Godot caches and local editor state
+.godot/
+.import/
+.mono/
+mono_crash.*.json
+export_credentials.cfg
+
+# Shared export presets can be committed if the demo or packaging flow needs them.
+
+# .NET build outputs and local IDE state
+bin/
+obj/
+TestResults/
+packages/
+*.user
+*.rsuser
+*.DotSettings.user
+*.suo
+*.userprefs
+*.sln.docstates
+*.nupkg
+*.snupkg
+*.coverage
+coverage/
+coverage*.xml
+
+# Packaging and release outputs
+artifacts/
+dist/
+release/
+
+# General logs and patch leftovers
+*.log
+*.tmp
+*.temp
+*.orig
+*.rej
