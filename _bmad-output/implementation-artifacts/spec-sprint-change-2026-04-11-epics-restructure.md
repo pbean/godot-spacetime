@@ -54,6 +54,8 @@ context: []
 
 ## Spec Change Log
 
+- 2026-04-11 — Review feedback exposed that leaving planning-artifact consistency work outside this story was the wrong boundary for this repository. Updated the proposal and readiness report alongside `epics.md` so the planning set stays internally consistent. Avoids a state where `epics.md` is corrected but the active readiness/proposal documents still describe the old backlog. KEEP: the Epic 1 and Epic 6 restructuring, the FR realignment, and the concrete acceptance-evidence tightening already applied in `epics.md`.
+
 ## Design Notes
 
 This is an artifact-correction task, not a product-definition task. The edit should bring `epics.md` into line with the already-approved proposal and the existing architecture, not reinterpret them.
@@ -117,7 +119,10 @@ The riskiest failure mode is partial renumbering: updating story titles without 
 - Release communication now records a repeatable checklist step.
   [`epics.md:768`](../planning-artifacts/epics.md#L768)
 
-**Follow-up**
+**Planning Consistency**
 
-- Deferred work captures the out-of-scope auditability and report-regeneration tasks.
-  [`deferred-work.md:1`](deferred-work.md#L1)
+- Proposal now records explicit approval evidence and execution status.
+  [`sprint-change-proposal-2026-04-11.md:1`](../planning-artifacts/sprint-change-proposal-2026-04-11.md#L1)
+
+- Readiness report now matches the corrected story numbering and final readiness state.
+  [`implementation-readiness-report-2026-04-11.md:1`](../planning-artifacts/implementation-readiness-report-2026-04-11.md#L1)
