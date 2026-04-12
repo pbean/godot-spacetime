@@ -138,7 +138,7 @@ FR6: Epic 1 - Generate client bindings for a SpacetimeDB module in Godot.
 FR7: Epic 1 - Regenerate bindings when the server schema changes.
 FR8: Epic 1 - Understand generated bindings and exposed schema concepts.
 FR9: Epic 1 - Detect incompatibility between generated bindings and the target schema.
-FR10: Epic 6 - Preserve a conceptually stable binding model across runtimes.
+FR10: Epic 1 - Preserve a conceptually stable binding model across runtimes.
 FR11: Epic 1 - Configure the SDK for a target SpacetimeDB deployment.
 FR12: Epic 1 - Establish a client connection from Godot.
 FR13: Epic 1 - Observe connection lifecycle changes.
@@ -167,17 +167,17 @@ FR35: Epic 6 - Validate the supported workflow against the documented version ma
 FR36: Epic 6 - Use sample-backed validation to detect regressions.
 FR37: Epic 6 - Document changes that affect adopters, including compatibility-impacting changes.
 FR38: Epic 6 - Support a repeatable release and update workflow.
-FR39: Epic 6 - Deliver a `.NET` runtime without defining the product in `.NET`-only terms.
-FR40: Epic 6 - Add a native `GDScript` runtime later without rewriting the core product model.
-FR41: Epic 6 - Preserve a consistent high-level mental model across runtimes.
-FR42: Epic 6 - Support runtime-specific implementations in one repository without fragmenting documentation, support policy, or product identity.
+FR39: Epic 1 - Deliver a `.NET` runtime without defining the product in `.NET`-only terms.
+FR40: Epic 1 - Add a native `GDScript` runtime later without rewriting the core product model.
+FR41: Epic 1 - Preserve a consistent high-level mental model across runtimes.
+FR42: Epic 1 - Support runtime-specific implementations in one repository without fragmenting documentation, support policy, or product identity.
 
 ## Epic List
 
-### Epic 1: Install, Generate, and Reach a First Working Connection
+### Epic 1: Install, Establish the SDK Boundary, and Reach a First Working Connection
 
-Developers can install the SDK, confirm compatibility, generate bindings, understand the generated surface, and establish an initial connection in Godot.
-**FRs covered:** FR1, FR2, FR3, FR4, FR6, FR7, FR8, FR9, FR11, FR12, FR13
+Developers can install the SDK, confirm compatibility, establish the runtime-neutral product boundary, generate bindings, understand the generated surface, and establish an initial connection in Godot.
+**FRs covered:** FR1, FR2, FR3, FR4, FR6, FR7, FR8, FR9, FR10, FR11, FR12, FR13, FR39, FR40, FR41, FR42
 
 ### Epic 2: Authenticate and Sustain a Session
 
@@ -199,14 +199,14 @@ Developers can invoke reducers, receive runtime results and events, and integrat
 Developers can self-serve through docs, sample materials, troubleshooting, upgrade guidance, migration guidance, and a clear explanation of how the Godot model maps to official SpacetimeDB concepts.
 **FRs covered:** FR5, FR28, FR29, FR30, FR31, FR32
 
-### Epic 6: Publish a Trusted SDK and Evolve It Safely
+### Epic 6: Publish and Operate a Trusted SDK Release
 
-Maintainers can publish releases, validate compatibility, communicate changes, preserve a runtime-neutral product model, and support future `GDScript` expansion without fragmenting the product.
-**FRs covered:** FR10, FR33, FR34, FR35, FR36, FR37, FR38, FR39, FR40, FR41, FR42
+Maintainers can publish compatibility guidance, package and validate release candidates, publish approved releases, and communicate changes through a repeatable release workflow.
+**FRs covered:** FR33, FR34, FR35, FR36, FR37, FR38
 
-## Epic 1: Install, Generate, and Reach a First Working Connection
+## Epic 1: Install, Establish the SDK Boundary, and Reach a First Working Connection
 
-Developers can install the SDK, confirm compatibility, generate bindings, understand the generated surface, and establish an initial connection in Godot.
+Developers can install the SDK, confirm compatibility, establish the runtime-neutral product boundary, generate bindings, understand the generated surface, and establish an initial connection in Godot.
 
 ### Story 1.1: Scaffold the Supported Godot Plugin Foundation
 
@@ -243,13 +243,62 @@ So that foundational drift fails early and later workflow checks can extend one 
 **And** it fails clearly when support-version declarations drift out of sync across docs, scripts, or validation configuration
 **And** later binding-generation and release-hardening validation can extend the same workflow rather than replacing it with a separate manual-only process
 
-### Story 1.3: Generate and Regenerate Typed Module Bindings
+### Story 1.3: Define Runtime-Neutral Public SDK Concepts and Terminology
+
+As the SDK maintainer,
+I want the public Godot-facing SDK concepts defined in runtime-neutral language,
+So that adopters learn one product model even though `.NET` ships first.
+
+**Implements:** FR10, FR41
+
+**Acceptance Criteria:**
+
+**Given** the initial shipping runtime is `.NET`
+**When** the public SDK contract is documented
+**Then** connection, auth, subscription, cache, reducer, and generated-binding concepts are named and described without requiring `.NET`-specific implementation knowledge
+**And** the same concept language is used consistently across public API docs, sample guidance, and architecture notes
+**And** adopters can understand the supported workflow without treating upstream `.NET` types as the product's primary mental model
+**And** a named public-concepts reference such as `docs/runtime-boundaries.md` or equivalent uses the same terminology as the public API and sample guidance
+
+### Story 1.4: Isolate the `.NET` Runtime Adapter Behind Internal Boundaries
+
+As the SDK maintainer,
+I want the shipping `.NET` runtime isolated behind internal boundaries,
+So that v1 can ship on `.NET` without turning the product into a `.NET`-only fork.
+
+**Implements:** FR39, FR42
+
+**Acceptance Criteria:**
+
+**Given** the `.NET` runtime is the first implementation
+**When** the runtime boundary is enforced
+**Then** direct references to `SpacetimeDB.ClientSDK` remain confined to `Internal/Platform/DotNet/` in the shipping addon code
+**And** public-facing SDK surfaces and editor code depend on stable contracts rather than upstream `.NET` implementation types
+**And** the runtime-boundaries reference or equivalent architecture note explicitly names `Internal/Platform/DotNet/` as the `.NET`-specific implementation area while the public SDK and editor surfaces are documented outside that location
+
+### Story 1.5: Verify Future `GDScript` Continuity in Structure and Contracts
+
+As the SDK maintainer,
+I want explicit proof that a later native `GDScript` runtime can extend the same product model,
+So that future expansion does not require rewriting the public contract.
+
+**Implements:** FR40, FR42
+
+**Acceptance Criteria:**
+
+**Given** the v1 runtime is `.NET`
+**When** future-runtime continuity is reviewed
+**Then** the architecture identifies a documented extension seam a later native `GDScript` runtime would implement
+**And** the committed public concepts and docs do not need renaming or redefinition to support that later runtime
+**And** a runtime-boundaries or architecture reference names the intended repository location for a later native `GDScript` runtime implementation
+
+### Story 1.6: Generate and Regenerate Typed Module Bindings
 
 As a Godot developer,
 I want to generate and regenerate client bindings from a SpacetimeDB module,
 So that my project has typed access to the current schema.
 
-**Implements:** FR6, FR7, FR8, UX1, UX2, UX3, NFR23, NFR24
+**Implements:** FR6, FR7
 
 **Acceptance Criteria:**
 
@@ -258,10 +307,25 @@ So that my project has typed access to the current schema.
 **Then** generated bindings are created in a dedicated generated location intended for consumer, demo, or test use
 **And** rerunning the workflow after a schema change refreshes those generated artifacts without manual edits to generated files
 **And** the documented workflow exposes a repeatable command or script for sample or fixture module inputs so automation can run the same generation path without manual repair of generated files
-**And** the workflow explains which generated types correspond to tables, reducers, and other exposed schema concepts
-**And** the code-generation configuration and validation surface shows module source, output location, last generation result, and the next recovery action when configuration or generation fails
 
-### Story 1.4: Detect Binding and Schema Compatibility Problems Early
+### Story 1.7: Explain Generated Schema Concepts and Validate Code Generation State
+
+As a Godot developer,
+I want clear explanations of generated schema concepts plus visible code-generation status and recovery guidance,
+So that I can understand the generated surface and diagnose code-generation problems from the supported editor workflow.
+
+**Implements:** FR8, UX1, UX2, UX3, NFR23, NFR24
+
+**Acceptance Criteria:**
+
+**Given** generated bindings and configured code-generation inputs
+**When** I inspect the supported code-generation docs or editor surface
+**Then** the workflow explains which generated types correspond to tables, reducers, events, and other exposed schema concepts
+**And** the code-generation configuration and validation surface shows module source, output location, last generation result, and the next recovery action when configuration or generation fails
+**And** the status messaging uses explicit text labels, visible focus, and keyboard-accessible navigation rather than color-only cues
+**And** the committed code-generation surface remains usable in narrow, standard, and wide editor panel widths
+
+### Story 1.8: Detect Binding and Schema Compatibility Problems Early
 
 As a Godot developer,
 I want stale or incompatible generated bindings to fail clearly,
@@ -278,7 +342,7 @@ So that schema drift is actionable instead of mysterious.
 **And** the guidance points me to the supported compatibility or regeneration path
 **And** the compatibility and validation surface lists current target versions, compatibility status, and the next relevant action using text labels rather than color alone
 
-### Story 1.5: Configure and Open a First Connection from Godot
+### Story 1.9: Configure and Open a First Connection from Godot
 
 As a Godot developer,
 I want to configure connection settings and observe lifecycle events from Godot,
@@ -295,7 +359,7 @@ So that I can verify the SDK connects to my target deployment.
 **And** connection ownership remains inside the SDK service boundary rather than scene-local transport code
 **And** the connection status surface exposes explicit states such as `Disconnected`, `Connecting`, `Connected`, and `Degraded`
 
-### Story 1.6: Validate First Setup Through a Quickstart Path
+### Story 1.10: Validate First Setup Through a Quickstart Path
 
 As a Godot developer,
 I want a quickstart validation path for first setup,
@@ -633,59 +697,11 @@ So that I can move from older setups or unofficial integrations without losing t
 **And** they can understand the recommended migration path from custom protocol work or the community plugin to this SDK
 **And** the guide explains how the Godot-facing model relates to official SpacetimeDB concepts and how future `GDScript` support fits the same product model
 
-## Epic 6: Publish a Trusted SDK and Evolve It Safely
+## Epic 6: Publish and Operate a Trusted SDK Release
 
-Maintainers can publish releases, validate compatibility, communicate changes, preserve a runtime-neutral product model, and support future `GDScript` expansion without fragmenting the product.
+Maintainers can publish compatibility guidance, package and validate release candidates, publish approved releases, and communicate changes through a repeatable release workflow.
 
-### Story 6.1: Define Runtime-Neutral Public SDK Concepts and Terminology
-
-As the SDK maintainer,
-I want the public Godot-facing SDK concepts defined in runtime-neutral language,
-So that adopters learn one product model even though `.NET` ships first.
-
-**Implements:** FR10, FR41
-
-**Acceptance Criteria:**
-
-**Given** the initial shipping runtime is `.NET`
-**When** the public SDK contract is documented
-**Then** connection, auth, subscription, cache, reducer, and generated-binding concepts are named and described without requiring `.NET`-specific implementation knowledge
-**And** the same concept language is used consistently across public API docs, sample guidance, and architecture notes
-**And** adopters can understand the supported workflow without treating upstream `.NET` types as the product's primary mental model
-
-### Story 6.2: Isolate the `.NET` Runtime Adapter Behind Internal Boundaries
-
-As the SDK maintainer,
-I want the shipping `.NET` runtime isolated behind internal boundaries,
-So that v1 can ship on `.NET` without turning the product into a `.NET`-only fork.
-
-**Implements:** FR39, FR42
-
-**Acceptance Criteria:**
-
-**Given** the `.NET` runtime is the first implementation
-**When** the runtime boundary is enforced
-**Then** direct references to `SpacetimeDB.ClientSDK` remain confined to runtime-internal adapter code
-**And** public-facing SDK surfaces and editor code depend on stable contracts rather than upstream `.NET` implementation types
-**And** packaging, docs, and repository structure continue to describe one SDK product rather than a `.NET`-specific product line
-
-### Story 6.3: Verify Future `GDScript` Continuity in Structure and Contracts
-
-As the SDK maintainer,
-I want explicit proof that a later native `GDScript` runtime can extend the same product model,
-So that future expansion does not require rewriting the public contract.
-
-**Implements:** FR40, FR42
-
-**Acceptance Criteria:**
-
-**Given** the v1 runtime is `.NET`
-**When** future-runtime continuity is reviewed
-**Then** the architecture identifies the extension seam a later native `GDScript` runtime would implement
-**And** the committed public concepts and docs do not need renaming or redefinition to support that later runtime
-**And** the repository structure shows where runtime-specific code can diverge while shared docs, support policy, and product identity remain central
-
-### Story 6.4: Publish the Canonical Compatibility Matrix and Support Policy
+### Story 6.1: Publish the Canonical Compatibility Matrix and Support Policy
 
 As an external adopter,
 I want each SDK release to state its exact supported environment,
@@ -701,7 +717,7 @@ So that I know whether a given Godot and SpacetimeDB pairing is intended to work
 **And** the support policy distinguishes supported, experimental, deferred, or out-of-scope targets where relevant
 **And** the compatibility matrix and support policy are the canonical source referenced by install docs, troubleshooting docs, release notes, and sample references
 
-### Story 6.5: Package Reproducible Versioned Release Candidates
+### Story 6.2: Package Reproducible Versioned Release Candidates
 
 As the SDK maintainer,
 I want reproducible versioned candidate artifacts for the addon,
@@ -717,35 +733,50 @@ So that the exact payload intended for adopters can be validated before publicat
 **And** the candidate artifact is versioned and reproducible so the same payload can later be published through the GitHub-release-first distribution flow
 **And** required notices, licensing information, or install metadata needed by adopters are included with the candidate artifact set
 
-### Story 6.6: Validate the Supported Workflow and Publish the Release
+### Story 6.3: Validate Release Candidates Against the Supported Workflow
 
 As the SDK maintainer,
-I want automated validation and release publication to operate on the packaged candidate,
-So that adopters only receive builds that passed the supported workflow checks.
+I want automated validation to operate on the packaged candidate,
+So that only candidate artifacts that pass the supported workflow are approved for publication.
 
-**Implements:** FR33, FR35, FR36
+**Implements:** FR35, FR36
 
 **Acceptance Criteria:**
 
 **Given** a packaged release candidate and documented compatibility targets
 **When** release validation runs against the documented supported workflow
-**Then** it executes build validation, generated-binding checks, sample smoke coverage, and release-packaging checks against the candidate artifact and documented compatibility targets
-**And** regressions in those flows are surfaced before the release is published
-**And** passing validation is the gate that allows the versioned candidate artifact to be published as the official release for external adopters
-**And** the release workflow extends the baseline validation introduced earlier in the plan rather than relying on a separate ad hoc process
+**Then** it produces a concrete validation output or report covering build validation, generated-binding checks, sample smoke coverage, release-packaging checks, and compatibility-target verification for that candidate
+**And** regressions in those flows are surfaced before the release is approved for publication
+**And** that validation output or report is the required publication gate consumed by the release process for Story 6.4
 
-### Story 6.7: Communicate Release Changes and Preserve Product Continuity
+### Story 6.4: Publish Approved SDK Releases for External Use
 
 As the SDK maintainer,
-I want release communication and evolution rules that protect adopters while preserving future runtime expansion,
-So that changes remain understandable and runtime-specific growth does not fragment the product.
+I want to publish approved SDK releases from the validated candidate payload,
+So that external adopters receive the exact artifact that passed release validation.
+
+**Implements:** FR33
+
+**Acceptance Criteria:**
+
+**Given** a release candidate has passed the supported validation workflow
+**When** I publish the SDK release for external adopters
+**Then** the official release publishes the exact validated candidate payload rather than a newly rebuilt artifact
+**And** the published release metadata and download assets match the validated version, compatibility targets, and adopter-facing install guidance
+**And** the release output is suitable for the GitHub-release-first distribution path defined for the product
+
+### Story 6.5: Communicate Release Changes and Maintain Support Continuity
+
+As the SDK maintainer,
+I want release communication and support continuity rules that protect adopters across updates,
+So that changes remain understandable and the release workflow stays repeatable as compatibility targets evolve.
 
 **Implements:** FR37, FR38
 
 **Acceptance Criteria:**
 
-**Given** a change affects adopters, compatibility, or supported runtime behavior
+**Given** a change affects adopters, compatibility, or supported workflow behavior
 **When** the release is documented
-**Then** the change log or release notes explain the adopter impact and any required migration action
-**And** the project documents how runtime-specific implementations may diverge without fragmenting documentation, support policy, or product identity
-**And** future native `GDScript` expansion is framed as an extension of the same product model rather than a replacement product
+**Then** the release notes or change log explain the adopter impact, compatibility implications, and any required migration or upgrade action
+**And** the support and update guidance references the canonical compatibility matrix and the published release artifact as the source of truth
+**And** the release-process reference or checklist records the communication step used for that version so future releases can follow the same path
