@@ -85,6 +85,12 @@ docs/
 
 ## Spec Change Log
 
+- 2026-04-13: Review follow-up consistency cleanup after the plugin entry rename.
+  Trigger: generated review prompts and the architecture tree still referenced `addons/godot_spacetime/plugin.cs` after the verified rename to `GodotSpacetimePlugin.cs`.
+  Amended: updated the Story `1.1` review prompt artifacts and the architecture directory snapshot to reference `addons/godot_spacetime/GodotSpacetimePlugin.cs`.
+  Avoids: reviewers following dead file paths while validating the final scaffold.
+  KEEP: the verified addon entry file name, plugin metadata, and existing scaffold layout.
+
 - 2026-04-13: Review patches after adversarial, edge-case, and acceptance review.
   Trigger: review findings on malformed solution metadata, incorrect Release mapping, repo-wide C# compile globs, missing plugin icon metadata, and Release-unsafe editor-plugin compilation.
   Amended: constrained `godot-spacetime.csproj` compile items to `addons/godot_spacetime/**/*.cs`, fixed `godot-spacetime.sln` Release configuration, added `#if TOOLS` guard to the editor plugin class, wired plugin icon metadata in `plugin.cfg`, and aligned `docs/compatibility-matrix.md` with the planned `SpacetimeDB.ClientSDK 2.1.0` runtime baseline.
@@ -147,3 +153,17 @@ docs/
 
 - Confirm the scaffold still matches the distilled Epic 1 constraints.
   [`epic-1-context.md:1`](./epic-1-context.md#L1)
+
+- Confirm the planning tree now names the verified plugin entry file correctly.
+  [`architecture.md:462`](../planning-artifacts/architecture.md#L462)
+
+**Review Tooling**
+
+- Sanity-check the blind review prompt against the final file set.
+  [`review-prompt-blind-hunter-1-1-scaffold-the-supported-godot-plugin-foundation.md:1`](./review-prompt-blind-hunter-1-1-scaffold-the-supported-godot-plugin-foundation.md#L1)
+
+- Ensure the edge-case prompt points at the shipped addon entry file.
+  [`review-prompt-edge-case-hunter-1-1-scaffold-the-supported-godot-plugin-foundation.md:1`](./review-prompt-edge-case-hunter-1-1-scaffold-the-supported-godot-plugin-foundation.md#L1)
+
+- Ensure the acceptance prompt reproduces the same final diff inputs.
+  [`review-prompt-acceptance-auditor-1-1-scaffold-the-supported-godot-plugin-foundation.md:1`](./review-prompt-acceptance-auditor-1-1-scaffold-the-supported-godot-plugin-foundation.md#L1)

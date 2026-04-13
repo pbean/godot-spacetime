@@ -459,7 +459,7 @@ godot-spacetime/
 ├── addons/
 │   └── godot_spacetime/
 │       ├── plugin.cfg
-│       ├── plugin.cs
+│       ├── GodotSpacetimePlugin.cs
 │       ├── assets/
 │       │   └── icon.svg
 │       ├── src/

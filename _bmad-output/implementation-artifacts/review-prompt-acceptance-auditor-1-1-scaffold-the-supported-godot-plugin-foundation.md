@@ -30,7 +30,7 @@ git diff --no-index -- /dev/null _bmad-output/implementation-artifacts/epic-1-co
 git diff --no-index -- /dev/null _bmad-output/implementation-artifacts/spec-1-1-scaffold-the-supported-godot-plugin-foundation.md
 git diff --no-index -- /dev/null addons/godot_spacetime/assets/icon.svg
 git diff --no-index -- /dev/null addons/godot_spacetime/plugin.cfg
-git diff --no-index -- /dev/null addons/godot_spacetime/plugin.cs
+git diff --no-index -- /dev/null addons/godot_spacetime/GodotSpacetimePlugin.cs
 git diff --no-index -- /dev/null docs/compatibility-matrix.md
 git diff --no-index -- /dev/null docs/install.md
 git diff --no-index -- /dev/null godot-spacetime.csproj
