@@ -43,7 +43,7 @@ context:
 - `godot-spacetime.csproj` -- repo-root C# project that compiles the plugin entrypoint and future addon source.
 - `godot-spacetime.sln` -- repo-root solution required by the story acceptance criteria.
 - `addons/godot_spacetime/plugin.cfg` -- addon metadata and entrypoint registration.
-- `addons/godot_spacetime/plugin.cs` -- minimal C# editor plugin entrypoint created from the official plugin scaffold pattern.
+- `addons/godot_spacetime/GodotSpacetimePlugin.cs` -- C# editor plugin entrypoint, named to match Godot's C# editor-plugin resolution expectations.
 - `addons/godot_spacetime/assets/icon.svg` -- plugin icon referenced by `plugin.cfg`.
 - `README.md` -- high-level install and repository bootstrap entrypoint for adopters.
 - `docs/install.md` -- detailed bootstrap steps and Godot project expectations before later stories.
@@ -54,7 +54,7 @@ context:
 **Execution:**
 - [x] `project.godot` -- create the root Godot `.NET` workspace metadata for the repository -- establishes the repo as a supported Godot project instead of a docs-only folder.
 - [x] `godot-spacetime.csproj` and `godot-spacetime.sln` -- add the repo-root C# project and classic solution file for the addon source -- satisfies the root solution requirement and gives Godot C# scripts a standard build target.
-- [x] `addons/godot_spacetime/plugin.cfg`, `addons/godot_spacetime/plugin.cs`, and `addons/godot_spacetime/assets/icon.svg` -- scaffold the official addon shell with a minimal C# plugin entrypoint and plugin metadata -- makes the addon enableable from a supported Godot project without folder moves.
+- [x] `addons/godot_spacetime/plugin.cfg`, `addons/godot_spacetime/GodotSpacetimePlugin.cs`, and `addons/godot_spacetime/assets/icon.svg` -- scaffold the official addon shell with a minimal C# plugin entrypoint and plugin metadata -- makes the addon enableable from a supported Godot project without folder moves.
 - [x] `.gitignore` -- confirm or extend ignores only for scaffold-generated Godot/.NET local state -- keeps the new foundation usable without polluting version control.
 - [x] `README.md`, `docs/install.md`, and `docs/compatibility-matrix.md` -- publish the support baseline and bootstrap guidance for restore, opening the root project, and enabling the addon -- gives adopters an explicit installation path before later validation and code-generation stories land.
 
@@ -76,18 +76,33 @@ godot-spacetime.csproj
 godot-spacetime.sln
 addons/godot_spacetime/
   plugin.cfg
-  plugin.cs
+  GodotSpacetimePlugin.cs
   assets/icon.svg
 docs/
   install.md
   compatibility-matrix.md
 ```
 
+## Spec Change Log
+
+- 2026-04-13: Review patches after adversarial, edge-case, and acceptance review.
+  Trigger: review findings on malformed solution metadata, incorrect Release mapping, repo-wide C# compile globs, missing plugin icon metadata, and Release-unsafe editor-plugin compilation.
+  Amended: constrained `godot-spacetime.csproj` compile items to `addons/godot_spacetime/**/*.cs`, fixed `godot-spacetime.sln` Release configuration, added `#if TOOLS` guard to the editor plugin class, wired plugin icon metadata in `plugin.cfg`, and aligned `docs/compatibility-matrix.md` with the planned `SpacetimeDB.ClientSDK 2.1.0` runtime baseline.
+  Avoids: a scaffold that appears valid in Debug but breaks Release builds, compiles future non-addon C# files into the shipping assembly, or drifts from the declared runtime package baseline.
+  KEEP: repo-root workspace, addon boundary, explicit bootstrap docs, and the minimal plugin shell shape.
+
+- 2026-04-13: Post-review editor verification fixes after running the real Godot `4.6.2` editor.
+  Trigger: editor-side verification showed the addon existed but could not be enabled until plugin metadata matched Godot's C# editor-plugin loading expectations.
+  Amended: switched `plugin.cfg` to addon-relative `icon` and `script` paths and renamed the C# plugin entry file to `GodotSpacetimePlugin.cs` so the file name and plugin class name align during editor-plugin resolution.
+  Avoids: Godot resolving the script as `res://addons/.../res://...`, and silent editor refusal to enable the plugin even after the project builds.
+  KEEP: the same plugin class name, addon location, and documented “build before enable” bootstrap flow.
+
 ## Verification
 
 **Commands:**
 - `dotnet sln godot-spacetime.sln list` -- expected: the root solution exists and lists the repo C# project.
 - `dotnet build godot-spacetime.sln` -- expected: the scaffold compiles successfully once Godot C# assets and restore are in place.
+- Temporary editor-side verifier in a temp clone after `dotnet build godot-spacetime.sln` -- expected: `EditorInterface.set_plugin_enabled("res://addons/godot_spacetime/plugin.cfg", true)` reports `enabled=true`.
 
 **Manual checks (if no CLI):**
 - Open the repository root as a Godot `.NET` project and confirm the plugin appears under the standard plugin management UI with the expected name and icon.
@@ -111,8 +126,8 @@ docs/
 - Verify the plugin metadata matches the documented install surface.
   [`plugin.cfg:1`](../../addons/godot_spacetime/plugin.cfg#L1)
 
-- Confirm the editor plugin is tools-only for Release-safe builds.
-  [`plugin.cs:1`](../../addons/godot_spacetime/plugin.cs#L1)
+- Confirm the editor plugin file/class naming and tools-only guard match editor expectations.
+  [`GodotSpacetimePlugin.cs:1`](../../addons/godot_spacetime/GodotSpacetimePlugin.cs#L1)
 
 - Inspect the shared icon asset referenced by the workspace and addon.
   [`icon.svg:1`](../../addons/godot_spacetime/assets/icon.svg#L1)
