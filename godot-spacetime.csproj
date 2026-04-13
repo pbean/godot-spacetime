@@ -1,0 +1,14 @@
+<Project Sdk="Godot.NET.Sdk/4.6.1">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <AssemblyName>GodotSpacetime</AssemblyName>
+    <RootNamespace>GodotSpacetime</RootNamespace>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="addons/godot_spacetime/**/*.cs" />
+  </ItemGroup>
+</Project>
