@@ -39,7 +39,10 @@
     { "path": "addons/godot_spacetime/src/Editor", "type": "dir" },
     { "path": "addons/godot_spacetime/src/Editor/Codegen", "type": "dir" },
     { "path": "addons/godot_spacetime/src/Editor/Codegen/CodegenValidationPanel.cs", "type": "file" },
-    { "path": "addons/godot_spacetime/src/Editor/Codegen/CodegenValidationPanel.tscn", "type": "file" }
+    { "path": "addons/godot_spacetime/src/Editor/Codegen/CodegenValidationPanel.tscn", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Editor/Compatibility", "type": "dir" },
+    { "path": "addons/godot_spacetime/src/Editor/Compatibility/CompatibilityPanel.cs", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Editor/Compatibility/CompatibilityPanel.tscn", "type": "file" }
   ],
   "line_checks": [
     {
@@ -173,6 +176,11 @@
       "file": "docs/codegen.md",
       "label": "Schema concepts section heading",
       "expected_line": "## Generated Schema Concepts"
+    },
+    {
+      "file": "docs/compatibility-matrix.md",
+      "label": "Binding compatibility check section heading",
+      "expected_line": "## Binding Compatibility Check"
     },
     {
       "file": ".github/workflows/validate-foundation.yml",
