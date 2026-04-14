@@ -116,7 +116,7 @@
     {
       "file": "docs/compatibility-matrix.md",
       "label": "SpacetimeDB.ClientSDK",
-      "expected_line": "| `SpacetimeDB.ClientSDK` | `2.1.0` planned runtime baseline | Not referenced by the scaffold-only foundation yet, but this is the intended package target for later Epic 1 runtime stories. |",
+      "expected_line": "| `SpacetimeDB.ClientSDK` | `2.1.0` | Added as `PackageReference` in Story 1.4; the `.NET` adapter in `Internal/Platform/DotNet/` is the only permitted reference location. |",
       "version_key": "spacetimedb_client_sdk"
     },
     {

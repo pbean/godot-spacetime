@@ -44,6 +44,11 @@ packages/
 coverage/
 coverage*.xml
 
+# Python caches from validation scripts and pytest
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
 # Packaging and release outputs
 artifacts/
 dist/
