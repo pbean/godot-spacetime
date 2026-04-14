@@ -112,15 +112,15 @@ They must **never** reference runtime-specific transport or adapter types.
 
 `addons/godot_spacetime/src/Internal/Platform/DotNet/` is the **only** zone in the codebase that is permitted to reference the underlying `.NET` client runtime. All adapter code that translates between the `GodotSpacetime.*` public surface and the current managed runtime lives here.
 
-This isolation means that if a future runtime (e.g., a GDNative or GDExtension implementation) is added, only the `Internal/Platform/` zone changes — the `Public/` contract and all code that depends on it remain stable.
+This isolation means that if a future native `GDScript` runtime is added, only the `Internal/Platform/` zone changes — the `Public/` contract and all code that depends on it remain stable.
 
 ---
 
 ## Future Runtime Seam
 
-`addons/godot_spacetime/src/Internal/Platform/` is the designated location for future runtime implementations. The `.NET` adapter currently lives in `Internal/Platform/DotNet/`. A future runtime adapter would be added as a sibling (e.g., `Internal/Platform/Native/`) and selected at build or load time without changing the public API.
+`addons/godot_spacetime/src/Internal/Platform/` is the designated location for future runtime implementations. The `.NET` adapter lives in `Internal/Platform/DotNet/`. A future native `GDScript` runtime adapter would be added at `Internal/Platform/GDScript/` and selected at build or load time without changing the public API.
 
-This seam is reserved by architecture decision. Story 1.5 validates that the GDScript continuity contract holds across this boundary.
+The `Public/` contract is already runtime-neutral. None of the public type names (`ConnectionState`, `ITokenStore`, `SubscriptionHandle`, `SubscriptionAppliedEvent`, `ReducerCallResult`, `ReducerCallError`, `SpacetimeSettings`, `SpacetimeClient`, `LogCategory`) carry `.NET`-specific implementation language. A later native `GDScript` runtime does not require renaming or redefining any of these public concepts.
 
 ---
 

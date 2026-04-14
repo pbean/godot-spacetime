@@ -75,17 +75,48 @@
 
 ---
 
+## Story 1.5: Verify Future GDScript Continuity in Structure and Contracts
+
+### Generated Tests (gap additions — 2026-04-14)
+
+**File:** `tests/test_story_1_5_gdscript_continuity.py`
+
+12 new tests added filling 4 discovered gaps. Total: 48 → **60** tests.
+
+| New Test | Gap Filled | AC |
+|----------|-----------|-----|
+| `test_future_runtime_seam_has_explicit_runtime_neutral_statement` | No test guarded the explicit "Public/ contract is already runtime-neutral" statement in the Future Runtime Seam section — the seam path alone doesn't satisfy AC #3 | AC #3 |
+| `test_future_runtime_seam_enumerates_runtime_neutral_type` ×9 | No test verified that all 9 public type names are enumerated in the runtime-neutral statement (spec requires listing them as evidence) | AC #3 |
+| `test_story_1_5_forward_reference_placeholder_removed` | No test guarded that the Story 1.4 forward-reference placeholder sentence "Story 1.5 validates that the GDScript continuity contract holds across this boundary." was actually removed | Task 1 |
+| `test_runtime_boundaries_drops_legacy_future_runtime_examples` | No test rejected the legacy `Internal/Platform/Native/`, `GDNative`, and `GDExtension` examples that would contradict the concrete `GDScript` seam | AC #1, #3 |
+
+The existing seam-location assertions were also tightened so `Internal/Platform/GDScript/` must appear inside the `## Future Runtime Seam` section itself, not merely somewhere in the document.
+
+### Original 48 tests (pre-gap)
+
+- [x] `test_runtime_boundaries_doc_still_exists` — regression guard (Story 1.3)
+- [x] `test_public_stub_file_still_exists` ×11 — regression guard (Story 1.3)
+- [x] `test_runtime_boundaries_has_future_runtime_seam_heading` — AC #1/#3
+- [x] `test_runtime_boundaries_names_gdscript_seam` — AC #3: `Internal/Platform/GDScript/` present
+- [x] `test_gdscript_seam_is_concrete_not_example` — AC #3: not preceded by `e.g.`
+- [x] `test_public_filename_is_runtime_neutral` ×11 — AC #2: filenames
+- [x] `test_public_namespace_is_runtime_neutral` ×11 — AC #2: namespace declarations
+- [x] `test_public_type_declarations_are_runtime_neutral` ×11 — AC #2: type declaration lines
+
+---
+
 ## Totals
 
 | Suite | Tests |
 |-------|-------|
 | `test_story_1_3_sdk_concepts.py` | 100 |
 | `test_story_1_4_adapter_boundary.py` | 45 |
-| **Full suite** | **145** |
+| `test_story_1_5_gdscript_continuity.py` | 60 |
+| **Full suite** | **207** |
 
-All 145 tests pass.
+All 207 tests pass (`pytest -q` verified 2026-04-14).
 
 ## Next Steps
 
-- Run `pytest tests/` as part of CI to enforce structural contracts across both stories
-- Story 1.5 (GDScript continuity seam) should add tests verifying the Public/Internal seam is accessible from GDScript
+- Run `pytest tests/` as part of CI to enforce structural contracts across all stories
+- Story 1.6 (generated module bindings) should add tests verifying code-generation workflow and typed binding structure
