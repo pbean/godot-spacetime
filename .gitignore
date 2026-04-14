@@ -55,3 +55,4 @@ release/
 *.temp
 *.orig
 *.rej
+.claude/.story-automator-active
