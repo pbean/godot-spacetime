@@ -105,6 +105,43 @@ The existing seam-location assertions were also tightened so `Internal/Platform/
 
 ---
 
+## Story 1.6: Generate and Regenerate Typed Module Bindings
+
+### Generated Tests (gap additions — 2026-04-14)
+
+**File:** `tests/test_story_1_6_generate_bindings.py`
+
+16 new tests added filling 8 discovered gaps. Total: 17 → **33** tests.
+
+| New Test | Gap Filled | Downstream Risk |
+|----------|-----------|----------------|
+| `test_smoke_test_lib_rs_defines_id_field` | Field name `id` not verified; cascades into C# `Id` column | Story 1.7+ |
+| `test_smoke_test_lib_rs_defines_value_field` | Field name `value` not verified; cascades into C# `Value` column | Story 1.7+ |
+| `test_smoke_test_cargo_toml_has_spacetimedb_dependency` | Module won't compile without the crate dep | AC 1, 2 |
+| `test_codegen_script_has_strict_error_mode` | `set -euo pipefail` not verified; AC3 requires exit non-zero on failure | AC 3 |
+| `test_generated_types_smoke_test_file_exists` | Specific file `Types/SmokeTest.g.cs` not guarded | Story 1.7 |
+| `test_generated_reducers_ping_file_exists` | Specific file `Reducers/Ping.g.cs` not guarded | Story 1.7, 1.9 |
+| `test_generated_tables_smoke_test_file_exists` | Specific file `Tables/SmokeTest.g.cs` not guarded | Story 1.7 |
+| `test_generated_spacetimedb_client_file_exists` | `SpacetimeDBClient.g.cs` (aggregate registry) not guarded | Story 1.9 |
+| `test_generated_types_contains_smoke_test_class` | `class SmokeTest` type name stability not verified | Story 1.7, 1.9 |
+| `test_generated_reducers_contains_ping_method` | `Ping` reducer name stability not verified | Story 1.9 |
+| `test_generated_files_have_autogen_banner` | No guard against hand-editing generated output | Ongoing |
+| `test_demo_generated_readme_exists` | Required deliverable from Task 3 had no test | Task 3 |
+| `test_demo_generated_readme_mentions_script` | README content correctness unverified | Task 3 |
+| `test_support_baseline_has_codegen_script_path` | Task 5 `required_paths` entry unverified | Task 5 |
+| `test_support_baseline_has_demo_generated_path` | Task 5 `required_paths` entry unverified | Task 5 |
+| `test_support_baseline_has_codegen_script_line_check` | Task 5 `line_checks` entry unverified | Task 5 |
+
+### Original 17 tests (pre-gap)
+
+- [x] Module source: Cargo.toml + lib.rs existence, cdylib, table name `smoke_test`, reducer name `ping`
+- [x] Codegen script: exists, calls `spacetime generate`, `--lang csharp`, `smoke_test` module, `demo/generated/smoke_test` output
+- [x] Generated bindings: dir exists, ≥1 `.cs` file
+- [x] `docs/codegen.md`: references `generate-smoke-test.sh` and `demo/generated/smoke_test`
+- [x] Regression guards: `docs/codegen.md` exists, `spacetime/modules/smoke_test/` dir, `tests/fixtures/generated/` dir
+
+---
+
 ## Totals
 
 | Suite | Tests |
@@ -112,11 +149,13 @@ The existing seam-location assertions were also tightened so `Internal/Platform/
 | `test_story_1_3_sdk_concepts.py` | 100 |
 | `test_story_1_4_adapter_boundary.py` | 45 |
 | `test_story_1_5_gdscript_continuity.py` | 60 |
-| **Full suite** | **207** |
+| `test_story_1_6_generate_bindings.py` | 33 |
+| **Full suite** | **240** |
 
-All 207 tests pass (`pytest -q` verified 2026-04-14).
+All 240 tests pass (`pytest -q` verified 2026-04-14).
 
 ## Next Steps
 
 - Run `pytest tests/` as part of CI to enforce structural contracts across all stories
-- Story 1.6 (generated module bindings) should add tests verifying code-generation workflow and typed binding structure
+- Story 1.7 (explain generated types) should add tests referencing `SmokeTest`/`Ping` type names and `SpacetimeDB.Types` namespace
+- Story 1.9 (first connection) should add integration tests using `DbConnection`, `SmokeTest` table, and `Ping` reducer

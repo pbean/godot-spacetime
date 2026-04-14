@@ -30,7 +30,12 @@
     { "path": "tests/fixtures/generated", "type": "dir" },
     { "path": "tests/fixtures/generated/.gitkeep", "type": "file" },
     { "path": "tests/fixtures/settings", "type": "dir" },
-    { "path": "tests/fixtures/settings/.gitkeep", "type": "file" }
+    { "path": "tests/fixtures/settings/.gitkeep", "type": "file" },
+    { "path": "scripts/codegen", "type": "dir" },
+    { "path": "scripts/codegen/generate-smoke-test.sh", "type": "file" },
+    { "path": "demo", "type": "dir" },
+    { "path": "demo/generated", "type": "dir" },
+    { "path": "demo/generated/smoke_test", "type": "dir" }
   ],
   "line_checks": [
     {
@@ -148,6 +153,17 @@
       "file": "docs/codegen.md",
       "label": "Fixture settings path",
       "expected_line": "- `tests/fixtures/settings/` is reserved for non-shipping test settings and environment fixtures."
+    },
+    {
+      "file": "docs/codegen.md",
+      "label": "Codegen script invocation",
+      "expected_line": "bash scripts/codegen/generate-smoke-test.sh",
+      "allow_multiple": true
+    },
+    {
+      "file": "docs/codegen.md",
+      "label": "Generated output location",
+      "expected_line": "The script outputs generated C# bindings to `demo/generated/smoke_test/`."
     },
     {
       "file": ".github/workflows/validate-foundation.yml",
