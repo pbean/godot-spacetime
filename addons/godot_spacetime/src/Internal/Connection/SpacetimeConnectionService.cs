@@ -15,6 +15,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
     private string _host = string.Empty;
     private string _database = string.Empty;
     private ITokenStore? _tokenStore;
+    private bool _credentialsProvided;
 
     public SpacetimeConnectionService()
     {
@@ -38,6 +39,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
         _host = settings.Host.Trim();
         _database = settings.Database.Trim();
         _tokenStore = settings.TokenStore;
+        _credentialsProvided = !string.IsNullOrWhiteSpace(settings.Credentials);
         _reconnectPolicy.Reset();
 
         _stateMachine.Transition(ConnectionState.Connecting, $"CONNECTING — opening a session to {_host}/{_database}");
@@ -67,7 +69,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
         _adapter.FrameTick();
     }
 
-    void IConnectionEventSink.OnConnected(string token)
+    void IConnectionEventSink.OnConnected(string identity, string token)
     {
         _reconnectPolicy.Reset();
         if (_tokenStore != null)
@@ -87,12 +89,16 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
             }
         }
 
+        var authState = _credentialsProvided ? ConnectionAuthState.TokenRestored : ConnectionAuthState.None;
+
         if (CurrentStatus.State != ConnectionState.Connected)
         {
             var description = CurrentStatus.State == ConnectionState.Degraded
                 ? "CONNECTED — active session established after recovery"
-                : "CONNECTED — active session established";
-            _stateMachine.Transition(ConnectionState.Connected, description);
+                : _credentialsProvided
+                    ? "CONNECTED — authenticated session established"
+                    : "CONNECTED — active session established";
+            _stateMachine.Transition(ConnectionState.Connected, description, authState);
         }
 
         OnConnectionOpened?.Invoke(
@@ -100,6 +106,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
             {
                 Host = _host,
                 Database = _database,
+                Identity = identity,
                 ConnectedAt = DateTimeOffset.UtcNow,
             }
         );
@@ -111,7 +118,21 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
 
         if (CurrentStatus.State == ConnectionState.Connecting)
         {
-            _stateMachine.Transition(ConnectionState.Disconnected, $"DISCONNECTED — failed to connect: {error.Message}");
+            if (_credentialsProvided)
+            {
+                _stateMachine.Transition(
+                    ConnectionState.Disconnected,
+                    $"DISCONNECTED — authentication failed: {error.Message}",
+                    ConnectionAuthState.AuthFailed
+                );
+            }
+            else
+            {
+                _stateMachine.Transition(
+                    ConnectionState.Disconnected,
+                    $"DISCONNECTED — failed to connect: {error.Message}"
+                );
+            }
             return;
         }
 

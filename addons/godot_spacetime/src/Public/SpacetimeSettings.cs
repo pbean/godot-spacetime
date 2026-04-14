@@ -19,6 +19,16 @@ public partial class SpacetimeSettings : Resource
     public string Database { get; set; } = string.Empty;
 
     /// <summary>
+    /// Optional credentials token for authenticated sessions.
+    /// When set, this value is passed to <c>WithToken()</c> on the SpacetimeDB connection builder,
+    /// connecting as an identified user rather than an anonymous transport.
+    /// If null or empty (the default), the connection opens anonymously and the server assigns a new identity.
+    /// Story 2.3 adds automatic pre-connect restoration from <see cref="TokenStore"/>.
+    /// Token values are never logged raw — use <c>TokenRedactor</c> for diagnostic output.
+    /// </summary>
+    public string? Credentials { get; set; }
+
+    /// <summary>
     /// Optional token store for persisting session tokens between connections.
     /// If null (the default), tokens are not persisted when the process exits.
     /// Assign a <see cref="ITokenStore"/> implementation to enable opt-in session persistence.

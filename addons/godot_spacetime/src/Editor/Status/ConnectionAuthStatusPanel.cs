@@ -16,6 +16,8 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
     private Label _autoloadLabel = null!;
     private Label _statusLabel = null!;
     private Label _detailLabel = null!;
+    private Label _authStateLabel = null!;
+    private Label _authActionLabel = null!;
     private SpacetimeClient? _client;
 
     public override void _Ready()
@@ -51,6 +53,15 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
 
         _detailLabel = CreateFocusableLabel();
         AddChild(_detailLabel);
+
+        AddChild(new HSeparator());
+
+        AddChild(CreateFocusableLabel("Auth state:"));
+        _authStateLabel = CreateFocusableLabel();
+        AddChild(_authStateLabel);
+
+        _authActionLabel = CreateFocusableLabel();
+        AddChild(_authActionLabel);
     }
 
     private void TryBindClient()
@@ -76,6 +87,7 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
         {
             _autoloadLabel.Text = "Missing";
             SetStatus(StatusNotConfigured, "Add SpacetimeClient as an autoload to observe lifecycle state here.");
+            SetAuthStatus(ConnectionAuthState.None, ConnectionState.Disconnected);
             return;
         }
 
@@ -86,11 +98,33 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
             || string.IsNullOrWhiteSpace(_client.Settings.Database))
         {
             SetStatus(StatusNotConfigured, "Assign a SpacetimeSettings resource with Host and Database values.");
+            SetAuthStatus(ConnectionAuthState.None, ConnectionState.Disconnected);
             return;
         }
 
         var status = _client.CurrentStatus;
         SetStatus(MapStatus(status.State), status.Description);
+        SetAuthStatus(status.AuthState, status.State);
+    }
+
+    private void SetAuthStatus(ConnectionAuthState authState, ConnectionState connState)
+    {
+        var (label, action) = authState switch
+        {
+            ConnectionAuthState.TokenRestored =>
+                ("TOKEN RESTORED", "Session authenticated with provided credentials."),
+            ConnectionAuthState.AuthFailed =>
+                ("AUTH FAILED", "Credentials were rejected. Verify your token or call Settings.TokenStore?.ClearTokenAsync() to reset."),
+            ConnectionAuthState.AuthRequired =>
+                ("AUTH REQUIRED", "Configure Credentials on SpacetimeSettings to connect as an identified user."),
+            _ when connState == ConnectionState.Connected =>
+                ("ANONYMOUS", "Connected without credentials. No persistent identity."),
+            _ =>
+                ("AUTH REQUIRED", "Configure Credentials or a TokenStore before connecting as an identified user."),
+        };
+
+        _authStateLabel.Text = label;
+        _authActionLabel.Text = action;
     }
 
     private static string MapStatus(ConnectionState state)

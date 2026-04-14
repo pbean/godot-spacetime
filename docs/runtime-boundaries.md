@@ -21,6 +21,16 @@ The lifecycle of a connection is expressed as a [`ConnectionState`](../addons/go
 
 A [`ConnectionStatus`](../addons/godot_spacetime/src/Public/Connection/ConnectionStatus.cs) value pairs a `ConnectionState` with a human-readable description for logging and UI display. [`ConnectionOpenedEvent`](../addons/godot_spacetime/src/Public/Connection/ConnectionOpenedEvent.cs) represents the successful-open boundary rather than every lifecycle transition.
 
+A [`ConnectionAuthState`](../addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs) enum
+accompanies `ConnectionStatus` and identifies the authentication phase:
+
+| Auth State | Meaning |
+|------------|---------|
+| `None` | No authentication context. Anonymous session or pre-connection state. |
+| `AuthRequired` | Credentials are expected but not provided (panel guidance). |
+| `TokenRestored` | Provided credentials were accepted; session is authenticated. |
+| `AuthFailed` | Provided credentials were rejected; auth-specific failure. |
+
 ### Auth / Identity — `ITokenStore`
 
 Session identity is token-based. The SDK does not dictate how tokens are persisted; instead, you provide an [`ITokenStore`](../addons/godot_spacetime/src/Public/Auth/ITokenStore.cs) implementation:
@@ -40,6 +50,11 @@ This is opt-in. If no `ITokenStore` is provided, tokens are not persisted across
 Assign via code to `Settings.TokenStore` before calling `Connect()`. The built-in implementations are in `Internal/`; they are not exported to the Godot inspector.
 
 **Token Clearing:** To clear persisted auth state, call `Settings.TokenStore.ClearTokenAsync()`. Token values are never logged raw; the `TokenRedactor` utility in `Internal/Auth/` produces safe diagnostic representations.
+
+**Session Identity:** When a connection opens, the server assigns or restores an identity.
+The identity string is included in [`ConnectionOpenedEvent.Identity`](../addons/godot_spacetime/src/Public/Connection/ConnectionOpenedEvent.cs).
+For anonymous connections, the identity is a new server-assigned value; for credential-bearing connections,
+it is the identity associated with the provided token.
 
 ### Subscriptions — `SubscriptionHandle` and `SubscriptionAppliedEvent`
 
@@ -79,6 +94,7 @@ See [`docs/codegen.md`](./codegen.md) for the generation workflow.
 |----------|------|---------|
 | `Host` | `string` | The SpacetimeDB server address |
 | `Database` | `string` | The target database name on the server |
+| `Credentials` | `string?` | Optional token for authenticated sessions; passed to `WithToken()`. `null` = anonymous connection. |
 | `TokenStore` | `ITokenStore?` | Optional token persistence provider; `null` by default (tokens not persisted) |
 
 ### SpacetimeClient — The SDK Entry Point
