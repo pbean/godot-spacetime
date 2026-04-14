@@ -1,4 +1,7 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
+using GodotSpacetime.Auth;
 using GodotSpacetime.Connection;
 using GodotSpacetime.Runtime.Platform.DotNet;
 
@@ -11,6 +14,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
     private readonly SpacetimeSdkConnectionAdapter _adapter = new();
     private string _host = string.Empty;
     private string _database = string.Empty;
+    private ITokenStore? _tokenStore;
 
     public SpacetimeConnectionService()
     {
@@ -33,6 +37,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
 
         _host = settings.Host.Trim();
         _database = settings.Database.Trim();
+        _tokenStore = settings.TokenStore;
         _reconnectPolicy.Reset();
 
         _stateMachine.Transition(ConnectionState.Connecting, $"CONNECTING — opening a session to {_host}/{_database}");
@@ -65,6 +70,22 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
     void IConnectionEventSink.OnConnected(string token)
     {
         _reconnectPolicy.Reset();
+        if (_tokenStore != null)
+        {
+            // Optional token persistence must never break a successful connection.
+            try
+            {
+                _ = _tokenStore.StoreTokenAsync(token).ContinueWith(
+                    static completedTask => _ = completedTask.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default
+                );
+            }
+            catch (Exception)
+            {
+            }
+        }
 
         if (CurrentStatus.State != ConnectionState.Connected)
         {

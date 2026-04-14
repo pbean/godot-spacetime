@@ -33,6 +33,14 @@ Task ClearTokenAsync();
 
 This is opt-in. If no `ITokenStore` is provided, tokens are not persisted across sessions. The interface is async so that any persistence backend (files, OS keychain, platform services) can be used without blocking the game thread.
 
+**Built-in implementations** (from `Internal/Auth/`):
+- `MemoryTokenStore` — retains the token in memory for the current process lifetime only. Tokens survive reconnects within a session but are cleared when the process exits.
+- `ProjectSettingsTokenStore` — persists the token to Godot `ProjectSettings` under the key `spacetime/auth/token`. Suitable for development environments; review your distribution's security model before enabling in production.
+
+Assign via code to `Settings.TokenStore` before calling `Connect()`. The built-in implementations are in `Internal/`; they are not exported to the Godot inspector.
+
+**Token Clearing:** To clear persisted auth state, call `Settings.TokenStore.ClearTokenAsync()`. Token values are never logged raw; the `TokenRedactor` utility in `Internal/Auth/` produces safe diagnostic representations.
+
 ### Subscriptions — `SubscriptionHandle` and `SubscriptionAppliedEvent`
 
 A **Subscription** is a query scope that keeps a local cache slice synchronized with the server. You apply a subscription through `SpacetimeClient`; the SDK returns a [`SubscriptionHandle`](../addons/godot_spacetime/src/Public/Subscriptions/SubscriptionHandle.cs) you can use to manage that scope.
@@ -71,8 +79,7 @@ See [`docs/codegen.md`](./codegen.md) for the generation workflow.
 |----------|------|---------|
 | `Host` | `string` | The SpacetimeDB server address |
 | `Database` | `string` | The target database name on the server |
-
-Additional settings (auth, logging) are added in later stories and appear as exported properties visible in the Godot editor inspector.
+| `TokenStore` | `ITokenStore?` | Optional token persistence provider; `null` by default (tokens not persisted) |
 
 ### SpacetimeClient — The SDK Entry Point
 
