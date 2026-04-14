@@ -11,4 +11,8 @@
   <ItemGroup>
     <Compile Include="addons/godot_spacetime/**/*.cs" />
   </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SpacetimeDB.ClientSDK" Version="2.1.0" />
+  </ItemGroup>
 </Project>

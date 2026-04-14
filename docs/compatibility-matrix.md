@@ -8,7 +8,7 @@ This file declares the current support baseline for the repository foundation cr
 | Godot .NET build SDK | `Godot.NET.Sdk` `4.6.1` | Current stable official NuGet package used by the scaffold. |
 | `.NET` SDK | `8.0+` | Use a local `.NET 8` SDK for restore and build. |
 | SpacetimeDB server and CLI | `2.1+` | Declared product baseline for later code-generation and runtime stories. |
-| `SpacetimeDB.ClientSDK` | `2.1.0` planned runtime baseline | Not referenced by the scaffold-only foundation yet, but this is the intended package target for later Epic 1 runtime stories. |
+| `SpacetimeDB.ClientSDK` | `2.1.0` | Added as `PackageReference` in Story 1.4; the `.NET` adapter in `Internal/Platform/DotNet/` is the only permitted reference location. |
 
 The machine-checkable source of truth for this baseline lives in `scripts/compatibility/support-baseline.json`, and `.github/workflows/validate-foundation.yml` enforces it through `python3 scripts/compatibility/validate-foundation.py`.
 
