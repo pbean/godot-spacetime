@@ -15,3 +15,21 @@ The machine-checkable source of truth for this baseline lives in `scripts/compat
 ## Scope of This Matrix
 
 Story `1.1` establishes the installation and project-structure baseline. It does not yet validate runtime flows against SpacetimeDB. Later stories are responsible for turning this declared baseline into automated compatibility checks and end-to-end validated workflows.
+
+## Binding Compatibility Check
+
+The Compatibility panel in the Godot editor reads the CLI version comment embedded in generated bindings and compares it against the declared `spacetimedb` baseline. Generated files contain that comment near the top of the file, after the generated-file warning banner, in the form:
+
+```
+// This was generated using spacetimedb cli version X.Y.Z (commit ...)
+```
+
+The panel extracts the version token and checks that it satisfies the declared baseline (e.g. `2.1+` requires CLI `>= 2.1`). The validation workflow also compares the latest relevant module-source file under `spacetime/modules/smoke_test/` against `demo/generated/smoke_test/SpacetimeDBClient.g.cs` so stale bindings fail before runtime use. If either check fails, the tooling reports the exact failed check together with the regeneration command.
+
+To resolve an INCOMPATIBLE state, run:
+
+```bash
+bash scripts/codegen/generate-smoke-test.sh
+```
+
+Story `1.8` implements this check. Stories `1.9` and `1.10` extend the quickstart to validate both binding compatibility and connection state before declaring the setup complete.

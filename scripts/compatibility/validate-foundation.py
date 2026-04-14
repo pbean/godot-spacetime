@@ -6,6 +6,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+CLI_VERSION_PREFIX = "// This was generated using spacetimedb cli version "
+RECOVERY_COMMAND = "bash scripts/codegen/generate-smoke-test.sh"
+RELATIVE_MODULE_SOURCE = Path("spacetime/modules/smoke_test")
+RELATIVE_GENERATED_CLIENT = Path("demo/generated/smoke_test/SpacetimeDBClient.g.cs")
+
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -104,6 +109,111 @@ def collect_line_check_errors(root: Path, checks: list[dict], versions: dict) ->
     return errors
 
 
+def version_satisfies_baseline(extracted: str, baseline: str) -> bool:
+    minimum_parts = baseline.rstrip("+").split(".")
+    extracted_parts = extracted.split(".")
+
+    for index, minimum_part in enumerate(minimum_parts):
+        try:
+            minimum_value = int(minimum_part)
+        except ValueError:
+            minimum_value = 0
+
+        if index < len(extracted_parts):
+            try:
+                extracted_value = int(extracted_parts[index])
+            except ValueError:
+                extracted_value = 0
+        else:
+            extracted_value = 0
+
+        if extracted_value > minimum_value:
+            return True
+        if extracted_value < minimum_value:
+            return False
+
+    return True
+
+
+def extract_cli_version(generated_client: Path) -> str | None:
+    try:
+        lines = generated_client.read_text(encoding="utf-8").splitlines()
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
+        return None
+
+    for line in lines:
+        if line.startswith(CLI_VERSION_PREFIX):
+            parts = line[len(CLI_VERSION_PREFIX):].split()
+            return parts[0] if parts else None
+
+    return None
+
+
+def relevant_module_files(module_root: Path) -> list[Path]:
+    files: list[Path] = []
+
+    cargo_toml = module_root / "Cargo.toml"
+    if cargo_toml.is_file():
+        files.append(cargo_toml)
+
+    src_root = module_root / "src"
+    if src_root.is_dir():
+        files.extend(sorted(src_root.rglob("*.rs")))
+
+    return files
+
+
+def collect_binding_compatibility_errors(root: Path, versions: dict) -> list[str]:
+    errors: list[str] = []
+    module_root = root / RELATIVE_MODULE_SOURCE
+    generated_client = root / RELATIVE_GENERATED_CLIENT
+
+    if not module_root.is_dir():
+        return errors
+
+    if not generated_client.is_file():
+        return [
+            f"{RELATIVE_GENERATED_CLIENT.as_posix()}: generated binding registry is missing; run {RECOVERY_COMMAND}"
+        ]
+
+    extracted_version = extract_cli_version(generated_client)
+    if not extracted_version:
+        errors.append(
+            f"{RELATIVE_GENERATED_CLIENT.as_posix()}: missing CLI version comment "
+            f"'{CLI_VERSION_PREFIX}...'; run {RECOVERY_COMMAND}"
+        )
+    else:
+        baseline = versions.get("spacetimedb")
+        if baseline is None:
+            errors.append(
+                "support-baseline.json: support_versions.spacetimedb missing for binding compatibility checks"
+            )
+        elif not version_satisfies_baseline(extracted_version, baseline):
+            errors.append(
+                f"{RELATIVE_GENERATED_CLIENT.as_posix()}: generated binding CLI {extracted_version} "
+                f"does not satisfy declared baseline {baseline}; run {RECOVERY_COMMAND}"
+            )
+
+    module_files = relevant_module_files(module_root)
+    if not module_files:
+        return errors
+
+    try:
+        newest_source = max(module_files, key=lambda path: path.stat().st_mtime_ns)
+        generated_mtime = generated_client.stat().st_mtime_ns
+    except OSError as exc:
+        errors.append(f"{RELATIVE_GENERATED_CLIENT.as_posix()}: failed to compare source freshness ({exc})")
+        return errors
+
+    if newest_source.stat().st_mtime_ns > generated_mtime:
+        errors.append(
+            f"{RELATIVE_GENERATED_CLIENT.as_posix()}: generated bindings are stale because "
+            f"{newest_source.relative_to(root).as_posix()} is newer; run {RECOVERY_COMMAND}"
+        )
+
+    return errors
+
+
 def main() -> int:
     root = repo_root()
     baseline = load_baseline(root)
@@ -116,6 +226,7 @@ def main() -> int:
     versions = baseline.get("support_versions", {})
     errors.extend(collect_required_path_errors(root, baseline.get("required_paths", [])))
     errors.extend(collect_line_check_errors(root, baseline.get("line_checks", []), versions))
+    errors.extend(collect_binding_compatibility_errors(root, versions))
 
     if errors:
         print("Foundation validation failed:", file=sys.stderr)

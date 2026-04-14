@@ -142,6 +142,52 @@ The existing seam-location assertions were also tightened so `Internal/Platform/
 
 ---
 
+---
+
+## Story 1.8: Detect Binding and Schema Compatibility Problems Early
+
+### Generated Tests (gap additions — 2026-04-14)
+
+**File:** `tests/test_story_1_8_compatibility.py`
+
+19 new tests added filling gaps discovered by comparing against the Story 1.7 structural test pattern. Total: 32 → **51** tests.
+
+| New Test | Gap Filled | AC |
+|----------|-----------|-----|
+| `test_panel_has_tools_conditional_compile_guard` | `#if TOOLS`/`#endif` guard not verified | AC 1 |
+| `test_panel_has_tool_attribute` | `[Tool]` attribute not verified | AC 1 |
+| `test_panel_has_correct_namespace` | Namespace `GodotSpacetime.Editor.Compatibility` not verified | AC 1 |
+| `test_panel_extends_vbox_container` | VBoxContainer class inheritance not verified | AC 4 |
+| `test_panel_uses_project_settings_globalize_path` | Cross-platform path resolution not verified | AC 2 |
+| `test_panel_recovery_label_initially_hidden` | `_recoveryLabel.Visible = false` on init not verified | AC 2 |
+| `test_panel_has_cli_version_prefix_constant` | `CliVersionPrefix` constant not verified | AC 1 |
+| `test_panel_has_godot_target_field_label` | `"Godot target:"` layout label not verified | AC 4 |
+| `test_panel_has_spacetimedb_cli_field_label` | `"SpacetimeDB CLI:"` layout label not verified | AC 4 |
+| `test_panel_has_client_sdk_field_label` | `"ClientSDK:"` layout label not verified | AC 4 |
+| `test_compat_tscn_uses_format_3` | Scene `format=3` content not verified (only existence) | AC 4 |
+| `test_compat_tscn_root_is_vbox_container` | Scene root `type="VBoxContainer"` not verified | AC 4 |
+| `test_compat_tscn_attaches_correct_script` | Scene script path attachment not verified | AC 4 |
+| `test_plugin_has_compat_panel_scene_path_constant` | `CompatPanelScenePath` constant not verified | AC 4 |
+| `test_plugin_removes_both_panels_in_exit_tree` | `RemoveControlFromBottomPanel` count = 2 not verified | AC 4 |
+| `test_plugin_has_using_compatibility_namespace` | `using GodotSpacetime.Editor.Compatibility` not verified | AC 4 |
+| `test_plugin_loads_compat_panel_scene_resource` | `GD.Load<PackedScene>` + `Instantiate()` pattern not verified | AC 4 |
+| `test_support_baseline_has_compatibility_panel_tscn_path` | `.tscn` required_path entry (only `.cs` was tested) | AC 2 |
+| `test_compatibility_matrix_has_regeneration_command` | `bash scripts/codegen/generate-smoke-test.sh` in docs | AC 3 |
+
+### Original 32 tests (pre-gap — spec-mandated)
+
+- [x] Panel existence (`.cs` and `.tscn`)
+- [x] Explicit text labels (OK, INCOMPATIBLE, MISSING, NOT CONFIGURED, Recovery)
+- [x] Version extraction (`spacetimedb cli version`, `support_versions`, `spacetimedb_client_sdk`, `VersionSatisfiesBaseline`)
+- [x] Layout (`"Compatibility Baseline"`, `"Binding CLI version:"`, `"Compatibility status:"`, AutowrapMode, FocusModeEnum.All, CustomMinimumSize)
+- [x] Plugin registration (both panels via count=2, `"Spacetime Compat"` tab, `CompatibilityPanel` type)
+- [x] Support-baseline (`Editor/Compatibility`, `CompatibilityPanel.cs`, `Binding Compatibility Check` line_check)
+- [x] Documentation (`## Binding Compatibility Check`, `spacetimedb cli version`)
+- [x] Regression guards Story 1.7 (`CodegenValidationPanel.cs`, `.tscn`, `"Spacetime Codegen"`, `Generated Schema Concepts`)
+- [x] Regression guards Story 1.6 (`demo/generated/smoke_test/`, `.cs` files, `generate-smoke-test.sh`)
+
+---
+
 ## Totals
 
 | Suite | Tests |
@@ -150,12 +196,14 @@ The existing seam-location assertions were also tightened so `Internal/Platform/
 | `test_story_1_4_adapter_boundary.py` | 45 |
 | `test_story_1_5_gdscript_continuity.py` | 60 |
 | `test_story_1_6_generate_bindings.py` | 33 |
-| **Full suite** | **240** |
+| `test_story_1_7_schema_concepts.py` | 54 |
+| `test_story_1_8_compatibility.py` | 51 |
+| **Full suite** | **343** |
 
-All 240 tests pass (`pytest -q` verified 2026-04-14).
+All 343 tests pass (`pytest -q` verified 2026-04-14).
 
 ## Next Steps
 
 - Run `pytest tests/` as part of CI to enforce structural contracts across all stories
-- Story 1.7 (explain generated types) should add tests referencing `SmokeTest`/`Ping` type names and `SpacetimeDB.Types` namespace
-- Story 1.9 (first connection) should add integration tests using `DbConnection`, `SmokeTest` table, and `Ping` reducer
+- Story 1.9 (connection/auth status panel) should follow the Story 1.7/1.8 structural test pattern for `#if TOOLS`, `[Tool]`, namespace, VBoxContainer, scene content, plugin cleanup
+- Story 1.10 (quickstart path) should add integration-level tests verifying compatibility + connection state together
