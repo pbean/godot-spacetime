@@ -22,3 +22,7 @@ project/assembly_name="GodotSpacetime"
 
 renderer/rendering_method="forward_plus"
 renderer/rendering_method.mobile="forward_plus"
+
+[autoload]
+
+TestBridge="*res://addons/test_bridge/TestBridge.gd"
