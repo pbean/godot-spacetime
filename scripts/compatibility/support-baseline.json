@@ -46,6 +46,7 @@
     { "path": "addons/godot_spacetime/src/Editor/Status", "type": "dir" },
     { "path": "addons/godot_spacetime/src/Editor/Status/ConnectionAuthStatusPanel.cs", "type": "file" },
     { "path": "addons/godot_spacetime/src/Editor/Status/ConnectionAuthStatusPanel.tscn", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs", "type": "file" },
     { "path": "addons/godot_spacetime/src/Internal/Connection", "type": "dir" },
     { "path": "addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs", "type": "file" },
     { "path": "addons/godot_spacetime/src/Internal/Connection/ConnectionStateMachine.cs", "type": "file" },

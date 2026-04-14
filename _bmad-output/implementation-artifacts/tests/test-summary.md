@@ -294,6 +294,48 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 
 ---
 
+---
+
+## Story 2.2: Authenticate a Client Session Through Supported Identity Flows
+
+### Generated Tests (gap additions — 2026-04-14)
+
+**File:** `tests/test_story_2_2_auth_session.py`
+
+13 new tests added filling gaps discovered by QA pass. Total: 40 → **53** tests. All 53 pass.
+
+| New Test | Gap Filled | AC |
+|----------|------------|----|
+| `test_auth_status_panel_has_auth_action_label` | `_authActionLabel` field (action guidance text) not tested | 4 |
+| `test_auth_status_panel_has_anonymous_string` | `ANONYMOUS` label for anon-connected state not tested | 4 |
+| `test_connection_status_constructor_has_auth_state_param` | Constructor shape not tested (only property existence) | 3/4 |
+| `test_state_machine_transition_passes_auth_state_to_status_constructor` | `new ConnectionStatus(next, description, authState)` call not tested | 3 |
+| `test_connection_service_auth_error_description_text` | `"authentication failed:"` description text not tested | 3 |
+| `test_connection_service_has_authenticated_session_description` | `"authenticated session established"` success description not tested | 1 |
+| `test_adapter_credentials_injection_is_conditional` | `IsNullOrWhiteSpace` guard on WithToken injection not tested | 1 |
+| `test_connection_service_credentials_flag_uses_is_null_or_whitespace` | `_credentialsProvided = !IsNullOrWhiteSpace(settings.Credentials)` pattern not tested | 1 |
+| `test_connection_auth_state_has_correct_namespace` | `namespace GodotSpacetime.Connection;` not tested | isolation |
+| `test_connection_opened_event_identity_defaults_to_empty_string` | `Identity = string.Empty` default (anon semantics) not tested | 2 |
+| `test_connection_service_has_using_godotspacetime_connection` | `using GodotSpacetime.Connection;` in service not tested | — |
+| `test_state_machine_has_using_godotspacetime_connection` | `using GodotSpacetime.Connection;` in state machine not tested | — |
+| `test_auth_status_panel_has_tools_guard` | `#if TOOLS` encapsulation guard not tested | — |
+
+### Original 40 tests (spec-mandated)
+
+- [x] `ConnectionAuthState.cs` existence + 6 content checks (enum values, no SpacetimeDB refs)
+- [x] `ConnectionStatus.cs` AuthState property
+- [x] `ConnectionOpenedEvent.cs` Identity property
+- [x] `SpacetimeSettings.cs` Credentials property + no [Export]
+- [x] `SpacetimeSdkConnectionAdapter.cs` WithToken, OnConnected two params, identity capture
+- [x] `SpacetimeConnectionService.cs` _credentialsProvided, TokenRestored/AuthFailed states, two-param OnConnected, Identity assignment
+- [x] `ConnectionStateMachine.cs` Transition has ConnectionAuthState
+- [x] `ConnectionAuthStatusPanel.cs` _authStateLabel, TOKEN RESTORED/AUTH FAILED/AUTH REQUIRED, SetAuthStatus, no SpacetimeDB using
+- [x] `support-baseline.json` ConnectionAuthState.cs path
+- [x] `docs/runtime-boundaries.md` ConnectionAuthState table, Credentials row, Identity paragraph
+- [x] Regression guards: ITokenStore, service methods, adapter builder calls (10 tests)
+
+---
+
 ## Totals
 
 | Suite | Tests |
@@ -307,12 +349,15 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 | `test_story_1_9_connection.py` | 69 |
 | `test_story_1_10_quickstart.py` | 40 |
 | `test_story_2_1_auth_config.py` | 57 |
-| **Full suite** | **527** |
+| `test_story_2_2_auth_session.py` | 53 |
+| **Full suite** | **585** |
 
-All 527 tests pass (`pytest -q` verified 2026-04-14).
+All 585 tests pass (`pytest -q` verified 2026-04-14).
 
 ## Next Steps
 
 - Run `pytest tests/` as part of CI to enforce structural contracts across all stories
 - Epic 1 complete — all stories 1.1–1.10 implemented and green
 - Story 2.1 complete — auth/token storage boundary established with full contract coverage
+- Story 2.2 complete — auth session flow, WithToken injection, identity capture, auth state surfaces fully covered
+- Story 2.3 (token restore from ITokenStore) will extend `SpacetimeConnectionService.Connect()` — add regression guards for `GetTokenAsync` wiring when that story is implemented

@@ -1,0 +1,20 @@
+namespace GodotSpacetime.Connection;
+
+/// <summary>
+/// The authentication phase of a <see cref="ConnectionStatus"/>.
+/// Complements <see cref="ConnectionState"/> with auth-specific context.
+/// </summary>
+public enum ConnectionAuthState
+{
+    /// <summary>No authentication context. Anonymous connection, or a state with no auth flow in progress.</summary>
+    None,
+
+    /// <summary>Credentials are expected but not configured. Informational — used by status surfaces to guide configuration.</summary>
+    AuthRequired,
+
+    /// <summary>Provided credentials were accepted by the server. The session is authenticated.</summary>
+    TokenRestored,
+
+    /// <summary>Provided credentials were rejected. The connection did not complete due to an authentication failure.</summary>
+    AuthFailed,
+}

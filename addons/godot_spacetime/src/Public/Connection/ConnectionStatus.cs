@@ -12,13 +12,16 @@ public partial class ConnectionStatus : RefCounted
     {
     }
 
-    public ConnectionStatus(ConnectionState state, string description)
+    public ConnectionStatus(ConnectionState state, string description, ConnectionAuthState authState = ConnectionAuthState.None)
     {
         State = state;
         Description = description;
+        AuthState = authState;
     }
 
     public ConnectionState State { get; set; }
 
     public string Description { get; set; } = string.Empty;
+
+    public ConnectionAuthState AuthState { get; set; }
 }

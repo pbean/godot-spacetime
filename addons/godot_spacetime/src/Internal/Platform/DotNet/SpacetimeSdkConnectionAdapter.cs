@@ -9,7 +9,7 @@ namespace GodotSpacetime.Runtime.Platform.DotNet;
 
 internal interface IConnectionEventSink
 {
-    void OnConnected(string token);
+    void OnConnected(string identity, string token);
 
     void OnConnectError(Exception error);
 
@@ -47,6 +47,11 @@ internal sealed class SpacetimeSdkConnectionAdapter
 
         builder = InvokeMethod(builder, "WithUri", NormalizeUri(settings.Host));
         builder = InvokeMethod(builder, "WithDatabaseName", settings.Database);
+
+        // Story 2.2: inject credentials token when provided
+        if (!string.IsNullOrWhiteSpace(settings.Credentials))
+            builder = InvokeMethod(builder, "WithToken", settings.Credentials);
+
         builder = InvokeMethod(builder, "OnConnect", CreateConnectCallback(builder, sink));
         builder = InvokeMethod(builder, "OnConnectError", CreateConnectErrorCallback(builder, sink));
         builder = InvokeMethod(builder, "OnDisconnect", CreateDisconnectCallback(builder, sink));
@@ -96,10 +101,20 @@ internal sealed class SpacetimeSdkConnectionAdapter
         var parameters = invoke.GetParameters();
         var parameterExpressions = CreateParameters(parameters);
         var sinkExpression = Expression.Constant(sink);
+
+        // param[1] = SpacetimeDB.Identity struct; call ToString() to cross the isolation boundary
+        var identityExpression = parameterExpressions[1];
+        var toStringMethod = identityExpression.Type.GetMethod("ToString", Type.EmptyTypes)
+            ?? typeof(object).GetMethod("ToString", Type.EmptyTypes)!;
+        var identityStringExpression = Expression.Call(identityExpression, toStringMethod);
+
+        // param[^1] = string token (last parameter)
         var tokenExpression = parameterExpressions[^1];
+
         var body = Expression.Call(
             sinkExpression,
             typeof(IConnectionEventSink).GetMethod(nameof(IConnectionEventSink.OnConnected))!,
+            identityStringExpression,
             tokenExpression
         );
 

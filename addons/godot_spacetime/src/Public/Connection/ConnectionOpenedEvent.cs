@@ -13,5 +13,8 @@ public partial class ConnectionOpenedEvent : RefCounted
 
     public string Database { get; set; } = string.Empty;
 
+    /// <summary>Server-assigned identity string for the authenticated session. Empty for anonymous connections.</summary>
+    public string Identity { get; set; } = string.Empty;
+
     public DateTimeOffset ConnectedAt { get; set; }
 }
