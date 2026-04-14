@@ -69,3 +69,4 @@ Future code generation and compatibility stories should extend the existing vali
 ## See Also
 
 - `docs/connection.md` for the connection lifecycle that generated bindings eventually run against.
+- `docs/quickstart.md` for the step-by-step first-setup workflow that exercises code generation as part of the full flow.

@@ -39,3 +39,4 @@ The support baseline metadata used by the validation script lives in `scripts/co
 ## See Also
 
 - `docs/connection.md` for connection lifecycle states, signals, and editor status labels.
+- `docs/quickstart.md` for the step-by-step first-setup workflow from install through first connection.

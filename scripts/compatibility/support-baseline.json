@@ -52,7 +52,8 @@
     { "path": "addons/godot_spacetime/src/Internal/Connection/ReconnectPolicy.cs", "type": "file" },
     { "path": "addons/godot_spacetime/src/Internal/Events", "type": "dir" },
     { "path": "addons/godot_spacetime/src/Internal/Events/GodotSignalAdapter.cs", "type": "file" },
-    { "path": "docs/connection.md", "type": "file" }
+    { "path": "docs/connection.md", "type": "file" },
+    { "path": "docs/quickstart.md", "type": "file" }
   ],
   "line_checks": [
     {
@@ -201,6 +202,36 @@
       "file": ".github/workflows/validate-foundation.yml",
       "label": "Validation workflow entrypoint",
       "expected_line": "run: python3 scripts/compatibility/validate-foundation.py"
+    },
+    {
+      "file": "docs/quickstart.md",
+      "label": "Quickstart top-level heading",
+      "expected_line": "## Quickstart"
+    },
+    {
+      "file": "docs/quickstart.md",
+      "label": "Quickstart foundation validation command",
+      "expected_line": "python3 scripts/compatibility/validate-foundation.py"
+    },
+    {
+      "file": "docs/quickstart.md",
+      "label": "Quickstart codegen script",
+      "expected_line": "bash scripts/codegen/generate-smoke-test.sh"
+    },
+    {
+      "file": "docs/quickstart.md",
+      "label": "Quickstart install.md reference",
+      "expected_line": "docs/install.md"
+    },
+    {
+      "file": "docs/quickstart.md",
+      "label": "Quickstart codegen.md reference",
+      "expected_line": "docs/codegen.md"
+    },
+    {
+      "file": "docs/quickstart.md",
+      "label": "Quickstart connection.md reference",
+      "expected_line": "docs/connection.md"
     }
   ]
 }
