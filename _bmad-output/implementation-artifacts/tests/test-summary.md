@@ -219,6 +219,40 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 
 ---
 
+---
+
+## Story 1.10: Validate First Setup Through a Quickstart Path
+
+### Generated Tests (gap additions — 2026-04-14)
+
+**File:** `tests/test_story_1_10_quickstart.py`
+
+17 new tests added filling 6 discovered gaps. Total: 23 → **40** tests. All 40 pass.
+
+| Gap | New Tests | AC |
+|-----|----------|----|
+| 5 support-baseline.json line_check labels untested | `test_support_baseline_has_quickstart_foundation_command_line_check`, `..._codegen_script_...`, `..._install_md_...`, `..._codegen_md_...`, `..._connection_md_...` | — |
+| `## Prerequisites` section and version strings | `test_quickstart_has_prerequisites_section`, `..._godot_version`, `..._dotnet_version`, `..._cli_version` | AC 1 |
+| `## See Also` section heading | `test_quickstart_has_see_also_section` | AC 1 |
+| Panel state strings (OK / NOT CONFIGURED / CONNECTED) | `test_quickstart_mentions_codegen_panel_ok_state`, `..._compat_panel_ok_state`, `..._status_panel_not_configured_state`, `..._status_panel_connected_state` | AC 1, 2 |
+| Failure recovery DISCONNECTED + DEGRADED states | `test_quickstart_failure_recovery_covers_disconnected_state`, `..._degraded_state` | AC 2 |
+| Keyboard navigation (AC 3) | `test_quickstart_mentions_keyboard_navigation` | AC 3 |
+
+### Original 23 tests (pre-gap — spec-mandated)
+
+- [x] File existence (`docs/quickstart.md`)
+- [x] `## Quickstart` exact stripped-line heading
+- [x] `## Failure Recovery` or `## Troubleshooting` section
+- [x] Foundation validation command, codegen script
+- [x] `SpacetimeSettings`, `SpacetimeClient`, `Connect(`, `connection_state_changed`
+- [x] Panel name strings (`"Spacetime Codegen"`, `"Spacetime Compat"`, `"Spacetime Status"`)
+- [x] Cross-references to `docs/install.md`, `docs/codegen.md`, `docs/connection.md`
+- [x] `support-baseline.json`: `docs/quickstart.md` required_path + `"Quickstart top-level heading"` line_check
+- [x] `docs/install.md` and `docs/codegen.md` See Also references
+- [x] Regression guards: 3 panel labels + `AddControlToBottomPanel` count = 3
+
+---
+
 ## Totals
 
 | Suite | Tests |
@@ -229,15 +263,14 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 | `test_story_1_6_generate_bindings.py` | 33 |
 | `test_story_1_7_schema_concepts.py` | 54 |
 | `test_story_1_8_compatibility.py` | 51 |
-| `test_story_1_9_connection.py` | 69 (red — pending implementation) |
-| **Full suite (green stories 1.3–1.8)** | **343** |
+| `test_story_1_9_connection.py` | 69 |
+| `test_story_1_10_quickstart.py` | 40 |
+| **Full suite** | **465** |
 
-Stories 1.3–1.8: all 343 tests pass (`pytest -q` verified 2026-04-14).  
-Story 1.9: 69 tests in red-phase awaiting implementation.
+All 465 tests pass (`pytest -q` verified 2026-04-14).
 
 ## Next Steps
 
 - Run `pytest tests/` as part of CI to enforce structural contracts across all stories
-- Implement Story 1.9 per `_bmad-output/implementation-artifacts/spec-1-9-configure-and-open-a-first-connection-from-godot.md`
-- Verification sequence: `validate-foundation.py` → `dotnet build` → `pytest tests/test_story_1_9_connection.py` → `pytest -q`
-- Story 1.10 (quickstart path) should add integration-level tests verifying compatibility + connection state together
+- Epic 1 complete — all stories 1.1–1.10 implemented and green
+- Epic 2 (Auth) will extend `SpacetimeSettings` with auth/token fields; `test_story_1_10_quickstart.py` regression guards will catch any panel regressions

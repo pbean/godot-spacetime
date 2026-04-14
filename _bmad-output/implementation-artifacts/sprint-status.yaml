@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-12T00:51:47-0700
-last_updated: 2026-04-14T19:00:00-0700
+last_updated: 2026-04-14T15:24:13-0700
 project: godot-spacetime
 project_key: NOKEY
 tracking_system: file-system
@@ -52,7 +52,7 @@ development_status:
   1-7-explain-generated-schema-concepts-and-validate-code-generation-state: done
   1-8-detect-binding-and-schema-compatibility-problems-early: done
   1-9-configure-and-open-a-first-connection-from-godot: done
-  1-10-validate-first-setup-through-a-quickstart-path: backlog
+  1-10-validate-first-setup-through-a-quickstart-path: done
   epic-1-retrospective: optional
   epic-2: backlog
   2-1-define-auth-configuration-and-token-storage-boundaries: backlog
