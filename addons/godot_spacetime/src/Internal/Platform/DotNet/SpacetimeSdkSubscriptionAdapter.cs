@@ -20,5 +20,7 @@ internal sealed class SpacetimeSdkSubscriptionAdapter
 {
     // Stub — references IDbConnection to establish the isolation boundary.
     // Subscription management implementation is added in later stories.
+#pragma warning disable CS0169
     private IDbConnection? _dbConnection;
+#pragma warning restore CS0169
 }

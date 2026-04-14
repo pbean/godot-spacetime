@@ -35,7 +35,11 @@
     { "path": "scripts/codegen/generate-smoke-test.sh", "type": "file" },
     { "path": "demo", "type": "dir" },
     { "path": "demo/generated", "type": "dir" },
-    { "path": "demo/generated/smoke_test", "type": "dir" }
+    { "path": "demo/generated/smoke_test", "type": "dir" },
+    { "path": "addons/godot_spacetime/src/Editor", "type": "dir" },
+    { "path": "addons/godot_spacetime/src/Editor/Codegen", "type": "dir" },
+    { "path": "addons/godot_spacetime/src/Editor/Codegen/CodegenValidationPanel.cs", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Editor/Codegen/CodegenValidationPanel.tscn", "type": "file" }
   ],
   "line_checks": [
     {
@@ -164,6 +168,11 @@
       "file": "docs/codegen.md",
       "label": "Generated output location",
       "expected_line": "The script outputs generated C# bindings to `demo/generated/smoke_test/`."
+    },
+    {
+      "file": "docs/codegen.md",
+      "label": "Schema concepts section heading",
+      "expected_line": "## Generated Schema Concepts"
     },
     {
       "file": ".github/workflows/validate-foundation.yml",
