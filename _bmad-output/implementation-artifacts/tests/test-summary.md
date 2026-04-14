@@ -253,6 +253,47 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 
 ---
 
+---
+
+## Story 2.1: Define Auth Configuration and Token Storage Boundaries
+
+### Generated Tests (gap additions — 2026-04-14)
+
+**File:** `tests/test_story_2_1_auth_config.py`
+
+31 new tests appended to the existing 26, bringing the file to **57 tests**. All 57 pass.
+
+| New Test Group | Count | Gap Filled |
+|----------------|-------|------------|
+| Namespace enforcement (`GodotSpacetime.Runtime.Auth`) | 3 | Not verified on any Auth file |
+| Internal access modifiers (`internal sealed` / `internal static`) | 3 | Not verified — public regression undetectable |
+| `MemoryTokenStore` `_token` backing field | 1 | Field-backed storage unverified |
+| `ProjectSettingsTokenStore` all 3 methods | 3 | Only interface membership tested, not each method |
+| `ProjectSettingsTokenStore` `string.Empty` in ClearTokenAsync | 1 | Spec-required reset value unverified |
+| `ProjectSettingsTokenStore` uses `ProjectSettings` | 1 | Godot backing unverified |
+| `TokenRedactor` `<no token>` output string | 1 | Null/empty path only tested by `<redacted>` check |
+| `TokenRedactor` `token.Length` threshold | 1 | 8-char boundary logic unverified |
+| `TokenRedactor` `…<redacted>` truncation pattern | 1 | Long-token format unverified |
+| `SpacetimeSettings` `using GodotSpacetime.Auth;` | 1 | Using directive unverified |
+| `SpacetimeSettings` TokenStore has no `[Export]` | 1 | Anti-test: ITokenStore is not a Godot type |
+| `SpacetimeSettings` stale comment removed | 1 | "Additional settings" comment removal unverified |
+| `SpacetimeConnectionService` `using GodotSpacetime.Auth;` | 1 | Using directive unverified |
+| `SpacetimeConnectionService` assigns `settings.TokenStore` | 1 | Assignment expression unverified |
+| `SpacetimeConnectionService` fire-and-forget `_ =` pattern | 1 | Pattern critical to story design intent |
+| `ProjectSettingsTokenStore` persists writes with `ProjectSettings.Save()` | 1 | Static checks previously missed that the "persistent" store never saved its changes |
+| `ProjectSettingsTokenStore` reports save failures via returned task | 1 | Save failures could silently invalidate persistence behavior |
+| `SpacetimeConnectionService` observes faulted token-store tasks | 1 | Optional persistence faults could surface later as unobserved task exceptions |
+| `SpacetimeConnectionService` shields sync token-store exceptions | 1 | Synchronous store failures could still break `OnConnected` |
+| `runtime-boundaries.md` "Built-in implementations" section | 1 | Expanded auth section content unverified |
+| `runtime-boundaries.md` MemoryTokenStore description | 1 | New auth content unverified |
+| `runtime-boundaries.md` ProjectSettingsTokenStore description | 1 | New auth content unverified |
+| `runtime-boundaries.md` ClearTokenAsync token clearing | 1 | Token Clearing paragraph unverified |
+| `runtime-boundaries.md` TokenRedactor reference | 1 | TokenRedactor utility unverified in docs |
+| `runtime-boundaries.md` `spacetime/auth/token` key documented | 1 | Setting key documentation unverified |
+| **Total new** | **31** | |
+
+---
+
 ## Totals
 
 | Suite | Tests |
@@ -265,12 +306,13 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 | `test_story_1_8_compatibility.py` | 51 |
 | `test_story_1_9_connection.py` | 69 |
 | `test_story_1_10_quickstart.py` | 40 |
-| **Full suite** | **465** |
+| `test_story_2_1_auth_config.py` | 57 |
+| **Full suite** | **527** |
 
-All 465 tests pass (`pytest -q` verified 2026-04-14).
+All 527 tests pass (`pytest -q` verified 2026-04-14).
 
 ## Next Steps
 
 - Run `pytest tests/` as part of CI to enforce structural contracts across all stories
 - Epic 1 complete — all stories 1.1–1.10 implemented and green
-- Epic 2 (Auth) will extend `SpacetimeSettings` with auth/token fields; `test_story_1_10_quickstart.py` regression guards will catch any panel regressions
+- Story 2.1 complete — auth/token storage boundary established with full contract coverage
