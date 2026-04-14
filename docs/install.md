@@ -11,23 +11,18 @@ This repository is the Godot project root for local development of `godot-spacet
 ## Bootstrap Steps
 
 1. Install a supported Godot `.NET` editor and a local `.NET 8` SDK.
-2. Restore the repository C# project:
+2. Run the shared foundation validation lane:
 
    ```bash
-   dotnet restore godot-spacetime.csproj
+   python3 scripts/compatibility/validate-foundation.py
    ```
 
-3. Build the root solution:
+3. Open the repository root folder in Godot.
+4. Go to `Project > Project Settings > Plugins`.
+5. Enable `Godot Spacetime`.
 
-   ```bash
-   dotnet build godot-spacetime.sln
-   ```
-
-4. Open the repository root folder in Godot.
-5. Go to `Project > Project Settings > Plugins`.
-6. Enable `Godot Spacetime`.
-
-The restore/build step is required before enabling the addon because Godot C# editor plugins must be compiled before the editor can load them.
+The shared validation lane restores `godot-spacetime.sln`, builds `godot-spacetime.sln -c Debug --no-restore`, and validates the current support baseline before the editor tries to load the addon.
+The support baseline metadata used by the validation script lives in `scripts/compatibility/support-baseline.json`.
 
 ## Repository Expectations
 
@@ -39,3 +34,4 @@ The restore/build step is required before enabling the addon because Godot C# ed
 
 - The scaffold currently uses the official `Godot.NET.Sdk` NuGet package `4.6.1`, which is the latest stable package available at the time this foundation story was implemented.
 - The product support baseline remains Godot `4.6.2`, `.NET 8+`, and SpacetimeDB `2.1+`; later validation stories should keep the declared baseline and implementation details in sync as upstream packages advance.
+- Story `1.2` reserves the repo-owned codegen and fixture inputs described in `docs/codegen.md` so later validation and generation stories can extend one documented path.

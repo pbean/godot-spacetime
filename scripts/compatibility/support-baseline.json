@@ -1,0 +1,157 @@
+{
+  "support_versions": {
+    "godot_product": "4.6.2",
+    "godot_dotnet_sdk": "4.6.1",
+    "dotnet_sdk": "8.0+",
+    "target_framework": "net8.0",
+    "spacetimedb": "2.1+",
+    "spacetimedb_client_sdk": "2.1.0"
+  },
+  "shared_commands": {
+    "restore": ["dotnet", "restore", "godot-spacetime.sln"],
+    "build": ["dotnet", "build", "godot-spacetime.sln", "-c", "Debug", "--no-restore"]
+  },
+  "required_paths": [
+    { "path": ".github/workflows/validate-foundation.yml", "type": "file" },
+    { "path": "scripts/compatibility/support-baseline.json", "type": "file" },
+    { "path": "scripts/compatibility/validate-foundation.py", "type": "file" },
+    { "path": "docs/install.md", "type": "file" },
+    { "path": "docs/compatibility-matrix.md", "type": "file" },
+    { "path": "docs/codegen.md", "type": "file" },
+    { "path": "spacetime/modules", "type": "dir" },
+    { "path": "spacetime/modules/README.md", "type": "file" },
+    { "path": "spacetime/modules/smoke_test", "type": "dir" },
+    { "path": "spacetime/modules/smoke_test/README.md", "type": "file" },
+    { "path": "spacetime/modules/compatibility_fixture", "type": "dir" },
+    { "path": "spacetime/modules/compatibility_fixture/README.md", "type": "file" },
+    { "path": "tests/fixtures", "type": "dir" },
+    { "path": "tests/fixtures/README.md", "type": "file" },
+    { "path": "tests/fixtures/generated", "type": "dir" },
+    { "path": "tests/fixtures/generated/.gitkeep", "type": "file" },
+    { "path": "tests/fixtures/settings", "type": "dir" },
+    { "path": "tests/fixtures/settings/.gitkeep", "type": "file" }
+  ],
+  "line_checks": [
+    {
+      "file": "godot-spacetime.csproj",
+      "label": "Godot.NET.Sdk version",
+      "expected_line": "<Project Sdk=\"Godot.NET.Sdk/4.6.1\">",
+      "version_key": "godot_dotnet_sdk"
+    },
+    {
+      "file": "godot-spacetime.csproj",
+      "label": "Target framework",
+      "expected_line": "<TargetFramework>net8.0</TargetFramework>",
+      "version_key": "target_framework"
+    },
+    {
+      "file": "README.md",
+      "label": "Foundation validation command",
+      "expected_line": "python3 scripts/compatibility/validate-foundation.py",
+      "allow_multiple": true
+    },
+    {
+      "file": "README.md",
+      "label": "Shared validation lane explanation",
+      "expected_line": "The shared validation lane restores `godot-spacetime.sln`, builds `godot-spacetime.sln -c Debug --no-restore`, and validates the documented support baseline before plugin enablement."
+    },
+    {
+      "file": "docs/install.md",
+      "label": "Godot editor target",
+      "expected_line": "- Godot editor target: `4.6.2`",
+      "version_key": "godot_product"
+    },
+    {
+      "file": "docs/install.md",
+      "label": ".NET SDK baseline",
+      "expected_line": "- `.NET` SDK: `8.0+`",
+      "version_key": "dotnet_sdk"
+    },
+    {
+      "file": "docs/install.md",
+      "label": "SpacetimeDB baseline",
+      "expected_line": "- SpacetimeDB baseline: `2.1+`",
+      "version_key": "spacetimedb"
+    },
+    {
+      "file": "docs/install.md",
+      "label": "Foundation validation command",
+      "expected_line": "python3 scripts/compatibility/validate-foundation.py"
+    },
+    {
+      "file": "docs/install.md",
+      "label": "Shared validation lane explanation",
+      "expected_line": "The shared validation lane restores `godot-spacetime.sln`, builds `godot-spacetime.sln -c Debug --no-restore`, and validates the current support baseline before the editor tries to load the addon."
+    },
+    {
+      "file": "docs/install.md",
+      "label": "Support baseline metadata source",
+      "expected_line": "The support baseline metadata used by the validation script lives in `scripts/compatibility/support-baseline.json`."
+    },
+    {
+      "file": "docs/compatibility-matrix.md",
+      "label": "Godot editor/runtime target",
+      "expected_line": "| Godot editor/runtime target | `4.6.2` | Product baseline for the initial shipping runtime. |",
+      "version_key": "godot_product"
+    },
+    {
+      "file": "docs/compatibility-matrix.md",
+      "label": "Godot .NET build SDK",
+      "expected_line": "| Godot .NET build SDK | `Godot.NET.Sdk` `4.6.1` | Current stable official NuGet package used by the scaffold. |",
+      "version_key": "godot_dotnet_sdk"
+    },
+    {
+      "file": "docs/compatibility-matrix.md",
+      "label": ".NET SDK",
+      "expected_line": "| `.NET` SDK | `8.0+` | Use a local `.NET 8` SDK for restore and build. |",
+      "version_key": "dotnet_sdk"
+    },
+    {
+      "file": "docs/compatibility-matrix.md",
+      "label": "SpacetimeDB server and CLI",
+      "expected_line": "| SpacetimeDB server and CLI | `2.1+` | Declared product baseline for later code-generation and runtime stories. |",
+      "version_key": "spacetimedb"
+    },
+    {
+      "file": "docs/compatibility-matrix.md",
+      "label": "SpacetimeDB.ClientSDK",
+      "expected_line": "| `SpacetimeDB.ClientSDK` | `2.1.0` planned runtime baseline | Not referenced by the scaffold-only foundation yet, but this is the intended package target for later Epic 1 runtime stories. |",
+      "version_key": "spacetimedb_client_sdk"
+    },
+    {
+      "file": "docs/compatibility-matrix.md",
+      "label": "Source of truth note",
+      "expected_line": "The machine-checkable source of truth for this baseline lives in `scripts/compatibility/support-baseline.json`, and `.github/workflows/validate-foundation.yml` enforces it through `python3 scripts/compatibility/validate-foundation.py`."
+    },
+    {
+      "file": "docs/codegen.md",
+      "label": "Foundation validation command",
+      "expected_line": "python3 scripts/compatibility/validate-foundation.py"
+    },
+    {
+      "file": "docs/codegen.md",
+      "label": "Smoke test module path",
+      "expected_line": "- `spacetime/modules/smoke_test/` is reserved for the future local smoke module used by quickstart and first-connection validation."
+    },
+    {
+      "file": "docs/codegen.md",
+      "label": "Compatibility fixture module path",
+      "expected_line": "- `spacetime/modules/compatibility_fixture/` is reserved for future schema-drift and regeneration scenarios."
+    },
+    {
+      "file": "docs/codegen.md",
+      "label": "Generated fixture path",
+      "expected_line": "- `tests/fixtures/generated/` is reserved for read-only generated bindings consumed by tests."
+    },
+    {
+      "file": "docs/codegen.md",
+      "label": "Fixture settings path",
+      "expected_line": "- `tests/fixtures/settings/` is reserved for non-shipping test settings and environment fixtures."
+    },
+    {
+      "file": ".github/workflows/validate-foundation.yml",
+      "label": "Validation workflow entrypoint",
+      "expected_line": "run: python3 scripts/compatibility/validate-foundation.py"
+    }
+  ]
+}
