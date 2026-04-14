@@ -18,6 +18,7 @@
     { "path": "docs/install.md", "type": "file" },
     { "path": "docs/compatibility-matrix.md", "type": "file" },
     { "path": "docs/codegen.md", "type": "file" },
+    { "path": "docs/runtime-boundaries.md", "type": "file" },
     { "path": "spacetime/modules", "type": "dir" },
     { "path": "spacetime/modules/README.md", "type": "file" },
     { "path": "spacetime/modules/smoke_test", "type": "dir" },
