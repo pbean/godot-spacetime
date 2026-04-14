@@ -336,6 +336,45 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 
 ---
 
+---
+
+## Story 2.3: Restore a Previous Session from Persisted Auth State
+
+### Generated Tests (gap additions — 2026-04-14)
+
+**File:** `tests/test_story_2_3_session_restore.py`
+
+9 new tests added filling gaps discovered by QA pass. Total: 20 → **29** tests. All 29 pass.
+
+| New Test | Gap Filled | AC |
+|----------|------------|----|
+| `test_connection_service_guards_null_token_store` | `settings.TokenStore != null` null-guard not explicitly verified | 1 |
+| `test_connection_service_injects_credentials_from_store` | `settings.Credentials = stored` injection not verified | 1 |
+| `test_connection_service_checks_stored_token_not_empty` | `IsNullOrWhiteSpace(stored)` inner empty-token check missing | 3 |
+| `test_connection_service_has_get_result_in_sync_chain` | `GetResult()` not tested (only `GetAwaiter` was) | 1 |
+| `test_connection_service_restore_has_catch_exception_block` | `catch (Exception)` block not directly asserted | 4 |
+| `test_connection_service_restore_block_before_credentials_provided` | Ordering: restore block before `_credentialsProvided =` not tested | 1/3 |
+| `test_runtime_boundaries_mentions_with_token_in_session_restoration` | `WithToken` not verified in `runtime-boundaries.md` | 1 |
+| `test_runtime_boundaries_mentions_token_restored_in_session_restoration` | `TokenRestored` not verified in `runtime-boundaries.md` | 2 |
+| `test_connection_service_still_has_reconnect_policy` | `_reconnectPolicy` regression guard absent | structural |
+
+### Original 20 tests (spec-mandated)
+
+- [x] `GetTokenAsync` called in SpacetimeConnectionService.cs
+- [x] `GetAwaiter` in sync chain
+- [x] `IsNullOrWhiteSpace(settings.Credentials)` explicit-credentials guard
+- [x] `try` block count ≥ 2
+- [x] `Session Restoration` section in runtime-boundaries.md
+- [x] `GetTokenAsync` referenced in runtime-boundaries.md
+- [x] ITokenStore.cs presence + all three methods (`GetTokenAsync`, `StoreTokenAsync`, `ClearTokenAsync`)
+- [x] `_credentialsProvided`, `_tokenStore`, `StoreTokenAsync`, `OnConnected(` fields/methods intact
+- [x] `WithToken` in SpacetimeSdkConnectionAdapter.cs
+- [x] `TokenRestored`, `AuthFailed` in ConnectionAuthState.cs
+- [x] `TOKEN RESTORED`, `AUTH FAILED` in ConnectionAuthStatusPanel.cs
+- [x] No `SpacetimeDB.*` reference in SpacetimeConnectionService.cs (isolation guard)
+
+---
+
 ## Totals
 
 | Suite | Tests |
@@ -350,9 +389,10 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 | `test_story_1_10_quickstart.py` | 40 |
 | `test_story_2_1_auth_config.py` | 57 |
 | `test_story_2_2_auth_session.py` | 53 |
-| **Full suite** | **585** |
+| `test_story_2_3_session_restore.py` | 29 |
+| **Full suite** | **614** |
 
-All 585 tests pass (`pytest -q` verified 2026-04-14).
+All 614 tests pass (`pytest -q` verified 2026-04-14).
 
 ## Next Steps
 
@@ -360,4 +400,4 @@ All 585 tests pass (`pytest -q` verified 2026-04-14).
 - Epic 1 complete — all stories 1.1–1.10 implemented and green
 - Story 2.1 complete — auth/token storage boundary established with full contract coverage
 - Story 2.2 complete — auth session flow, WithToken injection, identity capture, auth state surfaces fully covered
-- Story 2.3 (token restore from ITokenStore) will extend `SpacetimeConnectionService.Connect()` — add regression guards for `GetTokenAsync` wiring when that story is implemented
+- Story 2.3 complete — token restore from ITokenStore wired into `Connect()`, all ACs and gaps covered
