@@ -19,5 +19,7 @@ internal sealed class SpacetimeSdkConnectionAdapter
 {
     // Stub — references IDbConnection to establish the isolation boundary.
     // Implementation (Builder construction, FrameTick advancement, etc.) is added in Story 1.9.
+#pragma warning disable CS0169
     private IDbConnection? _dbConnection;
+#pragma warning restore CS0169
 }
