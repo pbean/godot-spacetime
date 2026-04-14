@@ -39,6 +39,26 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
         _host = settings.Host.Trim();
         _database = settings.Database.Trim();
         _tokenStore = settings.TokenStore;
+        var restoredCredentials = false;
+
+        // Story 2.3: restore a previous session from the token store when no explicit credentials are set
+        if (settings.TokenStore != null && string.IsNullOrWhiteSpace(settings.Credentials))
+        {
+            try
+            {
+                var stored = settings.TokenStore.GetTokenAsync().GetAwaiter().GetResult();
+                if (!string.IsNullOrWhiteSpace(stored))
+                {
+                    settings.Credentials = stored;
+                    restoredCredentials = true;
+                }
+            }
+            catch (Exception)
+            {
+                // Token restoration failure is non-fatal — proceed without credentials
+            }
+        }
+
         _credentialsProvided = !string.IsNullOrWhiteSpace(settings.Credentials);
         _reconnectPolicy.Reset();
 
@@ -53,6 +73,13 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
             _adapter.Close();
             _stateMachine.Transition(ConnectionState.Disconnected, $"DISCONNECTED — failed to start the connection: {ex.Message}");
             throw;
+        }
+        finally
+        {
+            // Restored tokens are injected only for this connect attempt so clearing the token store
+            // still resets future connects when the same settings resource is reused.
+            if (restoredCredentials)
+                settings.Credentials = null;
         }
     }
 

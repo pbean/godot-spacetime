@@ -41,7 +41,7 @@ Task StoreTokenAsync(string token);
 Task ClearTokenAsync();
 ```
 
-This is opt-in. If no `ITokenStore` is provided, tokens are not persisted across sessions. The interface is async so that any persistence backend (files, OS keychain, platform services) can be used without blocking the game thread.
+This is opt-in. If no `ITokenStore` is provided, tokens are not persisted across sessions. The interface is async so that persistence backends can use async I/O, but the current `Connect()` session-restoration path waits synchronously for `GetTokenAsync()` before opening the connection. Token stores used for restoration should therefore return promptly and avoid long-running work on the main thread.
 
 **Built-in implementations** (from `Internal/Auth/`):
 - `MemoryTokenStore` — retains the token in memory for the current process lifetime only. Tokens survive reconnects within a session but are cleared when the process exits.
@@ -55,6 +55,15 @@ Assign via code to `Settings.TokenStore` before calling `Connect()`. The built-i
 The identity string is included in [`ConnectionOpenedEvent.Identity`](../addons/godot_spacetime/src/Public/Connection/ConnectionOpenedEvent.cs).
 For anonymous connections, the identity is a new server-assigned value; for credential-bearing connections,
 it is the identity associated with the provided token.
+
+**Session Restoration:** When `SpacetimeSettings.TokenStore` is configured and `Credentials` is not explicitly
+set, `Connect()` calls `GetTokenAsync()` on the token store before opening the connection. If a non-empty
+token is returned, it is injected via `WithToken()` — identical to setting `Credentials` explicitly for that
+open call. The restored value is not retained on the settings resource after `Connect()` returns, so clearing
+the token store resets future restoration attempts. A
+successful restored session emits `ConnectionAuthState.TokenRestored` and surfaces the server identity via
+`ConnectionOpenedEvent.Identity`. If no token is stored or the store throws, the connection falls back
+cleanly to anonymous without leaving corrupted session state.
 
 ### Subscriptions — `SubscriptionHandle` and `SubscriptionAppliedEvent`
 
