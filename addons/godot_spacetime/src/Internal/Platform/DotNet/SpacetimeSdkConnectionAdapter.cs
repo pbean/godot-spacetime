@@ -1,6 +1,20 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Linq.Expressions;
+using System.Reflection;
 using SpacetimeDB;
 
 namespace GodotSpacetime.Runtime.Platform.DotNet;
+
+internal interface IConnectionEventSink
+{
+    void OnConnected(string token);
+
+    void OnConnectError(Exception error);
+
+    void OnDisconnected(Exception? error);
+}
 
 /// <summary>
 /// Adapter for the SpacetimeDB .NET ClientSDK connection layer.
@@ -12,14 +26,174 @@ namespace GodotSpacetime.Runtime.Platform.DotNet;
 ///
 /// See <c>docs/runtime-boundaries.md</c> — "Internal/Platform/DotNet/ — The Runtime
 /// Isolation Zone" for the architectural justification.
-///
-/// Runtime implementation is added in Story 1.9.
 /// </summary>
 internal sealed class SpacetimeSdkConnectionAdapter
 {
-    // Stub — references IDbConnection to establish the isolation boundary.
-    // Implementation (Builder construction, FrameTick advancement, etc.) is added in Story 1.9.
-#pragma warning disable CS0169
     private IDbConnection? _dbConnection;
-#pragma warning restore CS0169
+
+    public void Open(SpacetimeSettings settings, IConnectionEventSink sink)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(sink);
+
+        Close();
+
+        // The generated bindings expose the concrete DbConnection type and its DbConnection.Builder() entrypoint.
+        var dbConnectionType = ResolveGeneratedDbConnectionType();
+        var builderMethod = dbConnectionType.GetMethod("Builder", BindingFlags.Public | BindingFlags.Static)
+            ?? throw new InvalidOperationException("Generated DbConnection type must expose a public Builder() method.");
+        var builder = builderMethod.Invoke(null, null)
+            ?? throw new InvalidOperationException("Generated DbConnection.Builder() returned null.");
+
+        builder = InvokeMethod(builder, "WithUri", NormalizeUri(settings.Host));
+        builder = InvokeMethod(builder, "WithDatabaseName", settings.Database);
+        builder = InvokeMethod(builder, "OnConnect", CreateConnectCallback(builder, sink));
+        builder = InvokeMethod(builder, "OnConnectError", CreateConnectErrorCallback(builder, sink));
+        builder = InvokeMethod(builder, "OnDisconnect", CreateDisconnectCallback(builder, sink));
+        _dbConnection = (IDbConnection?)InvokeMethod(builder, "Build")
+            ?? throw new InvalidOperationException("Generated DbConnection.Builder().Build() did not return an IDbConnection.");
+    }
+
+    public void FrameTick()
+    {
+        _dbConnection?.FrameTick();
+    }
+
+    public void Close()
+    {
+        var connection = _dbConnection;
+        _dbConnection = null;
+        connection?.Disconnect();
+    }
+
+    private static string NormalizeUri(string host)
+    {
+        var trimmedHost = host.Trim();
+        if (trimmedHost.StartsWith("ws://", StringComparison.OrdinalIgnoreCase)
+            || trimmedHost.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmedHost;
+        }
+
+        return $"wss://{trimmedHost}";
+    }
+
+    private static object InvokeMethod(object target, string methodName, params object[] args)
+    {
+        var method = target.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(candidate => candidate.Name == methodName && candidate.GetParameters().Length == args.Length)
+            ?? throw new InvalidOperationException($"Unable to find method '{methodName}' on generated connection builder.");
+
+        return method.Invoke(target, args)
+            ?? throw new InvalidOperationException($"Generated connection builder method '{methodName}' returned null.");
+    }
+
+    private static Delegate CreateConnectCallback(object builder, IConnectionEventSink sink)
+    {
+        var delegateType = GetCallbackType(builder, "OnConnect");
+        var invoke = delegateType.GetMethod("Invoke")
+            ?? throw new InvalidOperationException("Generated OnConnect callback is missing an Invoke method.");
+        var parameters = invoke.GetParameters();
+        var parameterExpressions = CreateParameters(parameters);
+        var sinkExpression = Expression.Constant(sink);
+        var tokenExpression = parameterExpressions[^1];
+        var body = Expression.Call(
+            sinkExpression,
+            typeof(IConnectionEventSink).GetMethod(nameof(IConnectionEventSink.OnConnected))!,
+            tokenExpression
+        );
+
+        return Expression.Lambda(delegateType, body, parameterExpressions).Compile();
+    }
+
+    private static Delegate CreateConnectErrorCallback(object builder, IConnectionEventSink sink)
+    {
+        var delegateType = GetCallbackType(builder, "OnConnectError");
+        var invoke = delegateType.GetMethod("Invoke")
+            ?? throw new InvalidOperationException("Generated OnConnectError callback is missing an Invoke method.");
+        var parameterExpressions = CreateParameters(invoke.GetParameters());
+        var sinkExpression = Expression.Constant(sink);
+        var body = Expression.Call(
+            sinkExpression,
+            typeof(IConnectionEventSink).GetMethod(nameof(IConnectionEventSink.OnConnectError))!,
+            parameterExpressions[0]
+        );
+
+        return Expression.Lambda(delegateType, body, parameterExpressions).Compile();
+    }
+
+    private static Delegate CreateDisconnectCallback(object builder, IConnectionEventSink sink)
+    {
+        var delegateType = GetCallbackType(builder, "OnDisconnect");
+        var invoke = delegateType.GetMethod("Invoke")
+            ?? throw new InvalidOperationException("Generated OnDisconnect callback is missing an Invoke method.");
+        var parameterExpressions = CreateParameters(invoke.GetParameters());
+        var sinkExpression = Expression.Constant(sink);
+        var errorExpression = parameterExpressions[^1];
+        var body = Expression.Call(
+            sinkExpression,
+            typeof(IConnectionEventSink).GetMethod(nameof(IConnectionEventSink.OnDisconnected))!,
+            errorExpression
+        );
+
+        return Expression.Lambda(delegateType, body, parameterExpressions).Compile();
+    }
+
+    private static Type GetCallbackType(object builder, string methodName)
+    {
+        var callbackMethod = builder.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(candidate => candidate.Name == methodName && candidate.GetParameters().Length == 1)
+            ?? throw new InvalidOperationException($"Unable to find generated builder callback method '{methodName}'.");
+
+        return callbackMethod.GetParameters()[0].ParameterType;
+    }
+
+    private static ParameterExpression[] CreateParameters(IReadOnlyList<ParameterInfo> parameters)
+    {
+        var expressions = new ParameterExpression[parameters.Count];
+        for (var index = 0; index < parameters.Count; index++)
+            expressions[index] = Expression.Parameter(parameters[index].ParameterType, parameters[index].Name);
+
+        return expressions;
+    }
+
+    private static Type ResolveGeneratedDbConnectionType()
+    {
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            var directType = assembly.GetType("SpacetimeDB.Types.DbConnection", throwOnError: false);
+            if (IsGeneratedDbConnectionType(directType))
+                return directType!;
+
+            foreach (var candidate in SafeGetTypes(assembly))
+            {
+                if (IsGeneratedDbConnectionType(candidate))
+                    return candidate;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Generated bindings are required before connecting. Compile a module that exposes a DbConnection type with Builder()."
+        );
+    }
+
+    private static bool IsGeneratedDbConnectionType(Type? candidate)
+    {
+        return candidate != null
+            && candidate.Name == "DbConnection"
+            && typeof(IDbConnection).IsAssignableFrom(candidate)
+            && candidate.GetMethod("Builder", BindingFlags.Public | BindingFlags.Static) != null;
+    }
+
+    private static IEnumerable<Type> SafeGetTypes(Assembly assembly)
+    {
+        try
+        {
+            return assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            return ex.Types.Where(type => type != null)!;
+        }
+    }
 }

@@ -35,3 +35,7 @@ The support baseline metadata used by the validation script lives in `scripts/co
 - The scaffold currently uses the official `Godot.NET.Sdk` NuGet package `4.6.1`, which is the latest stable package available at the time this foundation story was implemented.
 - The product support baseline remains Godot `4.6.2`, `.NET 8+`, and SpacetimeDB `2.1+`; later validation stories should keep the declared baseline and implementation details in sync as upstream packages advance.
 - Story `1.2` reserves the repo-owned codegen and fixture inputs described in `docs/codegen.md` so later validation and generation stories can extend one documented path.
+
+## See Also
+
+- `docs/connection.md` for connection lifecycle states, signals, and editor status labels.
