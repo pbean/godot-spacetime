@@ -42,7 +42,17 @@
     { "path": "addons/godot_spacetime/src/Editor/Codegen/CodegenValidationPanel.tscn", "type": "file" },
     { "path": "addons/godot_spacetime/src/Editor/Compatibility", "type": "dir" },
     { "path": "addons/godot_spacetime/src/Editor/Compatibility/CompatibilityPanel.cs", "type": "file" },
-    { "path": "addons/godot_spacetime/src/Editor/Compatibility/CompatibilityPanel.tscn", "type": "file" }
+    { "path": "addons/godot_spacetime/src/Editor/Compatibility/CompatibilityPanel.tscn", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Editor/Status", "type": "dir" },
+    { "path": "addons/godot_spacetime/src/Editor/Status/ConnectionAuthStatusPanel.cs", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Editor/Status/ConnectionAuthStatusPanel.tscn", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Internal/Connection", "type": "dir" },
+    { "path": "addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Internal/Connection/ConnectionStateMachine.cs", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Internal/Connection/ReconnectPolicy.cs", "type": "file" },
+    { "path": "addons/godot_spacetime/src/Internal/Events", "type": "dir" },
+    { "path": "addons/godot_spacetime/src/Internal/Events/GodotSignalAdapter.cs", "type": "file" },
+    { "path": "docs/connection.md", "type": "file" }
   ],
   "line_checks": [
     {
@@ -176,6 +186,11 @@
       "file": "docs/codegen.md",
       "label": "Schema concepts section heading",
       "expected_line": "## Generated Schema Concepts"
+    },
+    {
+      "file": "docs/connection.md",
+      "label": "Connection lifecycle section heading",
+      "expected_line": "## Connection Lifecycle"
     },
     {
       "file": "docs/compatibility-matrix.md",

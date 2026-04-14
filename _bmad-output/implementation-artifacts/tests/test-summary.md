@@ -188,6 +188,37 @@ The existing seam-location assertions were also tightened so `Internal/Platform/
 
 ---
 
+---
+
+## Story 1.9: Configure and Open a First Connection from Godot
+
+### Generated Tests (2026-04-14)
+
+**File:** `tests/test_story_1_9_connection.py` — **69 tests**, red-phase (59 fail / 10 pass pending implementation)
+
+All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests already pass: 7 regression guards for existing Story 1.7/1.8 work, and 3 that match content already present in stub files.
+
+| Test Group | Count | AC |
+|-----------|------|----|
+| File existence (6 new files) | 6 | — |
+| `SpacetimeClient.cs` runtime surface | 6 | 1,2,3,4,6 |
+| `SpacetimeConnectionService.cs` exposure | 5 | 1,2,3,4,7 |
+| `ConnectionStateMachine.cs` states + transition | 6 | 1,2,4 |
+| `SpacetimeSdkConnectionAdapter.cs` SDK builder, no pragma stub | 3 | 1,7 |
+| `ConnectionOpenedEvent.cs` payload fields | 3 | 6 |
+| `ConnectionAuthStatusPanel.cs` text labels | 5 | 5 |
+| `ConnectionAuthStatusPanel.cs` layout requirements | 3 | 5 |
+| `ConnectionAuthStatusPanel.cs` structural (#if TOOLS, [Tool], namespace, VBoxContainer) | 4 | 5 |
+| `ConnectionAuthStatusPanel.tscn` scene content | 3 | 5 |
+| Plugin registration (3 panels, StatusPanelScenePath, cleanup) | 6 | 5 |
+| `support-baseline.json` new required paths | 6 | — |
+| `docs/connection.md` lifecycle documentation | 6 | 2 |
+| Regression guards (Stories 1.7 + 1.8) | 6 | — |
+| Architecture boundary guard | 1 | 7 |
+| **Total** | **69** | |
+
+---
+
 ## Totals
 
 | Suite | Tests |
@@ -198,12 +229,15 @@ The existing seam-location assertions were also tightened so `Internal/Platform/
 | `test_story_1_6_generate_bindings.py` | 33 |
 | `test_story_1_7_schema_concepts.py` | 54 |
 | `test_story_1_8_compatibility.py` | 51 |
-| **Full suite** | **343** |
+| `test_story_1_9_connection.py` | 69 (red — pending implementation) |
+| **Full suite (green stories 1.3–1.8)** | **343** |
 
-All 343 tests pass (`pytest -q` verified 2026-04-14).
+Stories 1.3–1.8: all 343 tests pass (`pytest -q` verified 2026-04-14).  
+Story 1.9: 69 tests in red-phase awaiting implementation.
 
 ## Next Steps
 
 - Run `pytest tests/` as part of CI to enforce structural contracts across all stories
-- Story 1.9 (connection/auth status panel) should follow the Story 1.7/1.8 structural test pattern for `#if TOOLS`, `[Tool]`, namespace, VBoxContainer, scene content, plugin cleanup
+- Implement Story 1.9 per `_bmad-output/implementation-artifacts/spec-1-9-configure-and-open-a-first-connection-from-godot.md`
+- Verification sequence: `validate-foundation.py` → `dotnet build` → `pytest tests/test_story_1_9_connection.py` → `pytest -q`
 - Story 1.10 (quickstart path) should add integration-level tests verifying compatibility + connection state together

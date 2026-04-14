@@ -65,3 +65,7 @@ All generated files live under `demo/generated/smoke_test/` and are in the `Spac
 The machine-checkable support baseline for the current foundation lives in `scripts/compatibility/support-baseline.json`.
 
 Future code generation and compatibility stories should extend the existing validation entrypoint instead of replacing it with a separate manual-only path.
+
+## See Also
+
+- `docs/connection.md` for the connection lifecycle that generated bindings eventually run against.

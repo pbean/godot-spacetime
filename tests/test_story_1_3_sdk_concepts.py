@@ -154,13 +154,13 @@ def test_connection_state_has_exactly_four_values() -> None:
 
 
 # ---------------------------------------------------------------------------
-# ConnectionStatus — Record Shape
+# ConnectionStatus — Public Type Shape
 # ---------------------------------------------------------------------------
 
-def test_connection_status_is_record() -> None:
+def test_connection_status_is_public_type() -> None:
     content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionStatus.cs")
-    assert re.search(r"public\s+record\s+ConnectionStatus", content), (
-        "ConnectionStatus must be declared as a public record"
+    assert re.search(r"public\s+(?:partial\s+)?(?:record|class)\s+ConnectionStatus", content), (
+        "ConnectionStatus must be declared as a public record or class"
     )
 
 
@@ -180,7 +180,7 @@ def test_connection_status_has_state_and_description() -> None:
 
 def test_connection_opened_event_is_class() -> None:
     content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionOpenedEvent.cs")
-    assert re.search(r"public\s+class\s+ConnectionOpenedEvent", content), (
+    assert re.search(r"public\s+(?:partial\s+)?class\s+ConnectionOpenedEvent", content), (
         "ConnectionOpenedEvent must be declared as a public class"
     )
 

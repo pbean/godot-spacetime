@@ -2,6 +2,7 @@
 using Godot;
 using GodotSpacetime.Editor.Codegen;
 using GodotSpacetime.Editor.Compatibility;
+using GodotSpacetime.Editor.Status;
 
 namespace GodotSpacetime;
 
@@ -10,8 +11,10 @@ public partial class GodotSpacetimePlugin : EditorPlugin
 {
     private const string CodegenPanelScenePath = "res://addons/godot_spacetime/src/Editor/Codegen/CodegenValidationPanel.tscn";
     private const string CompatPanelScenePath = "res://addons/godot_spacetime/src/Editor/Compatibility/CompatibilityPanel.tscn";
+    private const string StatusPanelScenePath = "res://addons/godot_spacetime/src/Editor/Status/ConnectionAuthStatusPanel.tscn";
     private CodegenValidationPanel? _codegenPanel;
     private CompatibilityPanel? _compatPanel;
+    private ConnectionAuthStatusPanel? _statusPanel;
 
     public override void _EnterTree()
     {
@@ -59,11 +62,42 @@ public partial class GodotSpacetimePlugin : EditorPlugin
             GD.PushError($"Failed to load compatibility panel scene: {CompatPanelScenePath}");
         }
 
+        var statusScene = GD.Load<PackedScene>(StatusPanelScenePath);
+        if (statusScene != null)
+        {
+            var statusRoot = statusScene.Instantiate();
+            _statusPanel = statusRoot as ConnectionAuthStatusPanel;
+            if (_statusPanel == null)
+            {
+                statusRoot.QueueFree();
+                GD.PushError($"Status panel scene root must be {nameof(ConnectionAuthStatusPanel)}.");
+            }
+            else
+            {
+#pragma warning disable CS0618
+                AddControlToBottomPanel(_statusPanel, "Spacetime Status");
+#pragma warning restore CS0618
+            }
+        }
+        else
+        {
+            GD.PushError($"Failed to load status panel scene: {StatusPanelScenePath}");
+        }
+
         GD.Print("Godot Spacetime plugin enabled.");
     }
 
     public override void _ExitTree()
     {
+        if (_statusPanel != null)
+        {
+#pragma warning disable CS0618
+            RemoveControlFromBottomPanel(_statusPanel);
+#pragma warning restore CS0618
+            _statusPanel.QueueFree();
+            _statusPanel = null;
+        }
+
         if (_compatPanel != null)
         {
 #pragma warning disable CS0618

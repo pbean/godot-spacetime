@@ -1,4 +1,8 @@
+using System;
 using Godot;
+using GodotSpacetime.Connection;
+using GodotSpacetime.Runtime.Connection;
+using GodotSpacetime.Runtime.Events;
 
 namespace GodotSpacetime;
 
@@ -17,10 +21,99 @@ namespace GodotSpacetime;
 ///   <item>Apply subscriptions — receive SubscriptionAppliedEvent when cache is ready</item>
 ///   <item>Read cache via generated bindings — invoke reducers as needed</item>
 /// </list>
-///
-/// This stub establishes the type name and autoload contract.
-/// Runtime behavior is added in Stories 1.6+.
 /// </summary>
 public partial class SpacetimeClient : Node
 {
+    private readonly SpacetimeConnectionService _connectionService = new();
+    private ConnectionStatus _currentStatus = new(ConnectionState.Disconnected, "DISCONNECTED — not connected to SpacetimeDB");
+    private GodotSignalAdapter? _signalAdapter;
+
+    [Signal]
+    public delegate void ConnectionStateChangedEventHandler(ConnectionStatus status);
+
+    [Signal]
+    public delegate void ConnectionOpenedEventHandler(ConnectionOpenedEvent e);
+
+    [Export]
+    public SpacetimeSettings? Settings { get; set; }
+
+    public ConnectionStatus CurrentStatus => _currentStatus;
+
+    public override void _EnterTree()
+    {
+        _signalAdapter ??= new GodotSignalAdapter(this);
+        _connectionService.OnStateChanged += HandleStateChanged;
+        _connectionService.OnConnectionOpened += HandleConnectionOpened;
+    }
+
+    public override void _ExitTree()
+    {
+        _connectionService.OnStateChanged -= HandleStateChanged;
+        _connectionService.OnConnectionOpened -= HandleConnectionOpened;
+    }
+
+    public void Connect()
+    {
+        if (Settings == null)
+        {
+            PublishValidationFailure("Assign a SpacetimeSettings resource before connecting.");
+            return;
+        }
+
+        try
+        {
+            _connectionService.Connect(Settings);
+        }
+        catch (ArgumentException ex)
+        {
+            PublishValidationFailure(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            PublishValidationFailure(ex.Message);
+        }
+    }
+
+    public void Disconnect()
+    {
+        _connectionService.Disconnect();
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_currentStatus.State == ConnectionState.Disconnected)
+            return;
+
+        _connectionService.FrameTick();
+    }
+
+    private void PublishValidationFailure(string message)
+    {
+        HandleStateChanged(new ConnectionStatus(ConnectionState.Disconnected, message));
+        GD.PushError(message);
+    }
+
+    private void HandleStateChanged(ConnectionStatus status)
+    {
+        _currentStatus = status;
+
+        if (_signalAdapter == null)
+        {
+            EmitSignal(SignalName.ConnectionStateChanged, status);
+            return;
+        }
+
+        _signalAdapter.Dispatch(() => EmitSignal(SignalName.ConnectionStateChanged, status));
+    }
+
+    private void HandleConnectionOpened(ConnectionOpenedEvent openedEvent)
+    {
+        if (_signalAdapter == null)
+        {
+            EmitSignal(SignalName.ConnectionOpened, openedEvent);
+            return;
+        }
+
+        _signalAdapter.Dispatch(() => EmitSignal(SignalName.ConnectionOpened, openedEvent));
+    }
 }
