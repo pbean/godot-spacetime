@@ -149,6 +149,43 @@ def extract_cli_version(generated_client: Path) -> str | None:
     return None
 
 
+def file_timestamp(root: Path, path: Path) -> int:
+    """Return a stable timestamp for freshness comparison.
+
+    Prefers the file's last git commit time so the check is stable across
+    fresh CI checkouts (where filesystem mtimes reflect checkout order, not
+    real edit history). Falls back to filesystem mtime for files that are
+    untracked or locally modified.
+    """
+    rel = path.relative_to(root).as_posix()
+    try:
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", rel],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return path.stat().st_mtime_ns
+
+    if status.returncode == 0 and not status.stdout.strip():
+        try:
+            commit = subprocess.run(
+                ["git", "log", "-1", "--format=%ct", "--", rel],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return path.stat().st_mtime_ns
+        if commit.returncode == 0 and commit.stdout.strip():
+            return int(commit.stdout.strip()) * 1_000_000_000
+
+    return path.stat().st_mtime_ns
+
+
 def relevant_module_files(module_root: Path) -> list[Path]:
     files: list[Path] = []
 
@@ -199,13 +236,14 @@ def collect_binding_compatibility_errors(root: Path, versions: dict) -> list[str
         return errors
 
     try:
-        newest_source = max(module_files, key=lambda path: path.stat().st_mtime_ns)
-        generated_mtime = generated_client.stat().st_mtime_ns
+        source_times = [(path, file_timestamp(root, path)) for path in module_files]
+        newest_source, newest_source_time = max(source_times, key=lambda item: item[1])
+        generated_time = file_timestamp(root, generated_client)
     except OSError as exc:
         errors.append(f"{RELATIVE_GENERATED_CLIENT.as_posix()}: failed to compare source freshness ({exc})")
         return errors
 
-    if newest_source.stat().st_mtime_ns > generated_mtime:
+    if newest_source_time > generated_time:
         errors.append(
             f"{RELATIVE_GENERATED_CLIENT.as_posix()}: generated bindings are stale because "
             f"{newest_source.relative_to(root).as_posix()} is newer; run {RECOVERY_COMMAND}"
