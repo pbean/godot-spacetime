@@ -1,0 +1,56 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (leave blank to read from plugin.cfg)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate release candidate
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            python3 scripts/packaging/validate-release-candidate.py --version "${{ inputs.version }}"
+          else
+            python3 scripts/packaging/validate-release-candidate.py
+          fi
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            python3 scripts/packaging/publish-release.py --version "${{ inputs.version }}"
+          else
+            python3 scripts/packaging/publish-release.py
+          fi
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: release-candidates/validation-report-*.json
+          if-no-files-found: ignore
