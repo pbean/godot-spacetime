@@ -112,7 +112,9 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
         var (label, action) = authState switch
         {
             ConnectionAuthState.TokenRestored =>
-                ("TOKEN RESTORED", "Session authenticated with provided credentials."),
+                ("TOKEN RESTORED", "Session authenticated with restored or provided credentials."),
+            ConnectionAuthState.TokenExpired =>
+                ("TOKEN EXPIRED", "Stored token was rejected. Call Settings.TokenStore?.ClearTokenAsync() to remove the invalid token, then reconnect."),
             ConnectionAuthState.AuthFailed =>
                 ("AUTH FAILED", "Credentials were rejected. Verify your token or call Settings.TokenStore?.ClearTokenAsync() to reset."),
             ConnectionAuthState.AuthRequired =>

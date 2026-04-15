@@ -28,8 +28,9 @@ accompanies `ConnectionStatus` and identifies the authentication phase:
 |------------|---------|
 | `None` | No authentication context. Anonymous session or pre-connection state. |
 | `AuthRequired` | Credentials are expected but not provided (panel guidance). |
-| `TokenRestored` | Provided credentials were accepted; session is authenticated. |
+| `TokenRestored` | Restored or provided credentials were accepted; session is authenticated. |
 | `AuthFailed` | Provided credentials were rejected; auth-specific failure. |
+| `TokenExpired` | A previously stored token was rejected; clear the token store and reconnect. |
 
 ### Auth / Identity — `ITokenStore`
 
@@ -49,7 +50,7 @@ This is opt-in. If no `ITokenStore` is provided, tokens are not persisted across
 
 Assign via code to `Settings.TokenStore` before calling `Connect()`. The built-in implementations are in `Internal/`; they are not exported to the Godot inspector.
 
-**Token Clearing:** To clear persisted auth state, call `Settings.TokenStore.ClearTokenAsync()`. Token values are never logged raw; the `TokenRedactor` utility in `Internal/Auth/` produces safe diagnostic representations.
+**Token Clearing:** To clear persisted auth state, call `Settings.TokenStore?.ClearTokenAsync()` when a token store is configured. Token values are never logged raw; the `TokenRedactor` utility in `Internal/Auth/` produces safe diagnostic representations.
 
 **Session Identity:** When a connection opens, the server assigns or restores an identity.
 The identity string is included in [`ConnectionOpenedEvent.Identity`](../addons/godot_spacetime/src/Public/Connection/ConnectionOpenedEvent.cs).
@@ -64,6 +65,22 @@ the token store resets future restoration attempts. A
 successful restored session emits `ConnectionAuthState.TokenRestored` and surfaces the server identity via
 `ConnectionOpenedEvent.Identity`. If no token is stored or the store throws, the connection falls back
 cleanly to anonymous without leaving corrupted session state.
+
+**Failure Recovery:** Auth failures surface as `ConnectionStatus` events, not exceptions — gameplay code
+observes them through `SpacetimeClient.ConnectionStateChanged`. The `ConnectionAuthState` value on the
+resulting status identifies the failure category and the recommended recovery path:
+
+- `TokenExpired` — A stored token was rejected. Call `Settings.TokenStore?.ClearTokenAsync()` to remove
+  the invalid token; the next `Connect()` call will fall back to anonymous (or use fresh credentials if
+  `Settings.Credentials` is set). This state is only emitted when the session was opened via token
+  restoration.
+- `AuthFailed` — Explicit credentials were rejected. Update `Settings.Credentials` with a valid token
+  before reconnecting.
+
+Recoverable auth failures are distinct from unrecoverable programming faults (e.g., missing `Host` or
+`Database`) which throw `ArgumentException` synchronously from `Connect()` before any connection attempt.
+The separation ensures that gameplay error-handling code only needs to react to the `ConnectionStatus`
+event stream for expected runtime failures, not catch exceptions from the SDK connection path.
 
 ### Subscriptions — `SubscriptionHandle` and `SubscriptionAppliedEvent`
 
