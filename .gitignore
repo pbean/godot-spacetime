@@ -2,6 +2,8 @@
 .codex/
 .agents/
 .claude/
+_bmad/
+_bmad-output/
 
 # Environment files
 .env
