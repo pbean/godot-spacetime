@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-12T00:51:47-0700
-last_updated: 2026-04-15T01:14:44-0700
+last_updated: 2026-04-15T01:44:58-0700
 project: godot-spacetime
 project_key: NOKEY
 tracking_system: file-system
@@ -84,7 +84,7 @@ development_status:
   epic-6: in-progress
   6-1-publish-the-canonical-compatibility-matrix-and-support-policy: done
   6-2-package-reproducible-versioned-release-candidates: done
-  6-3-validate-release-candidates-against-the-supported-workflow: backlog
+  6-3-validate-release-candidates-against-the-supported-workflow: done
   6-4-publish-approved-sdk-releases-for-external-use: backlog
   6-5-communicate-release-changes-and-maintain-support-continuity: backlog
   epic-6-retrospective: optional
