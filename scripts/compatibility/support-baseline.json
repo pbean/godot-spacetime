@@ -119,32 +119,37 @@
     {
       "file": "docs/compatibility-matrix.md",
       "label": "Godot editor/runtime target",
-      "expected_line": "| Godot editor/runtime target | `4.6.2` | Product baseline for the initial shipping runtime. |",
+      "expected_line": "| Godot editor/runtime target | `4.6.2` | Supported |",
       "version_key": "godot_product"
     },
     {
       "file": "docs/compatibility-matrix.md",
       "label": "Godot .NET build SDK",
-      "expected_line": "| Godot .NET build SDK | `Godot.NET.Sdk` `4.6.1` | Current stable official NuGet package used by the scaffold. |",
+      "expected_line": "| Godot .NET build SDK | `Godot.NET.Sdk` `4.6.1` | Supported |",
       "version_key": "godot_dotnet_sdk"
     },
     {
       "file": "docs/compatibility-matrix.md",
       "label": ".NET SDK",
-      "expected_line": "| `.NET` SDK | `8.0+` | Use a local `.NET 8` SDK for restore and build. |",
+      "expected_line": "| `.NET` SDK | `8.0+` | Supported |",
       "version_key": "dotnet_sdk"
     },
     {
       "file": "docs/compatibility-matrix.md",
       "label": "SpacetimeDB server and CLI",
-      "expected_line": "| SpacetimeDB server and CLI | `2.1+` | Declared product baseline for later code-generation and runtime stories. |",
+      "expected_line": "| SpacetimeDB server and CLI | `2.1+` | Supported |",
       "version_key": "spacetimedb"
     },
     {
       "file": "docs/compatibility-matrix.md",
       "label": "SpacetimeDB.ClientSDK",
-      "expected_line": "| `SpacetimeDB.ClientSDK` | `2.1.0` | Added as `PackageReference` in Story 1.4; the `.NET` adapter in `Internal/Platform/DotNet/` is the only permitted reference location. |",
+      "expected_line": "| `SpacetimeDB.ClientSDK` | `2.1.0` | Supported |",
       "version_key": "spacetimedb_client_sdk"
+    },
+    {
+      "file": "docs/compatibility-matrix.md",
+      "label": "Godot C# web export",
+      "expected_line": "| Godot C# web export | N/A | Out-of-Scope |"
     },
     {
       "file": "docs/compatibility-matrix.md",

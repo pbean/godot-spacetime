@@ -9,9 +9,6 @@ public enum ConnectionAuthState
     /// <summary>No authentication context. Anonymous connection, or a state with no auth flow in progress.</summary>
     None,
 
-    /// <summary>Credentials are expected but not configured. Informational — used by status surfaces to guide configuration.</summary>
-    AuthRequired,
-
     /// <summary>Provided credentials were accepted by the server. The session is authenticated.</summary>
     TokenRestored,
 

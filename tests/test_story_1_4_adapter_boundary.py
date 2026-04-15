@@ -201,17 +201,16 @@ def test_adapter_has_idbconnection_stub_field(rel_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 _COMPAT_ROW = (
-    "| `SpacetimeDB.ClientSDK` | `2.1.0` | Added as `PackageReference` in Story 1.4; "
-    "the `.NET` adapter in `Internal/Platform/DotNet/` is the only permitted reference location. |"
+    "| `SpacetimeDB.ClientSDK` | `2.1.0` | Supported |"
 )
 
 
 def test_compatibility_matrix_spacetimedb_row_reflects_story_1_4() -> None:
     content = _read("docs/compatibility-matrix.md")
     assert _COMPAT_ROW in content, (
-        "docs/compatibility-matrix.md SpacetimeDB.ClientSDK row must reflect the Story 1.4 "
-        "PackageReference addition and name Internal/Platform/DotNet/ as the only permitted "
-        "reference location. Check that Task 5 was applied and the row text matches exactly."
+        "docs/compatibility-matrix.md must keep the canonical SpacetimeDB.ClientSDK 2.1.0 row "
+        "after the Story 6.1 support-policy rewrite. Story 1.4's adapter-boundary guidance is "
+        "preserved elsewhere; this table row must now remain in the canonical Supported format."
     )
 
 
@@ -232,7 +231,7 @@ def test_support_baseline_spacetimedb_line_check_is_story_1_4() -> None:
     )
     assert entry.get("expected_line") == _COMPAT_ROW, (
         "support-baseline.json SpacetimeDB.ClientSDK line_check 'expected_line' must match "
-        "the Story 1.4 compatibility-matrix.md row exactly. "
+        "the canonical compatibility-matrix.md row exactly after Story 6.1. "
         f"Expected: {_COMPAT_ROW!r}. "
         f"Found: {entry.get('expected_line')!r}"
     )

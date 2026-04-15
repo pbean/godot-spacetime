@@ -222,13 +222,6 @@ def test_connection_auth_state_still_has_none() -> None:
     )
 
 
-def test_connection_auth_state_still_has_auth_required() -> None:
-    content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs")
-    assert "AuthRequired" in content, (
-        "ConnectionAuthState.cs must still contain 'AuthRequired' value (regression guard)"
-    )
-
-
 def test_connection_auth_state_still_has_token_restored() -> None:
     content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs")
     assert "TokenRestored" in content, (
@@ -348,14 +341,14 @@ def test_connection_service_no_spacetimedb_reference() -> None:
 # ---------------------------------------------------------------------------
 
 def test_connection_auth_state_token_expired_after_auth_failed_in_enum() -> None:
-    """TokenExpired must follow AuthFailed — spec enum order: None, AuthRequired, TokenRestored, AuthFailed, TokenExpired."""
+    """TokenExpired must follow AuthFailed — spec enum order: None, TokenRestored, AuthFailed, TokenExpired."""
     content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs")
     pos_auth_failed = content.find("AuthFailed")
     pos_token_expired = content.find("TokenExpired")
     assert pos_auth_failed != -1 and pos_token_expired != -1
     assert pos_auth_failed < pos_token_expired, (
         "TokenExpired must be declared after AuthFailed in the enum "
-        "(required order: None, AuthRequired, TokenRestored, AuthFailed, TokenExpired) (AC 2)"
+        "(required order: None, TokenRestored, AuthFailed, TokenExpired) (AC 2)"
     )
 
 

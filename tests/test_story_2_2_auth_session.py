@@ -60,13 +60,6 @@ def test_connection_auth_state_has_none_value() -> None:
     )
 
 
-def test_connection_auth_state_has_auth_required_value() -> None:
-    content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs")
-    assert "AuthRequired" in content, (
-        "ConnectionAuthState.cs must contain an 'AuthRequired' value"
-    )
-
-
 def test_connection_auth_state_has_token_restored_value() -> None:
     content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs")
     assert "TokenRestored" in content, (
