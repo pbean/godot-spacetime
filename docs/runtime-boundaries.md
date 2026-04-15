@@ -37,7 +37,6 @@ accompanies `ConnectionStatus` and identifies the authentication phase:
 | Auth State | Meaning |
 |------------|---------|
 | `None` | No authentication context. Anonymous session or pre-connection state. |
-| `AuthRequired` | Credentials are expected but not provided (panel guidance). |
 | `TokenRestored` | Restored or provided credentials were accepted; session is authenticated. |
 | `AuthFailed` | Provided credentials were rejected; auth-specific failure. |
 | `TokenExpired` | A previously stored token was rejected; clear the token store and reconnect. |
@@ -57,6 +56,8 @@ This is opt-in. If no `ITokenStore` is provided, tokens are not persisted across
 **Built-in implementations** (from `Internal/Auth/`):
 - `MemoryTokenStore` — retains the token in memory for the current process lifetime only. Tokens survive reconnects within a session but are cleared when the process exits.
 - `ProjectSettingsTokenStore` — persists the token to Godot `ProjectSettings` under the key `spacetime/auth/token`. Suitable for development environments; review your distribution's security model before enabling in production.
+
+`ProjectSettingsTokenStore` is `internal sealed` — external developers must implement `GodotSpacetime.Auth.ITokenStore` directly; it cannot be instantiated from outside the SDK.
 
 Assign via code to `Settings.TokenStore` before calling `Connect()`. The built-in implementations are in `Internal/`; they are not exported to the Godot inspector.
 
