@@ -228,15 +228,15 @@ def test_itoken_store_has_no_godot_import() -> None:
 
 def test_subscription_handle_is_class() -> None:
     content = _read("addons/godot_spacetime/src/Public/Subscriptions/SubscriptionHandle.cs")
-    assert re.search(r"public\s+class\s+SubscriptionHandle", content), (
-        "SubscriptionHandle must be declared as a public class"
+    assert re.search(r"public\s+(?:partial\s+)?class\s+SubscriptionHandle", content), (
+        "SubscriptionHandle must be declared as a public class (partial allowed for Godot RefCounted)"
     )
 
 
 def test_subscription_applied_event_is_class() -> None:
     content = _read("addons/godot_spacetime/src/Public/Subscriptions/SubscriptionAppliedEvent.cs")
-    assert re.search(r"public\s+class\s+SubscriptionAppliedEvent", content), (
-        "SubscriptionAppliedEvent must be declared as a public class"
+    assert re.search(r"public\s+(?:partial\s+)?class\s+SubscriptionAppliedEvent", content), (
+        "SubscriptionAppliedEvent must be declared as a public class (partial allowed for Godot RefCounted)"
     )
 
 

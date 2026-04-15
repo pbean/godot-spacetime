@@ -188,10 +188,11 @@ def test_adapter_has_using_spacetimedb_directive(rel_path: str) -> None:
 def test_adapter_has_idbconnection_stub_field(rel_path: str) -> None:
     content = _read(rel_path)
     code_text = _code_lines(content)
-    assert re.search(r"IDbConnection\?", code_text), (
-        f"{rel_path}: adapter must declare a private 'IDbConnection?' stub field "
+    assert re.search(r"IDbConnection", code_text), (
+        f"{rel_path}: adapter must reference IDbConnection "
         "to prove it references SDK types. IDbConnection is the connection interface "
-        "in SpacetimeDB.ClientSDK 2.1.0 (no concrete DbConnection class exists)."
+        "in SpacetimeDB.ClientSDK 2.1.0 (no concrete DbConnection class exists). "
+        "Story 3.1 replaces the stub field with method parameters."
     )
 
 

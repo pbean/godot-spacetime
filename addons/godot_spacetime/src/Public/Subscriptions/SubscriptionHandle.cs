@@ -1,3 +1,6 @@
+using System;
+using Godot;
+
 namespace GodotSpacetime.Subscriptions;
 
 /// <summary>
@@ -5,6 +8,12 @@ namespace GodotSpacetime.Subscriptions;
 /// Returned by SpacetimeClient when a subscription is applied.
 /// Use this handle to manage the subscription's lifecycle.
 /// </summary>
-public class SubscriptionHandle
+public partial class SubscriptionHandle : RefCounted
 {
+    public Guid HandleId { get; }
+
+    internal SubscriptionHandle()
+    {
+        HandleId = Guid.NewGuid();
+    }
 }

@@ -3,6 +3,7 @@ using Godot;
 using GodotSpacetime.Connection;
 using GodotSpacetime.Runtime.Connection;
 using GodotSpacetime.Runtime.Events;
+using GodotSpacetime.Subscriptions;
 
 namespace GodotSpacetime;
 
@@ -34,6 +35,9 @@ public partial class SpacetimeClient : Node
     [Signal]
     public delegate void ConnectionOpenedEventHandler(ConnectionOpenedEvent e);
 
+    [Signal]
+    public delegate void SubscriptionAppliedEventHandler(SubscriptionAppliedEvent e);
+
     [Export]
     public SpacetimeSettings? Settings { get; set; }
 
@@ -44,12 +48,14 @@ public partial class SpacetimeClient : Node
         _signalAdapter ??= new GodotSignalAdapter(this);
         _connectionService.OnStateChanged += HandleStateChanged;
         _connectionService.OnConnectionOpened += HandleConnectionOpened;
+        _connectionService.OnSubscriptionApplied += HandleSubscriptionApplied;
     }
 
     public override void _ExitTree()
     {
         _connectionService.OnStateChanged -= HandleStateChanged;
         _connectionService.OnConnectionOpened -= HandleConnectionOpened;
+        _connectionService.OnSubscriptionApplied -= HandleSubscriptionApplied;
     }
 
     public void Connect()
@@ -77,6 +83,11 @@ public partial class SpacetimeClient : Node
     public void Disconnect()
     {
         _connectionService.Disconnect();
+    }
+
+    public SubscriptionHandle Subscribe(string[] querySqls)
+    {
+        return _connectionService.Subscribe(querySqls);
     }
 
     public override void _Process(double delta)
@@ -115,5 +126,16 @@ public partial class SpacetimeClient : Node
         }
 
         _signalAdapter.Dispatch(() => EmitSignal(SignalName.ConnectionOpened, openedEvent));
+    }
+
+    private void HandleSubscriptionApplied(SubscriptionAppliedEvent appliedEvent)
+    {
+        if (_signalAdapter == null)
+        {
+            EmitSignal(SignalName.SubscriptionApplied, appliedEvent);
+            return;
+        }
+
+        _signalAdapter.Dispatch(() => EmitSignal(SignalName.SubscriptionApplied, appliedEvent));
     }
 }
