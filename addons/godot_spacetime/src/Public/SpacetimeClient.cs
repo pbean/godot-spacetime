@@ -97,6 +97,46 @@ public partial class SpacetimeClient : Node
     }
 
     /// <summary>
+    /// Closes a previously applied subscription scope.
+    /// Safe to call when not connected — the handle is marked Closed regardless.
+    /// Idempotent: calling with an already-Closed handle is a no-op.
+    /// </summary>
+    public void Unsubscribe(SubscriptionHandle handle)
+    {
+        try
+        {
+            _connectionService.Unsubscribe(handle);
+        }
+        catch (ArgumentException ex)
+        {
+            PublishValidationFailure(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Replaces an active subscription with a new query set using overlap-first semantics.
+    /// The old subscription remains authoritative until the new subscription is confirmed applied.
+    /// Returns the new handle; the SubscriptionApplied signal fires when the replacement is live.
+    /// </summary>
+    public SubscriptionHandle? ReplaceSubscription(SubscriptionHandle oldHandle, string[] newQueries)
+    {
+        try
+        {
+            return _connectionService.ReplaceSubscription(oldHandle, newQueries);
+        }
+        catch (ArgumentException ex)
+        {
+            PublishValidationFailure(ex.Message);
+            return null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            PublishValidationFailure(ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Returns the rows currently cached for the specified table.
     /// Call after the <c>SubscriptionApplied</c> signal fires, then cast each row to the generated table type.
     /// </summary>

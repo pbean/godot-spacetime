@@ -29,8 +29,10 @@ internal sealed class SpacetimeSdkSubscriptionAdapter
     /// <summary>
     /// Applies a subscription to the given connection for the specified SQL queries.
     /// Wires the SDK subscription applied and error callbacks to <paramref name="sink"/>.
+    /// Returns the SDK subscription object (if the SDK returns one), or null.
+    /// The caller should store this object and pass it to <see cref="TryUnsubscribe"/> to close the subscription.
     /// </summary>
-    internal void Subscribe(
+    internal object? Subscribe(
         IDbConnection connection,
         string[] querySqls,
         ISubscriptionEventSink sink,
@@ -62,7 +64,48 @@ internal sealed class SpacetimeSdkSubscriptionAdapter
             ?? throw new InvalidOperationException(
                 "Generated SubscriptionBuilder must expose a Subscribe(string[]) method.");
 
-        subscribeMethod.Invoke(builder, new object[] { querySqls });
+        // Capture the return value — the SDK may return a lifecycle object that supports Unsubscribe/Close.
+        // If the SDK's Subscribe returns void, Invoke() returns null — TryUnsubscribe handles null gracefully.
+        return subscribeMethod.Invoke(builder, new object[] { querySqls });
+    }
+
+    /// <summary>
+    /// Attempts to close a previously-returned SDK subscription object by invoking its
+    /// <c>Unsubscribe()</c> or <c>Close()</c> method via reflection.
+    /// </summary>
+    /// <param name="sdkSubscription">
+    /// The object returned by <see cref="Subscribe"/>. May be null if the SDK does not return
+    /// a lifecycle object, in which case this method returns <c>false</c> (graceful degradation).
+    /// </param>
+    /// <returns>
+    /// <c>true</c> if an <c>Unsubscribe</c> or <c>Close</c> method was found and invoked;
+    /// <c>false</c> otherwise (null input, no matching method, or the invocation fails).
+    /// </returns>
+    internal bool TryUnsubscribe(object? sdkSubscription)
+    {
+        if (sdkSubscription == null)
+            return false;
+
+        var type = sdkSubscription.GetType();
+
+        // Try Unsubscribe() first, then Close()
+        var method = type.GetMethod("Unsubscribe", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null)
+            ?? type.GetMethod("Close", BindingFlags.Public | BindingFlags.Instance, null, Type.EmptyTypes, null);
+
+        if (method == null)
+            return false;
+
+        try
+        {
+            method.Invoke(sdkSubscription, null);
+            return true;
+        }
+        catch (Exception)
+        {
+            // Story 3.5 will add an explicit failure surface; for now unsubscribe is best-effort so
+            // the caller can still mark the handle terminal and clean up local bookkeeping.
+            return false;
+        }
     }
 
     private static object InvokeWithDelegate(object builder, string methodName, Delegate callback)
