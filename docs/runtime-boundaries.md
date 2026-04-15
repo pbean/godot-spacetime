@@ -232,7 +232,26 @@ SpacetimeClient.InvokeReducer(object reducerArgs)
 
 **Isolation zone:** `SpacetimeDB.*` reducer types are referenced **only** inside `SpacetimeSdkReducerAdapter` (in `Internal/Platform/DotNet/`). `ReducerInvoker`, `SpacetimeConnectionService`, and `SpacetimeClient` do not import `SpacetimeDB.*`.
 
-**Guard:** `InvokeReducer()` requires `ConnectionState.Connected`. If called in any other state, or with a non-`IReducerArgs` object, `ConnectionStateChanged` fires with a validation error description and the call is discarded.
+**Guard:** `InvokeReducer()` requires `ConnectionState.Connected`. Calling it in any other connection state throws `InvalidOperationException`; calling it with a `null` argument throws `ArgumentNullException`; calling it with a non-`IReducerArgs` object (wrong argument type) throws `ArgumentException`. These exceptions are caught at `SpacetimeClient.InvokeReducer()` — they do **not** propagate to game code as thrown exceptions. Instead, `PublishValidationFailure` fires `ConnectionStateChanged(Disconnected, message)` and calls `GD.PushError(message)`, making the fault visible in the Godot error console (Editor Output panel / in-game error overlay). These are **programming faults** (code defects), not gameplay-handleable conditions — fix the calling code rather than handling them in gameplay error handlers.
+
+#### Reducer Error Model: Programming Faults vs Recoverable Failures
+
+Reducer call outcomes fall into two distinct categories that must not be conflated:
+
+**Recoverable runtime failures** arrive asynchronously after the server responds. They always fire the `ReducerCallFailed` signal with a structured `ReducerCallError`. Branch on `ReducerCallError.FailureCategory` to determine the appropriate gameplay response and use `RecoveryGuidance` for player-facing feedback. These are expected gameplay conditions.
+
+**Programming faults** (SDK misuse) are caught synchronously at `SpacetimeClient.InvokeReducer()` before any server contact occurs. They surface via `GD.PushError` + `ConnectionStateChanged(Disconnected)` — the `ReducerCallFailed` signal does **not** fire for programming faults. This validation-failure path is diagnostic surfacing, not a session-close notification: it does **not** emit `ConnectionClosed`. Fix the calling code; these are not conditions to handle in `ReducerCallFailed` signal handlers.
+
+| Condition | How it surfaces | What gameplay code does |
+|-----------|----------------|------------------------|
+| Server rejects reducer (logic/constraint) | `ReducerCallFailed` → `ReducerCallError.FailureCategory = Failed` | Branch on `FailureCategory`; show player error |
+| Server out of energy | `ReducerCallFailed` → `ReducerCallError.FailureCategory = OutOfEnergy` | Back off, retry after delay |
+| Status unclear (SDK internal) | `ReducerCallFailed` → `ReducerCallError.FailureCategory = Unknown` | Handle defensively, do not auto-retry |
+| Called while not Connected | `ConnectionStateChanged(Disconnected)` + `GD.PushError` | Fix the calling code; not a gameplay condition |
+| Called with null args | `ConnectionStateChanged(Disconnected)` + `GD.PushError` | Fix the calling code; not a gameplay condition |
+| Called with non-`IReducerArgs` type | `ConnectionStateChanged(Disconnected)` + `GD.PushError` | Fix the calling code; not a gameplay condition |
+
+**Key rule:** Never check `ReducerCallError.FailureCategory` when the fault is a programming error — the `ReducerCallFailed` signal will not fire for programming faults; only `ConnectionStateChanged` + `GD.PushError` fire.
 
 **Example usage:**
 ```csharp

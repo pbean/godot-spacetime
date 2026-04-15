@@ -193,8 +193,10 @@ public partial class SpacetimeClient : Node
     /// The invocation is routed through <c>ReducerInvoker</c> → <c>SpacetimeSdkReducerAdapter</c> →
     /// the runtime SDK call.
     /// Must be called after <c>ConnectionState.Connected</c> is reached.
-    /// Fires <c>ConnectionStateChanged</c> with a validation error if called in the wrong state
-    /// or with an invalid reducer argument object.
+    /// Programming faults such as wrong connection state, <c>null</c> args, or a non-<c>IReducerArgs</c>
+    /// object are caught and surfaced via <c>ConnectionStateChanged</c> plus <c>GD.PushError</c>.
+    /// These faults do not raise <c>ReducerCallFailed</c>; reserve reducer result handlers for
+    /// server-acknowledged outcomes.
     /// </summary>
     public void InvokeReducer(object reducerArgs)
     {
