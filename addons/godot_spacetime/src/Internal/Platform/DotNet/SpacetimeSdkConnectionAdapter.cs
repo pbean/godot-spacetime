@@ -57,8 +57,12 @@ internal sealed class SpacetimeSdkConnectionAdapter
         Close();
 
         // The generated bindings expose the concrete DbConnection type and its DbConnection.Builder() entrypoint.
+        // Builder() is inherited from DbConnectionBase<>, so FlattenHierarchy must be set on the reflection
+        // lookup — without it GetMethod ignores static members declared on the base class.
         var dbConnectionType = ResolveGeneratedDbConnectionType();
-        var builderMethod = dbConnectionType.GetMethod("Builder", BindingFlags.Public | BindingFlags.Static)
+        var builderMethod = dbConnectionType.GetMethod(
+                "Builder",
+                BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
             ?? throw new InvalidOperationException("Generated DbConnection type must expose a public Builder() method.");
         var builder = builderMethod.Invoke(null, null)
             ?? throw new InvalidOperationException("Generated DbConnection.Builder() returned null.");
@@ -215,7 +219,9 @@ internal sealed class SpacetimeSdkConnectionAdapter
         return candidate != null
             && candidate.Name == "DbConnection"
             && typeof(IDbConnection).IsAssignableFrom(candidate)
-            && candidate.GetMethod("Builder", BindingFlags.Public | BindingFlags.Static) != null;
+            && candidate.GetMethod(
+                "Builder",
+                BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy) != null;
     }
 
     private static IEnumerable<Type> SafeGetTypes(Assembly assembly)
