@@ -2,6 +2,8 @@
 
 This repository is the Godot project root for local development of `godot-spacetime`. The distributable addon lives under `addons/godot_spacetime/` and can be enabled directly from this workspace without copying folders into a second project.
 
+If you are validating a candidate addon artifact instead of the repository source, replace the workspace `addons/godot_spacetime/` directory with the artifact's `addons/godot_spacetime/` payload before opening the project. The bootstrap steps below stay the same.
+
 ## Supported Foundation Baseline
 
 - Godot editor target: `4.6.2`

@@ -361,3 +361,76 @@ docs path.
 
 - All 5 gap-fill tests plus 1 senior-review regression test applied and verified green
 - Story 4.4 ready for sign-off; AC 1 through AC 3 are guarded by 35 contract tests
+
+---
+
+# Test Automation Summary — Story 5.1 QA Gap Fill
+
+**Date:** 2026-04-14
+**Story:** 5.1 — Deliver a Sample Foundation for Install, Codegen, and First Connection
+**Baseline:** 1504 tests (end of Story 5.1 dev, 35 tests in `test_story_5_1_deliver_sample_foundation.py`)
+**After gap fill:** 1516 tests (+12)
+
+---
+
+## Gap Discovery Results
+
+All 35 pre-existing Story 5.1 tests passed. Gap analysis identified 12 untested behavioral
+contracts across four files plus two regression guard omissions. All gaps were auto-applied.
+
+---
+
+## Generated Tests
+
+### Gap Tests Added — `tests/test_story_5_1_deliver_sample_foundation.py`
+
+| Test | File | Gap Covered |
+|---|---|---|
+| `test_connection_smoke_tscn_has_connection_smoke_root_node` | `connection_smoke.tscn` | Root node name `ConnectionSmoke` — only existence was tested (AC: 1) |
+| `test_demo_main_cs_has_xml_doc_comment` | `DemoMain.cs` | `<summary>` XML doc comment — Task 2.5 deliverable untested |
+| `test_demo_main_cs_declares_partial_class` | `DemoMain.cs` | `partial class` declaration — Task 2.1 Godot C# requirement |
+| `test_demo_main_cs_hooks_connection_state_changed_event` | `DemoMain.cs` | Precise `ConnectionStateChanged` check (prior test only matched loose `Connection` substring) |
+| `test_demo_bootstrap_cs_calls_gd_print` | `DemoBootstrap.cs` | `GD.Print` call — only `_Ready` method presence was tested (Task 4.2) |
+| `test_demo_readme_references_validate_foundation_script` | `demo/README.md` | `validate-foundation.py` — Step 3 setup reference (AC: 2) |
+| `test_demo_readme_mentions_spacetime_codegen_panel` | `demo/README.md` | `"Spacetime Codegen"` panel name (AC: 1, 2) |
+| `test_demo_readme_mentions_spacetime_status_panel` | `demo/README.md` | `"Spacetime Status"` panel name (AC: 1) |
+| `test_demo_readme_has_ok_bindings_present_status` | `demo/README.md` | `OK — bindings present` success state (AC: 1, 2) |
+| `test_demo_readme_shows_demo_connection_state_output` | `demo/README.md` | `[Demo] Connection state:` expected output (AC: 1) |
+| `test_docs_connection_md_still_exists` | `docs/connection.md` | Regression guard — doc referenced in See Also section |
+| `test_docs_compatibility_matrix_md_still_exists` | `docs/compatibility-matrix.md` | Regression guard — doc referenced in See Also section |
+
+---
+
+## Coverage
+
+| Area | Before (original) | After (gap fill) |
+|---|---|---|
+| Existence tests | 5 | 5 |
+| `demo/README.md` content | 10 | 15 |
+| `demo/DemoMain.cs` content | 6 | 9 |
+| `demo/DemoMain.tscn` content | 2 | 2 |
+| `demo/autoload/DemoBootstrap.cs` content | 3 | 4 |
+| `demo/scenes/connection_smoke.tscn` content | 0 | 1 |
+| Regression guards | 9 | 11 |
+| **Total** | **35** | **47** |
+
+## Test Count
+
+| Milestone | Count |
+|---|---|
+| End of Story 4.4 gap fill | 1469 |
+| Story 5.1 dev baseline | 1504 |
+| After Story 5.1 QA gap fill | **1516** |
+
+## Test Run Result
+
+```
+47 passed in 0.03s   (test_story_5_1_deliver_sample_foundation.py)
+1516 passed in 0.44s (full pytest suite)
+```
+
+## Next Steps
+
+- All 12 gaps applied and verified green
+- Story 5.1 ready for sign-off; AC 1 through AC 3 are guarded by 47 contract tests
+- Stories 5.2 (auth) and 5.3 (subscriptions) will extend `DemoMain.cs` and `DemoBootstrap.cs`; add regression guards for those files accordingly

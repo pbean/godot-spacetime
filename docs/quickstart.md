@@ -2,6 +2,8 @@
 
 This guide walks through first-time setup and validation for `godot-spacetime` — from plugin install through a first successful connection.
 
+If you are validating a candidate addon artifact instead of the repository source, replace the workspace `addons/godot_spacetime/` directory with the artifact's `addons/godot_spacetime/` payload before opening the project. The rest of this quickstart stays the same.
+
 ## Prerequisites
 
 - Godot editor: `4.6.2`

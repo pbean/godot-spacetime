@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-12T00:51:47-0700
-last_updated: 2026-04-14T23:05:00-0700
+last_updated: 2026-04-14T22:12:57-0700
 project: godot-spacetime
 project_key: NOKEY
 tracking_system: file-system
@@ -72,9 +72,9 @@ development_status:
   4-2-surface-reducer-results-and-runtime-status-to-gameplay-code: done
   4-3-bridge-runtime-callbacks-into-scene-safe-godot-events: done
   4-4-distinguish-recoverable-runtime-failures-from-programming-faults: done
-  epic-4-retrospective: optional
-  epic-5: backlog
-  5-1-deliver-a-sample-foundation-for-install-codegen-and-first-connection: backlog
+  epic-4-retrospective: done
+  epic-5: in-progress
+  5-1-deliver-a-sample-foundation-for-install-codegen-and-first-connection: done
   5-2-extend-the-sample-through-auth-session-resume-and-live-subscription-flow: backlog
   5-3-demonstrate-reducer-interaction-and-troubleshooting-comparison-paths: backlog
   5-4-publish-core-installation-and-runtime-documentation: backlog
