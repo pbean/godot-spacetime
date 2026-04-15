@@ -21,6 +21,14 @@ The lifecycle of a connection is expressed as a [`ConnectionState`](../addons/go
 
 A [`ConnectionStatus`](../addons/godot_spacetime/src/Public/Connection/ConnectionStatus.cs) value pairs a `ConnectionState` with a human-readable description for logging and UI display. [`ConnectionOpenedEvent`](../addons/godot_spacetime/src/Public/Connection/ConnectionOpenedEvent.cs) represents the successful-open boundary rather than every lifecycle transition.
 
+[`ConnectionClosedEvent`](../addons/godot_spacetime/src/Public/Connection/ConnectionClosedEvent.cs) is the symmetric close-boundary event: it fires when a live session ends, after `ConnectionStateChanged` transitions to `Disconnected`. It does **not** fire for failed connect attempts (the session never reached `Connected`); `ConnectionStateChanged` covers those via the `Disconnected` state.
+
+| Property | Type | Meaning |
+|----------|------|---------|
+| `CloseReason` | `ConnectionCloseReason` | `Clean`: explicit disconnect or server-side clean close. `Error`: session lost after being established. |
+| `ErrorMessage` | `string` | Non-empty when `CloseReason` is `Error`; empty string for Clean closes. |
+| `ClosedAt` | `DateTimeOffset` | UTC timestamp at which the SDK recorded the close event. |
+
 A [`ConnectionAuthState`](../addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs) enum
 accompanies `ConnectionStatus` and identifies the authentication phase:
 
@@ -253,6 +261,27 @@ SpacetimeClient.ReducerCallSucceeded / ReducerCallFailed signals → gameplay co
 **Callback registration and correlation:** `RegisterCallbacks` is called in `IConnectionEventSink.OnConnected` immediately after `SetConnection`, when the connection is live. A `ConditionalWeakTable` idempotency guard on the `Reducers` object prevents double-registration if the same connection instance survives a `Degraded → Connected` recovery. The reducer adapter also tracks pending invocations by reducer name so each callback can surface the original `InvocationId` and `CalledAt` back to gameplay code.
 
 **`ReducerCallSucceeded` / `ReducerCallFailed` signals:** These are dispatched through `GodotSignalAdapter.Dispatch` (CallDeferred), ensuring they fire on the main thread. Gameplay code can safely read from the scene tree in signal handlers. Inspect `ReducerCallError.RecoveryGuidance` when presenting player-safe feedback for failed reducer calls.
+
+### Scene-Safe Signal Bridge
+
+Once `SpacetimeClient` has entered the scene tree, its signals are dispatched through [`GodotSignalAdapter`](../addons/godot_spacetime/src/Internal/Events/GodotSignalAdapter.cs) using `Callable.From(action).CallDeferred()`. This queues each signal emission on the Godot main thread's next idle frame, making it safe to access the scene tree from any signal handler without manual thread marshalling. The direct `EmitSignal` fallback only exists for the pre-`_EnterTree()` edge case where no adapter has been initialized yet.
+
+**Complete signal catalog:**
+
+| Signal | Payload | Category |
+|--------|---------|----------|
+| `ConnectionStateChanged` | `ConnectionStatus` | Connection lifecycle |
+| `ConnectionOpened` | `ConnectionOpenedEvent` | Connection lifecycle |
+| `ConnectionClosed` | `ConnectionClosedEvent` | Connection lifecycle |
+| `SubscriptionApplied` | `SubscriptionAppliedEvent` | Subscription lifecycle |
+| `SubscriptionFailed` | `SubscriptionFailedEvent` | Subscription lifecycle |
+| `RowChanged` | `RowChangedEvent` | Data |
+| `ReducerCallSucceeded` | `ReducerCallResult` | Reducer |
+| `ReducerCallFailed` | `ReducerCallError` | Reducer |
+
+**Transport advancement:** `SpacetimeClient._Process()` calls `FrameTick()` on every frame while the connection is not `Disconnected`. Scene code must **not** call `FrameTick()` directly. Calling `FrameTick()` from multiple owners causes duplicate callback delivery.
+
+**Reconnect policy:** `ReconnectPolicy` is owned internally by `SpacetimeConnectionService`. Scene code must **not** implement its own reconnect loop. Observe `ConnectionStateChanged` and `ConnectionClosed` to react to lifecycle changes.
 
 ### Generated Bindings
 

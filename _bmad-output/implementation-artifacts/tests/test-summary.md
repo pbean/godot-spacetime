@@ -152,3 +152,147 @@ dotnet build godot-spacetime.sln -c Debug  # succeeded
 
 - All gaps and senior-review fixes applied and verified green
 - Story 4.2 ready for sign-off; AC 1 through AC 3 are now guarded by the reviewed contract suite
+
+---
+
+# Test Automation Summary — Story 4.3 QA Gap Fill
+
+**Date:** 2026-04-14
+**Story:** 4.3 — Bridge Runtime Callbacks into Scene-Safe Godot Events
+**Baseline:** 1414 tests (end of Story 4.3 dev, 62 tests in `test_story_4_3_bridge_runtime_callbacks.py`)
+**After gap fill:** 1428 tests (+14)
+
+---
+
+## Gap Discovery Results
+
+All 62 pre-existing Story 4.3 tests passed. Gap analysis identified 14 untested behavioral contracts
+across five files. All gaps were auto-applied.
+
+---
+
+## Generated Tests
+
+### Gap Tests Added — `tests/test_story_4_3_bridge_runtime_callbacks.py`
+
+#### `ConnectionClosedEvent.cs` type-contract gaps (3)
+| Test | Gap Covered |
+|---|---|
+| `test_connection_closed_event_has_using_godot` | `using Godot;` present — required for `RefCounted` base class (AC 1, 2) |
+| `test_connection_closed_event_close_reason_typed_correctly` | `CloseReason` typed as `ConnectionCloseReason` not just name-string presence (AC 2) |
+| `test_connection_closed_event_closed_at_typed_correctly` | `ClosedAt` typed as `DateTimeOffset` not just name-string presence (AC 2) |
+
+#### `SpacetimeClient.cs` signal wiring gaps (2)
+| Test | Gap Covered |
+|---|---|
+| `test_spacetime_client_connection_closed_signal_has_signal_attribute` | `[Signal]` attribute decorates `ConnectionClosedEventHandler` (AC 1, 2) |
+| `test_spacetime_client_signal_adapter_initialized_in_enter_tree` | `GodotSignalAdapter` constructed inside `_EnterTree` — prerequisite for null-check pattern (AC 3) |
+
+#### `SpacetimeConnectionService.cs` behavioral contract gaps (5)
+| Test | Gap Covered |
+|---|---|
+| `test_connection_service_disconnect_state_transition_before_connection_closed_event` | `_stateMachine.Transition` precedes `OnConnectionClosed?.Invoke` in `Disconnect(string)` — signal ordering (AC 1, 2) |
+| `test_connection_service_handle_disconnect_error_state_transition_before_connection_closed_event` | Same ordering in `HandleDisconnectError` (AC 1, 2) |
+| `test_connection_service_error_event_propagates_error_message` | `ErrorMessage = error.Message` set in Error close path (AC 2) |
+| `test_connection_service_degraded_branch_returns_before_connection_closed` | `return;` precedes `OnConnectionClosed?.Invoke` in Degraded branch — session not ended (AC 2) |
+| `test_connection_service_on_connect_error_does_not_directly_invoke_connection_closed` | `OnConnectError` (Connecting path) does NOT call `OnConnectionClosed` — failed connect must not fire `ConnectionClosed` (AC 2) |
+
+#### Story 4.2 `_EnterTree`/`_ExitTree` regression gaps (3)
+| Test | Gap Covered |
+|---|---|
+| `test_regression_on_reducer_call_failed_wired_in_enter_tree` | `OnReducerCallFailed +=` inside `_EnterTree` body — was untested (only Succeeded was checked) |
+| `test_regression_on_reducer_call_succeeded_unwired_in_exit_tree` | `OnReducerCallSucceeded -=` inside `_ExitTree` body |
+| `test_regression_on_reducer_call_failed_unwired_in_exit_tree` | `OnReducerCallFailed -=` inside `_ExitTree` body |
+
+#### `GodotSignalAdapter.cs` namespace (1)
+| Test | Gap Covered |
+|---|---|
+| `test_godot_signal_adapter_namespace` | Namespace `GodotSpacetime.Runtime.Events` (AC 3) |
+
+---
+
+## Coverage
+
+| Area | Before | After |
+|---|---|---|
+| `ConnectionCloseReason.cs` | 6 | 6 |
+| `ConnectionClosedEvent.cs` | 10 | 13 |
+| `SpacetimeConnectionService.cs` | 5 | 10 |
+| `SpacetimeClient.cs` bridge | 8 | 12 |
+| `GodotSignalAdapter.cs` | 6 | 7 |
+| `_Process` / transport ownership | 3 | 3 |
+| `docs/runtime-boundaries.md` | 7 | 7 |
+| Dynamic lifecycle (Epic 3 Retro P2) | 2 | 2 |
+| Story 4.2 regression guards | 10 | 13 |
+| Story 3.x regression guards | 5 | 5 |
+| **Total** | **62** | **76** |
+
+## Test Count
+
+| Milestone | Count |
+|---|---|
+| End of Story 4.2 gap fill | 1342 |
+| Story 4.3 dev baseline | 1414 |
+| After Story 4.3 QA gap fill | **1428** |
+
+## Test Run Result
+
+```
+76 passed in 0.05s   (test_story_4_3_bridge_runtime_callbacks.py)
+1428 passed in 0.39s (full pytest suite)
+```
+
+## Next Steps
+
+- All 14 gaps applied and verified green
+- Story 4.3 ready for sign-off; AC 1 through AC 4 are guarded by 76 contract tests
+
+---
+
+# Test Automation Summary — Story 4.3 Senior Review
+
+**Date:** 2026-04-14
+**Story:** 4.3 — Bridge Runtime Callbacks into Scene-Safe Godot Events
+**Baseline:** 1428 tests (after QA gap fill, 76 tests in `test_story_4_3_bridge_runtime_callbacks.py`)
+**After senior review:** 1434 tests (+6)
+
+---
+
+## Senior Review Gaps Fixed
+
+Senior review found one runtime teardown defect plus two documentation/evidence gaps:
+
+- `SpacetimeConnectionService` could recursively re-enter disconnect cleanup if `_adapter.Close()` triggered `OnDisconnected` during teardown, risking duplicate `ConnectionClosed` delivery.
+- `SpacetimeClient.ConnectionClosedEventHandler` XML docs referenced nonexistent `CloseReason.*` enum values.
+- `docs/runtime-boundaries.md` did not mention that deferred scene-safe dispatch begins after `_EnterTree()` initializes the signal adapter.
+
+## Generated Tests
+
+### Review Tests Added — `tests/test_story_4_3_bridge_runtime_callbacks.py`
+
+| Test | Gap Covered |
+|---|---|
+| `test_connection_service_declares_teardown_guard_field` | `_isTearingDownConnection` exists so teardown state is explicit |
+| `test_connection_service_has_teardown_guard_helper` | `RunConnectionTeardown()` wraps adapter-closing teardown paths |
+| `test_connection_service_on_disconnected_ignores_teardown_and_late_callbacks` | `OnDisconnected` ignores reentrant and post-disconnect callbacks |
+| `test_connection_service_wraps_all_disconnect_reset_paths_in_teardown_guard` | All adapter-closing reset paths use the teardown guard |
+| `test_spacetime_client_connection_closed_docs_reference_connection_close_reason_enum` | XML docs reference `ConnectionCloseReason.Clean/Error` correctly |
+| `test_docs_scene_safe_bridge_notes_enter_tree_requirement` | Runtime docs mention the `_EnterTree()` requirement for deferred dispatch |
+
+## Final Coverage
+
+- `tests/test_story_4_3_bridge_runtime_callbacks.py`: 82 tests
+- Full `pytest -q` suite: 1434 tests
+- `dotnet build godot-spacetime.sln -c Debug`: 0 warnings, 0 errors
+
+## Test Run Result
+
+```text
+82 passed in 0.04s   (tests/test_story_4_3_bridge_runtime_callbacks.py)
+1434 passed in 0.43s (full pytest suite)
+```
+
+## Next Steps
+
+- Senior review fixes applied and verified green
+- Story 4.3 ready for sign-off; AC 1 through AC 4 are guarded by 82 contract tests
