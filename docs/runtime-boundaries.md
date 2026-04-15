@@ -122,6 +122,48 @@ foreach (var row in SpacetimeClient.GetRows("Player"))
 
 Cache access is mediated by `CacheViewAdapter` (in `Internal/Cache/`) which wraps the generated `RemoteTables` object via reflection. Gameplay code must not access the underlying transport state directly — always go through `SpacetimeClient.GetRows()`.
 
+### Row Changes — Observing Live Cache Updates
+
+After the `SubscriptionApplied` signal fires, the SDK emits a `RowChanged` signal on `SpacetimeClient` each time a subscribed table row is inserted, updated, or removed by the server. Connect to this signal to drive gameplay reactions without polling `GetRows()` every frame.
+
+**Signal payload:** [`RowChangedEvent`](../addons/godot_spacetime/src/Public/Subscriptions/RowChangedEvent.cs)
+
+| Property | Type | Meaning |
+|----------|------|---------|
+| `TableName` | `string` | PascalCase table name matching the generated `RemoteTables` property (e.g., `"SmokeTest"`) |
+| `ChangeType` | `RowChangeType` | `Insert`, `Update`, or `Delete` |
+| `OldRow` | `object?` | Row before the change; `null` for `Insert` events |
+| `NewRow` | `object?` | Row after the change; `null` for `Delete` events |
+
+**Reacting to row changes:**
+```csharp
+SpacetimeClient.RowChanged += OnRowChanged;
+
+private void OnRowChanged(RowChangedEvent e)
+{
+    if (e.TableName != "SmokeTest") return;
+
+    switch (e.ChangeType)
+    {
+        case RowChangeType.Insert:
+            var inserted = (SpacetimeDB.Types.SmokeTest)e.NewRow!;
+            GD.Print($"Inserted: {inserted.Value}");
+            break;
+        case RowChangeType.Update:
+            var old = (SpacetimeDB.Types.SmokeTest)e.OldRow!;
+            var updated = (SpacetimeDB.Types.SmokeTest)e.NewRow!;
+            GD.Print($"Updated: {old.Value} → {updated.Value}");
+            break;
+        case RowChangeType.Delete:
+            var deleted = (SpacetimeDB.Types.SmokeTest)e.OldRow!;
+            GD.Print($"Deleted: {deleted.Value}");
+            break;
+    }
+}
+```
+
+Row change dispatch is mediated by `SpacetimeSdkRowCallbackAdapter` (in `Internal/Platform/DotNet/`) which wires into the generated `RemoteTableHandle` events via reflection. Scene code must not access those events directly — always use the `SpacetimeClient.RowChanged` signal.
+
 ### Reducers — `ReducerCallResult` and `ReducerCallError`
 
 A **Reducer** is a server-side callable procedure. You invoke reducers through generated binding types. The SDK surfaces the outcome as a [`ReducerCallResult`](../addons/godot_spacetime/src/Public/Reducers/ReducerCallResult.cs) on success, or a [`ReducerCallError`](../addons/godot_spacetime/src/Public/Reducers/ReducerCallError.cs) when the call fails or is rejected.

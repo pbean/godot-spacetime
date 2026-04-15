@@ -11,7 +11,7 @@ using GodotSpacetime.Runtime.Subscriptions;
 
 namespace GodotSpacetime.Runtime.Connection;
 
-internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscriptionEventSink
+internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscriptionEventSink, IRowChangeEventSink
 {
     private readonly ConnectionStateMachine _stateMachine = new();
     private readonly ReconnectPolicy _reconnectPolicy = new();
@@ -24,6 +24,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private readonly SpacetimeSdkSubscriptionAdapter _subscriptionAdapter = new();
     private readonly SubscriptionRegistry _subscriptionRegistry = new();
     private readonly CacheViewAdapter _cacheViewAdapter = new();
+    private readonly SpacetimeSdkRowCallbackAdapter _rowCallbackAdapter = new();
 
     public SpacetimeConnectionService()
     {
@@ -35,6 +36,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     public event Action<ConnectionOpenedEvent>? OnConnectionOpened;
 
     public event Action<SubscriptionAppliedEvent>? OnSubscriptionApplied;
+
+    public event Action<RowChangedEvent>? OnRowChanged;
 
     public ConnectionStatus CurrentStatus => _stateMachine.CurrentStatus;
 
@@ -139,6 +142,9 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     {
         _reconnectPolicy.Reset();
         _cacheViewAdapter.SetDb(_adapter.GetDb());   // wire cache view on connect
+        var db = _adapter.GetDb();                   // wire row callbacks
+        if (db != null)
+            _rowCallbackAdapter.RegisterCallbacks(db, this);
         if (_tokenStore != null)
         {
             // Optional token persistence must never break a successful connection.
@@ -235,6 +241,21 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     {
         // Subscription failure recovery is implemented in Story 3.5.
         // The error is observable via the SpacetimeDB SDK log output at the Platform/DotNet boundary.
+    }
+
+    void IRowChangeEventSink.OnRowInserted(string tableName, object row)
+    {
+        OnRowChanged?.Invoke(new RowChangedEvent(tableName, RowChangeType.Insert, null, row));
+    }
+
+    void IRowChangeEventSink.OnRowDeleted(string tableName, object row)
+    {
+        OnRowChanged?.Invoke(new RowChangedEvent(tableName, RowChangeType.Delete, row, null));
+    }
+
+    void IRowChangeEventSink.OnRowUpdated(string tableName, object oldRow, object newRow)
+    {
+        OnRowChanged?.Invoke(new RowChangedEvent(tableName, RowChangeType.Update, oldRow, newRow));
     }
 
     private void HandleDisconnectError(Exception error)
