@@ -29,3 +29,9 @@ When the plugin is enabled, the `"Spacetime Status"` bottom panel mirrors the cu
 - `CONNECTED — active session established`
 - `DEGRADED — session experiencing issues; reconnecting`
 - `NOT CONFIGURED — assign a SpacetimeSettings resource`
+
+## See Also
+
+- `docs/runtime-boundaries.md` — Complete signal catalog, authentication, subscriptions, cache, reducers, and the full public SDK concept vocabulary.
+- `demo/README.md` — The canonical end-to-end sample demonstrating the full connection lifecycle from setup through reducer interaction.
+- `docs/quickstart.md` — Step-by-step first-setup guide that exercises connection lifecycle as part of the full onboarding flow.

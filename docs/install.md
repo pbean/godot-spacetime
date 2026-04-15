@@ -42,3 +42,5 @@ The support baseline metadata used by the validation script lives in `scripts/co
 
 - `docs/connection.md` for connection lifecycle states, signals, and editor status labels.
 - `docs/quickstart.md` for the step-by-step first-setup workflow from install through first connection.
+- `demo/README.md` for the canonical end-to-end sample covering install, code generation, connection, auth, subscriptions, and reducer interaction.
+- `docs/runtime-boundaries.md` for the full runtime API reference covering connection, auth, subscriptions, cache, reducers, and the complete public SDK concept vocabulary.

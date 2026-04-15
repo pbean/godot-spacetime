@@ -609,3 +609,86 @@ All gaps were auto-applied.
 - All 12 gaps applied and verified green
 - Story 5.3 ready for sign-off; AC 1 through AC 3 are guarded by 63 contract tests
 - Epic 5 demo is complete — connect → authenticate → subscribe → observe → mutate → react to result is fully covered
+
+---
+
+# Test Automation Summary — Story 5.4 QA Gap Fill
+
+**Date:** 2026-04-14
+**Story:** 5.4 — Publish Core Installation and Runtime Documentation
+**Baseline:** 1710 tests (end of Story 5.4 dev, 51 tests in `test_story_5_4_publish_core_installation_and_runtime_documentation.py`)
+**After gap fill:** 1720 tests (+10)
+
+---
+
+## Gap Discovery Results
+
+All 51 pre-existing Story 5.4 tests passed. Gap analysis identified 10 untested behavioral
+contracts across the four modified doc files. All gaps were auto-applied.
+
+---
+
+## Generated Tests
+
+### Gap Tests Added — `tests/test_story_5_4_publish_core_installation_and_runtime_documentation.py`
+
+#### Story-specified insertion not verified (Task 3.1 gap) (1)
+
+| Test | Gap Covered |
+|---|---|
+| `test_connection_md_references_quickstart` | `docs/quickstart.md` reference in connection.md See Also — Task 3.1 explicitly adds it but test 5.4 spec omitted the assertion (AC: 1) |
+
+#### Quickstart and install doc structure (AC1) (2)
+
+| Test | Gap Covered |
+|---|---|
+| `test_quickstart_md_has_failure_recovery_section` | `Failure Recovery` section — recovery path for adopters is documented (AC: 1) |
+| `test_install_md_has_bootstrap_steps_section` | `Bootstrap Steps` section — installation path core structure (AC: 1) |
+
+#### runtime-boundaries.md additional API surfaces (AC1) (7)
+
+| Test | Gap Covered |
+|---|---|
+| `test_runtime_boundaries_md_contains_subscription_failed` | `SubscriptionFailed` signal — subscription failure path (AC: 1) |
+| `test_runtime_boundaries_md_contains_connection_closed` | `ConnectionClosed` signal — connection close boundary in complete signal catalog (AC: 1) |
+| `test_runtime_boundaries_md_contains_connection_auth_state` | `ConnectionAuthState` enum — auth state surface (AC: 1) |
+| `test_runtime_boundaries_md_contains_log_category` | `LogCategory` enum — logging subsystem (AC: 1) |
+| `test_runtime_boundaries_md_contains_spacetime_settings` | `SpacetimeSettings` resource — configuration surface (AC: 1) |
+| `test_runtime_boundaries_md_contains_row_changed_event` | `RowChangedEvent` payload type — row change data surface (AC: 1) |
+| `test_runtime_boundaries_md_contains_reducer_call_succeeded` | `ReducerCallSucceeded` signal name — complete signal catalog (AC: 1) |
+
+---
+
+## Coverage
+
+| Area | Before (original) | After (gap fill) |
+|---|---|---|
+| Existence tests | 6 | 6 |
+| `docs/install.md` content | 5 | 6 |
+| `docs/quickstart.md` content | 6 | 7 |
+| `docs/connection.md` content | 3 | 4 |
+| `docs/runtime-boundaries.md` content | 12 | 19 |
+| `docs/compatibility-matrix.md` content | 3 | 3 |
+| Regression guards | 16 | 16 |
+| **Total** | **51** | **61** |
+
+## Test Count
+
+| Milestone | Count |
+|---|---|
+| End of Story 5.3 gap fill | 1654 |
+| Story 5.4 dev baseline (with original 51 tests) | 1710 |
+| After Story 5.4 QA gap fill | **1720** |
+
+## Test Run Result
+
+```
+61 passed in 0.03s   (test_story_5_4_publish_core_installation_and_runtime_documentation.py)
+1720 passed in 0.46s (full pytest suite)
+```
+
+## Next Steps
+
+- All 10 gaps applied and verified green
+- Story 5.4 ready for sign-off; AC 1 through AC 3 are guarded by 61 contract tests
+- Epic 5 documentation surface is complete — install → quickstart → connection → runtime-boundaries all cross-reference the demo and each other

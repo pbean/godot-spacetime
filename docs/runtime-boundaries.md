@@ -2,6 +2,8 @@
 
 This document defines the public concept vocabulary for the GodotSpacetime SDK. All public API docs, sample guidance, and architecture notes use this terminology. You do not need to know how the first shipping runtime works to use this SDK because those implementation details stay behind the runtime boundary.
 
+The canonical end-to-end implementation of these concepts is the sample project at `demo/README.md` and `demo/DemoMain.cs`.
+
 ## Concept Vocabulary
 
 ### Connection
