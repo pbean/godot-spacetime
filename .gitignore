@@ -1,5 +1,7 @@
 # Local agent/tool state
 .codex/
+.agents/
+.claude/
 
 # Environment files
 .env
