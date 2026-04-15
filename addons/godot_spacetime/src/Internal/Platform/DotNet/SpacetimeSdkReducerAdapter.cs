@@ -1,3 +1,4 @@
+using System;
 using SpacetimeDB;
 
 namespace GodotSpacetime.Runtime.Platform.DotNet;
@@ -12,15 +13,36 @@ namespace GodotSpacetime.Runtime.Platform.DotNet;
 ///
 /// See <c>docs/runtime-boundaries.md</c> — "Internal/Platform/DotNet/ — The Runtime
 /// Isolation Zone" for the architectural justification.
-///
-/// Runtime implementation (reducer dispatch, result forwarding, etc.)
-/// is added in Story 1.9.
 /// </summary>
 internal sealed class SpacetimeSdkReducerAdapter
 {
-    // Stub — references IDbConnection to establish the isolation boundary.
-    // Reducer invocation implementation is added in later stories.
-#pragma warning disable CS0169
     private IDbConnection? _dbConnection;
-#pragma warning restore CS0169
+
+    internal void SetConnection(IDbConnection? connection)
+    {
+        _dbConnection = connection;
+    }
+
+    internal void Invoke(object reducerArgs)
+    {
+        if (_dbConnection == null)
+        {
+            Console.Error.WriteLine("[GodotSpacetime] SpacetimeSdkReducerAdapter.Invoke called with no active connection — ignoring.");
+            return;
+        }
+
+        if (reducerArgs is not IReducerArgs)
+            throw new ArgumentException(
+                $"reducerArgs must implement SpacetimeDB.IReducerArgs, got {reducerArgs?.GetType().FullName ?? "null"}.",
+                nameof(reducerArgs));
+
+        // InternalCallReducer<T>(T args) must see the concrete generated reducer type, not IReducerArgs.
+        dynamic typedReducerArgs = reducerArgs;
+        _dbConnection.InternalCallReducer(typedReducerArgs);
+    }
+
+    internal void ClearConnection()
+    {
+        _dbConnection = null;
+    }
 }

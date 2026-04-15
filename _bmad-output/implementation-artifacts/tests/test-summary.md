@@ -1,35 +1,42 @@
-# Test Automation Summary — Story 3.5 Gap Analysis
+# Test Automation Summary — Story 4.1 Gap Analysis
 
 **Date:** 2026-04-14
-**Story:** 3.5 — Detect Invalid Subscription States and Failures
+**Story:** 4.1 — Invoke Generated Reducers from the Godot-Facing SDK
 
 ---
 
 ## Gap Discovery Results
 
-All 64 pre-existing Story 3.5 tests passed. Gap analysis identified 12 untested
-code paths across three files. All gaps were auto-applied.
+All 47 pre-existing Story 4.1 tests passed. Gap analysis identified 11 untested
+behavioral contracts across four files. All gaps were auto-applied.
 
 ---
 
 ## Generated Tests
 
-### Gap Tests Added — `tests/test_story_3_5_detect_invalid_subscription_states_and_failures.py`
+### Gap Tests Added — `tests/test_story_4_1_invoke_generated_reducers.py`
 
 | Test | File | Gap Covered |
 |---|---|---|
-| `test_subscription_failed_event_constructor_assigns_handle` | `SubscriptionFailedEvent.cs` | Constructor body `Handle = handle` assignment (AC 1, 3) |
-| `test_subscription_failed_event_constructor_assigns_error_message_from_exception` | `SubscriptionFailedEvent.cs` | Constructor body `ErrorMessage = error.Message` full assignment (AC 3) |
-| `test_connection_service_on_subscription_error_is_explicit_interface_implementation` | `SpacetimeConnectionService.cs` | `void ISubscriptionEventSink.OnSubscriptionError(` explicit impl (AC 1) |
-| `test_connection_service_on_subscription_error_uses_try_get_entry` | `SpacetimeConnectionService.cs` | `TryGetEntry` guard scoped to `OnSubscriptionError` body (AC 1, 2) |
-| `test_connection_service_on_subscription_error_remove_pending_before_try_get_entry` | `SpacetimeConnectionService.cs` | `RemovePendingReplacementReferences` < `TryGetEntry` ordering (AC 2) |
-| `test_connection_service_on_subscription_error_try_unsubscribe_before_unregister` | `SpacetimeConnectionService.cs` | `TryUnsubscribe` < `Unregister` ordering (AC 1, 2) |
-| `test_connection_service_on_subscription_error_unregister_before_handle_close` | `SpacetimeConnectionService.cs` | `Unregister` < `handle.Close()` ordering (AC 2) |
-| `test_connection_service_on_subscription_error_does_not_touch_old_handle_comment` | `SpacetimeConnectionService.cs` | "WITHOUT touching old handle" comment documents AC 2 semantic (AC 2) |
-| `test_spacetime_client_handle_subscription_failed_null_branch_emits_correct_signal` | `SpacetimeClient.cs` | Null-guard branch emits `SignalName.SubscriptionFailed` (AC 1, 3) |
-| `test_spacetime_client_handle_subscription_failed_dispatch_lambda_emits_subscription_failed` | `SpacetimeClient.cs` | Dispatch lambda references `SignalName.SubscriptionFailed` (AC 1, 3) |
-| `test_spacetime_client_handle_subscription_failed_dispatch_lambda_passes_event` | `SpacetimeClient.cs` | Dispatch lambda passes `failedEvent` to `EmitSignal` (AC 1, 3) |
-| `test_regression_on_row_changed_unwired_in_exit_tree` | `SpacetimeClient.cs` | `OnRowChanged -= HandleRowChanged` in `_ExitTree` (regression, AC 2) |
+| `test_reducer_adapter_class_is_internal_sealed` | `SpacetimeSdkReducerAdapter.cs` | `internal sealed class` modifier (AC 1, 2) |
+| `test_reducer_adapter_has_db_connection_field` | `SpacetimeSdkReducerAdapter.cs` | `_dbConnection` field declaration (AC 1) |
+| `test_reducer_adapter_invoke_guards_null_connection` | `SpacetimeSdkReducerAdapter.cs` | `_dbConnection == null` early-return guard in `Invoke` (AC 1) |
+| `test_reducer_adapter_invoke_throws_for_non_reducer_args_type` | `SpacetimeSdkReducerAdapter.cs` | `ArgumentException` thrown for non-`IReducerArgs` at isolation boundary (AC 2) |
+| `test_reducer_invoker_constructor_takes_adapter_parameter` | `ReducerInvoker.cs` | Constructor accepts `SpacetimeSdkReducerAdapter` parameter for injection (AC 1) |
+| `test_reducer_invoker_invoke_throws_for_null_reducer_args` | `ReducerInvoker.cs` | `ArgumentNullException.ThrowIfNull(reducerArgs)` null guard (AC 2) |
+| `test_reducer_invoker_invoke_delegates_to_adapter` | `ReducerInvoker.cs` | `_adapter.Invoke(reducerArgs)` delegation (AC 1) |
+| `test_connection_service_reducer_invoker_injected_with_reducer_adapter` | `SpacetimeConnectionService.cs` | `new ReducerInvoker(_reducerAdapter)` constructor injection (AC 1) |
+| `test_connection_service_invoke_reducer_delegates_to_invoker` | `SpacetimeConnectionService.cs` | `_reducerInvoker.Invoke(` delegation in `InvokeReducer` body (AC 1) |
+| `test_spacetime_client_invoke_reducer_catches_argument_null_exception` | `SpacetimeClient.cs` | `catch (ArgumentNullException` — mirrors ReplaceSubscription error-handling pattern (AC 2, 3) |
+| `test_runtime_boundaries_mentions_ireducer_args` | `docs/runtime-boundaries.md` | `IReducerArgs` documented as required type for reducer arguments (AC 2) |
+
+### Senior Review Follow-up Tests — `tests/test_story_4_1_invoke_generated_reducers.py`
+
+| Test | File | Gap Covered |
+|---|---|---|
+| `test_reducer_adapter_uses_concrete_type_dispatch_for_internal_call_reducer` | `SpacetimeSdkReducerAdapter.cs` | Ensures reducer dispatch uses the concrete generated reducer type so the SDK generic reducer call compiles |
+| `test_spacetime_client_invoke_reducer_catches_argument_exception` | `SpacetimeClient.cs` | Invalid non-`IReducerArgs` objects are surfaced through `PublishValidationFailure` instead of escaping the Godot-facing boundary |
+| `test_runtime_boundaries_mentions_invalid_reducer_argument_guard` | `docs/runtime-boundaries.md` | Public reducer guidance documents the invalid-argument validation path added during review |
 
 ---
 
@@ -37,20 +44,22 @@ code paths across three files. All gaps were auto-applied.
 
 | Area | Before | After |
 |---|---|---|
-| `SubscriptionFailedEvent.cs` | 21/23 checks | 23/23 checks |
-| `SpacetimeConnectionService.cs` (error path) | 8/13 checks | 13/13 checks |
-| `SpacetimeClient.cs` (failed handler) | 6/9 checks | 9/9 checks |
-| `SpacetimeClient.cs` (regression) | 5/6 wiring checks | 6/6 wiring checks |
+| `SpacetimeSdkReducerAdapter.cs` | 9/13 checks | 13/13 checks |
+| `ReducerInvoker.cs` | 6/9 checks | 9/9 checks |
+| `SpacetimeConnectionService.cs` (reducer path) | 7/9 checks | 9/9 checks |
+| `SpacetimeClient.cs` (InvokeReducer) | 3/4 checks | 4/4 checks |
+| `docs/runtime-boundaries.md` (reducer section) | 3/4 checks | 4/4 checks |
 
 ## Test Count
 
 | Milestone | Count |
 |---|---|
-| End of Story 3.4 | 1063 |
-| End of Story 3.5 (original) | 1132 |
-| After gap fill | **1144** |
+| End of Story 3.5 gap fill | 1144 |
+| End of Story 4.1 (original) | 1196 |
+| After gap fill | **1207** |
+| After senior review auto-fix | **1210** |
 
 ## Next Steps
 
-- All gaps applied; no further Story 3.5 gaps identified
+- All gaps applied; senior review follow-up coverage added for the compile-surface and invalid-argument boundary behavior
 - Run tests in CI with `python -m pytest tests/`

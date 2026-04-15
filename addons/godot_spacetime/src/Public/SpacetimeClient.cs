@@ -150,6 +150,36 @@ public partial class SpacetimeClient : Node
     public IEnumerable<object> GetRows(string tableName) =>
         _connectionService.GetRows(tableName);
 
+    /// <summary>
+    /// Invokes a SpacetimeDB reducer through the supported generated reducer path.
+    /// Pass a generated <c>IReducerArgs</c> instance from the module's generated bindings
+    /// (e.g. the generated <c>Reducer.Ping</c> type for a <c>ping</c> reducer).
+    /// The invocation is routed through <c>ReducerInvoker</c> → <c>SpacetimeSdkReducerAdapter</c> →
+    /// the runtime SDK call.
+    /// Must be called after <c>ConnectionState.Connected</c> is reached.
+    /// Fires <c>ConnectionStateChanged</c> with a validation error if called in the wrong state
+    /// or with an invalid reducer argument object.
+    /// </summary>
+    public void InvokeReducer(object reducerArgs)
+    {
+        try
+        {
+            _connectionService.InvokeReducer(reducerArgs);
+        }
+        catch (ArgumentNullException ex)
+        {
+            PublishValidationFailure(ex.Message);
+        }
+        catch (ArgumentException ex)
+        {
+            PublishValidationFailure(ex.Message);
+        }
+        catch (InvalidOperationException ex)
+        {
+            PublishValidationFailure(ex.Message);
+        }
+    }
+
     public override void _Process(double delta)
     {
         if (_currentStatus.State == ConnectionState.Disconnected)

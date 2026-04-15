@@ -178,6 +178,31 @@ A **Reducer** is a server-side callable procedure. You invoke reducers through g
 
 Reducer results arrive asynchronously as SDK events, not as direct return values, because the execution happens on the server.
 
+### Reducer Invocation
+
+**`SpacetimeClient.InvokeReducer(object reducerArgs)`** is the public entry point for calling server-side reducers from gameplay code.
+
+The `reducerArgs` parameter must be an `IReducerArgs` instance from the generated bindings for your module (e.g. `new SpacetimeDB.Types.Reducer.Ping()`). The C# type system enforces the `IReducerArgs` contract at the generated binding level.
+
+**Invocation path:**
+```
+SpacetimeClient.InvokeReducer(object reducerArgs)
+  └─ SpacetimeConnectionService.InvokeReducer(object reducerArgs)    [state check: Connected]
+       └─ ReducerInvoker.Invoke(object reducerArgs)                   [null validation]
+            └─ SpacetimeSdkReducerAdapter.Invoke(object reducerArgs)  [IReducerArgs cast + dispatch]
+                 └─ runtime SDK reducer call                          [SpacetimeDB client runtime]
+```
+
+**Isolation zone:** `SpacetimeDB.*` reducer types are referenced **only** inside `SpacetimeSdkReducerAdapter` (in `Internal/Platform/DotNet/`). `ReducerInvoker`, `SpacetimeConnectionService`, and `SpacetimeClient` do not import `SpacetimeDB.*`.
+
+**Guard:** `InvokeReducer()` requires `ConnectionState.Connected`. If called in any other state, or with a non-`IReducerArgs` object, `ConnectionStateChanged` fires with a validation error description and the call is discarded.
+
+**Example usage:**
+```csharp
+// After ConnectionState.Connected is reached:
+_client.InvokeReducer(new SpacetimeDB.Types.Reducer.Ping());
+```
+
 ### Generated Bindings
 
 **Generated Bindings** are read-only C# types generated from a SpacetimeDB module schema using the `spacetimedb generate` command. They are specific to each module and live outside the addon itself. Generated types give you:
