@@ -1,0 +1,6 @@
+SpacetimeDB.ClientSDK
+https://github.com/clockworklabs/SpacetimeDB
+
+This package includes a dependency on SpacetimeDB.ClientSDK by Clockwork Labs.
+For license and attribution terms, see:
+https://github.com/clockworklabs/SpacetimeDB/blob/master/LICENSE
