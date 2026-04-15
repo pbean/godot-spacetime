@@ -691,4 +691,96 @@ contracts across the four modified doc files. All gaps were auto-applied.
 
 - All 10 gaps applied and verified green
 - Story 5.4 ready for sign-off; AC 1 through AC 3 are guarded by 61 contract tests
+
+---
+
+# Test Automation Summary — Story 5.5 QA Gap Fill
+
+**Date:** 2026-04-14
+**Story:** 5.5 — Publish Troubleshooting Guidance for Setup and Runtime Failures
+
+---
+
+## Gap Discovery Results
+
+All 54 pre-existing Story 5.5 tests passed (1779 total). Gap analysis identified 23 untested behavioral contracts across six sections of `docs/troubleshooting.md`. All gaps were auto-applied.
+
+---
+
+## Generated Tests
+
+### Gap Tests Added — `tests/test_story_5_5_publish_troubleshooting_guidance_for_setup_and_runtime_failures.py`
+
+#### Cross-Reference Alignment (8 tests)
+
+| Test | Asserts |
+|---|---|
+| `test_troubleshooting_installation_references_install_md` | Installation section contains `docs/install.md` (Task 1.2) |
+| `test_troubleshooting_codegen_references_codegen_md` | Code Generation section contains `docs/codegen.md` (Task 1.3) |
+| `test_troubleshooting_compat_references_compatibility_matrix_md` | Compat section contains `docs/compatibility-matrix.md` (Task 1.4) |
+| `test_troubleshooting_connection_references_connection_md` | Connection section contains `docs/connection.md` (Task 1.5) |
+| `test_troubleshooting_auth_references_runtime_boundaries_md` | Auth section contains `runtime-boundaries.md` (Task 1.6) |
+| `test_troubleshooting_subscriptions_references_runtime_boundaries_md` | Subscriptions section contains `runtime-boundaries.md` (Task 1.7) |
+| `test_troubleshooting_reducers_references_runtime_boundaries_md` | Reducers section contains `runtime-boundaries.md` (Task 1.8) |
+| `test_troubleshooting_reducers_references_demo_readme` | Reducers section contains `demo/README.md` (Task 1.8) |
+
+#### Connection Section (4 tests)
+
+| Test | Asserts |
+|---|---|
+| `test_troubleshooting_connection_contains_not_configured` | `NOT CONFIGURED` panel state (Task 1.5, AC1) |
+| `test_troubleshooting_connection_contains_disconnected` | `DISCONNECTED` panel state (Task 1.5, AC1) |
+| `test_troubleshooting_connection_contains_spacetime_settings` | `SpacetimeSettings` terminology (AC3) |
+| `test_troubleshooting_connection_contains_spacetime_client` | `SpacetimeClient` terminology (AC3) |
+
+#### Authentication Section (3 tests)
+
+| Test | Asserts |
+|---|---|
+| `test_troubleshooting_auth_contains_connection_auth_state` | `ConnectionAuthState` enum type name (Task 1.6, AC3) |
+| `test_troubleshooting_auth_contains_project_settings_token_store` | `ProjectSettingsTokenStore` demo reset instructions (Task 1.6, AC2) |
+| `test_troubleshooting_auth_contains_spacetime_auth_token` | `spacetime/auth/token` Project Settings key (Task 1.6, AC2) |
+
+#### Subscriptions Section (4 tests)
+
+| Test | Asserts |
+|---|---|
+| `test_troubleshooting_subscriptions_contains_invalid_operation_exception` | `InvalidOperationException` precondition (Task 1.7, AC1) |
+| `test_troubleshooting_subscriptions_contains_subscription_handle` | `SubscriptionHandle` terminology (Task 1.7, AC3) |
+| `test_troubleshooting_subscriptions_contains_subscription_applied_event` | `SubscriptionAppliedEvent` in cross-reference (Task 1.7, AC3) |
+| `test_troubleshooting_subscriptions_contains_connection_state` | `ConnectionState.Connected` precondition (Task 1.7, AC3) |
+
+#### Reducers Section (4 tests)
+
+| Test | Asserts |
+|---|---|
+| `test_troubleshooting_reducers_contains_reducer_call_error` | `ReducerCallError` type name (Task 1.8, AC3) |
+| `test_troubleshooting_reducers_contains_unknown` | `Unknown` ReducerFailureCategory value (Task 1.8, AC1) |
+| `test_troubleshooting_reducers_contains_invoke_reducer` | `InvokeReducer()` in programming faults table (Task 1.8, AC1) |
+| `test_troubleshooting_reducers_contains_disconnected` | `Disconnected` state in programming faults (Task 1.8, AC3) |
+
+---
+
+## Coverage
+
+| Area | Before | After |
+|---|---|---|
+| Story 5.5 test file | 54 tests | **77 tests** |
+| Full suite | 1779 passing | **1802 passing** |
+
+## Gaps Intentionally Excluded
+
+Four dev-note vocabulary terms (`SubscriptionApplied`, `ReducerCallResult`, `ReducerCallSucceeded`, `RecoveryGuidance`) are absent from `docs/troubleshooting.md` and not required by the story's "Exact Content" spec. Adding assertions for absent content would create false failures.
+
+## Verification
+
+```
+77 passed in 0.04s   (test_story_5_5_publish_troubleshooting_guidance_for_setup_and_runtime_failures.py)
+1802 passed in 0.51s (full pytest suite)
+```
+
+## Next Steps
+
+- All 23 gaps applied and verified green
+- Story 5.5 test suite at 77 assertions; AC 1 through AC 3 guarded across all six failure domains
 - Epic 5 documentation surface is complete — install → quickstart → connection → runtime-boundaries all cross-reference the demo and each other
