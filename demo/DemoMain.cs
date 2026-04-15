@@ -2,12 +2,14 @@ using System.Linq;
 using Godot;
 using GodotSpacetime;
 using GodotSpacetime.Connection;
+using GodotSpacetime.Reducers;
 using GodotSpacetime.Runtime.Auth;
 using GodotSpacetime.Subscriptions;
+using SpacetimeDB.Types;
 
 namespace GodotSpacetime.Demo;
 
-/// <summary>Demo scene extended through Story 5.2 — wires auth token persistence, subscription to smoke_test, and row-change observation. Story 5.3 adds reducer interaction.</summary>
+/// <summary>Demo scene extended through Story 5.2 — wires auth token persistence, subscription to smoke_test, and row-change observation. Story 5.3 — wires reducer invocation (Ping) and result handling via ReducerCallSucceeded / ReducerCallFailed signals.</summary>
 public partial class DemoMain : Node
 {
     private SpacetimeClient? _client;
@@ -35,6 +37,12 @@ public partial class DemoMain : Node
         _client.RowChanged -= OnRowChanged;
         _client.RowChanged += OnRowChanged;
 
+        _client.ReducerCallSucceeded -= OnReducerCallSucceeded;
+        _client.ReducerCallSucceeded += OnReducerCallSucceeded;
+
+        _client.ReducerCallFailed -= OnReducerCallFailed;
+        _client.ReducerCallFailed += OnReducerCallFailed;
+
         if (_client.Settings != null)
             _client.Settings.TokenStore = new ProjectSettingsTokenStore();
 
@@ -51,6 +59,8 @@ public partial class DemoMain : Node
             _client.SubscriptionApplied -= OnSubscriptionApplied;
             _client.SubscriptionFailed -= OnSubscriptionFailed;
             _client.RowChanged -= OnRowChanged;
+            _client.ReducerCallSucceeded -= OnReducerCallSucceeded;
+            _client.ReducerCallFailed -= OnReducerCallFailed;
         }
 
         if (_subscriptionHandle != null && _subscriptionHandle.Status == SubscriptionStatus.Active)
@@ -88,6 +98,8 @@ public partial class DemoMain : Node
 
         var rows = _client!.GetRows("SmokeTest").ToList();
         GD.Print($"[Demo] Subscription applied — {rows.Count} row(s) in smoke_test");
+        _client!.InvokeReducer(new Reducer.Ping());
+        GD.Print("[Demo] Ping reducer invoked — awaiting server acknowledgement");
     }
 
     private void OnSubscriptionFailed(SubscriptionFailedEvent e)
@@ -101,5 +113,15 @@ public partial class DemoMain : Node
     private void OnRowChanged(RowChangedEvent e)
     {
         GD.Print($"[Demo] Row changed — table: {e.TableName}, type: {e.ChangeType}");
+    }
+
+    private void OnReducerCallSucceeded(ReducerCallResult result)
+    {
+        GD.Print($"[Demo] Reducer '{result.ReducerName}' succeeded (id: {result.InvocationId})");
+    }
+
+    private void OnReducerCallFailed(ReducerCallError error)
+    {
+        GD.Print($"[Demo] Reducer '{error.ReducerName}' failed — {error.FailureCategory}: {error.ErrorMessage} | guidance: {error.RecoveryGuidance}");
     }
 }
