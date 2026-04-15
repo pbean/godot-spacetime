@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GodotSpacetime.Auth;
 using GodotSpacetime.Connection;
+using GodotSpacetime.Reducers;
 using GodotSpacetime.Runtime.Cache;
 using GodotSpacetime.Runtime.Platform.DotNet;
 using GodotSpacetime.Subscriptions;
@@ -12,7 +13,7 @@ using GodotSpacetime.Runtime.Subscriptions;
 
 namespace GodotSpacetime.Runtime.Connection;
 
-internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscriptionEventSink, IRowChangeEventSink
+internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscriptionEventSink, IRowChangeEventSink, IReducerEventSink
 {
     private readonly ConnectionStateMachine _stateMachine = new();
     private readonly ReconnectPolicy _reconnectPolicy = new();
@@ -51,6 +52,10 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     public event Action<SubscriptionFailedEvent>? OnSubscriptionFailed;
 
     public event Action<RowChangedEvent>? OnRowChanged;
+
+    public event Action<ReducerCallResult>? OnReducerCallSucceeded;
+
+    public event Action<ReducerCallError>? OnReducerCallFailed;
 
     public ConnectionStatus CurrentStatus => _stateMachine.CurrentStatus;
 
@@ -243,6 +248,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         _reconnectPolicy.Reset();
         _cacheViewAdapter.SetDb(_adapter.GetDb());   // wire cache view on connect
         _reducerAdapter.SetConnection(_adapter.Connection);  // wire reducer adapter on connect
+        _reducerAdapter.RegisterCallbacks(this);             // wire reducer result callbacks
         var db = _adapter.GetDb();                   // wire row callbacks
         if (db != null)
             _rowCallbackAdapter.RegisterCallbacks(db, this);
@@ -377,6 +383,28 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     void IRowChangeEventSink.OnRowUpdated(string tableName, object oldRow, object newRow)
     {
         OnRowChanged?.Invoke(new RowChangedEvent(tableName, RowChangeType.Update, oldRow, newRow));
+    }
+
+    void IReducerEventSink.OnReducerCallSucceeded(string reducerName, string invocationId, DateTimeOffset calledAt)
+    {
+        OnReducerCallSucceeded?.Invoke(new ReducerCallResult(reducerName, invocationId, calledAt));
+    }
+
+    void IReducerEventSink.OnReducerCallFailed(
+        string reducerName,
+        string invocationId,
+        DateTimeOffset calledAt,
+        string errorMessage,
+        ReducerFailureCategory failureCategory,
+        string recoveryGuidance)
+    {
+        OnReducerCallFailed?.Invoke(new ReducerCallError(
+            reducerName,
+            invocationId,
+            calledAt,
+            errorMessage,
+            failureCategory,
+            recoveryGuidance));
     }
 
     private void HandleDisconnectError(Exception error)

@@ -244,17 +244,21 @@ def test_subscription_applied_event_is_class() -> None:
 # ReducerCallResult and ReducerCallError
 # ---------------------------------------------------------------------------
 
-def test_reducer_call_result_is_record() -> None:
+def test_reducer_call_result_is_partial_class_ref_counted() -> None:
+    # Story 4.2 replaced the stub record with partial class : RefCounted for Godot signal compatibility.
     content = _read("addons/godot_spacetime/src/Public/Reducers/ReducerCallResult.cs")
-    assert re.search(r"public\s+record\s+ReducerCallResult", content), (
-        "ReducerCallResult must be declared as a public record"
+    assert re.search(r"public\s+partial\s+class\s+ReducerCallResult", content), (
+        "ReducerCallResult must be declared as a public partial class (replaced record stub in Story 4.2 "
+        "for Godot signal compatibility — GodotObject-derived type required)"
     )
 
 
-def test_reducer_call_error_is_class() -> None:
+def test_reducer_call_error_is_partial_class_ref_counted() -> None:
+    # Story 4.2 replaced the stub class with partial class : RefCounted for Godot signal compatibility.
     content = _read("addons/godot_spacetime/src/Public/Reducers/ReducerCallError.cs")
-    assert re.search(r"public\s+class\s+ReducerCallError", content), (
-        "ReducerCallError must be declared as a public class"
+    assert re.search(r"public\s+partial\s+class\s+ReducerCallError", content), (
+        "ReducerCallError must be declared as a public partial class (replaced plain class stub in Story 4.2 "
+        "for Godot signal compatibility — GodotObject-derived type required)"
     )
 
 
