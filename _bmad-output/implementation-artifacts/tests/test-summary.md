@@ -434,3 +434,84 @@ contracts across four files plus two regression guard omissions. All gaps were a
 - All 12 gaps applied and verified green
 - Story 5.1 ready for sign-off; AC 1 through AC 3 are guarded by 47 contract tests
 - Stories 5.2 (auth) and 5.3 (subscriptions) will extend `DemoMain.cs` and `DemoBootstrap.cs`; add regression guards for those files accordingly
+
+---
+
+# Test Automation Summary — Story 5.2 QA Gap Fill
+
+**Date:** 2026-04-14
+**Story:** 5.2 — Extend the Sample Through Auth, Session Resume, and Live Subscription Flow
+**Baseline:** 1568 tests (end of Story 5.2 dev, 43 tests in `test_story_5_2_extend_sample_auth_subscription.py`)
+**After gap fill:** 1584 tests (+16)
+
+---
+
+## Gap Discovery Results
+
+All 43 pre-existing Story 5.2 tests passed. Gap analysis identified 16 untested behavioral
+contracts across `demo/DemoMain.cs` and `demo/README.md`. All gaps were auto-applied.
+
+---
+
+## Generated Tests
+
+### Gap Tests Added — `tests/test_story_5_2_extend_sample_auth_subscription.py`
+
+#### `demo/DemoMain.cs` implementation detail gaps (11)
+
+| Test | Gap Covered |
+|---|---|
+| `test_demo_main_cs_imports_system_linq` | `using System.Linq;` import required for `.ToList()` — subtask 1.1 |
+| `test_demo_main_cs_subscribe_query_uses_full_sql_string` | Exact SQL `"SELECT * FROM smoke_test"` in Subscribe call — subtask 1.4 |
+| `test_demo_main_cs_token_store_guards_settings_null` | `_client.Settings != null` null-guard before TokenStore assignment — subtask 1.3 |
+| `test_demo_main_cs_identity_handler_checks_null_or_empty` | `string.IsNullOrEmpty(e.Identity)` for new-session detection — subtask 1.5 |
+| `test_demo_main_cs_nulls_handle_after_unsubscribe` | `_subscriptionHandle = null` after Unsubscribe in `_ExitTree` — subtask 1.9 |
+| `test_demo_main_cs_materializes_rows_with_to_list` | `.ToList()` materializes `GetRows` IEnumerable for row count — subtask 1.6 |
+| `test_demo_main_cs_xml_doc_references_story_52` | XML doc comment references `Story 5.2` — subtask 1.10 |
+| `test_demo_main_cs_exit_tree_deregisters_connection_opened` | `-= OnConnectionOpened` deregistration prevents leak on scene reload — subtask 1.9 |
+| `test_demo_main_cs_exit_tree_deregisters_subscription_applied` | `-= OnSubscriptionApplied` deregistration — subtask 1.9 |
+| `test_demo_main_cs_exit_tree_deregisters_subscription_failed` | `-= OnSubscriptionFailed` deregistration — subtask 1.9 |
+| `test_demo_main_cs_exit_tree_deregisters_row_changed` | `-= OnRowChanged` deregistration — subtask 1.9 |
+
+#### `demo/README.md` documentation gaps (5)
+
+| Test | Gap Covered |
+|---|---|
+| `test_demo_readme_has_auth_and_session_resume_section` | Exact heading `## Auth and Session Resume` — subtask 2.1 |
+| `test_demo_readme_has_subscription_and_live_state_section` | Exact heading `## Subscription and Live State` — subtask 2.2 |
+| `test_demo_readme_documents_clear_token_async` | `ClearTokenAsync` reset instructions documented — subtask 2.1 |
+| `test_demo_readme_mentions_anonymous_session` | `anonymous` session default behavior documented — subtask 2.1 |
+| `test_demo_readme_shows_new_token_placeholder` | `(new — token will be stored)` placeholder documented — subtask 2.1 |
+
+---
+
+## Coverage
+
+| Area | Before (original) | After (gap fill) |
+|---|---|---|
+| Existence tests | 2 | 2 |
+| `demo/DemoMain.cs` content | 17 | 28 |
+| `demo/README.md` content | 10 | 15 |
+| Regression guards | 14 | 14 |
+| **Total** | **43** | **59** |
+
+## Test Count
+
+| Milestone | Count |
+|---|---|
+| End of Story 5.1 gap fill | 1516 |
+| Story 5.2 dev baseline (with original 43 tests) | 1568 |
+| After Story 5.2 QA gap fill | **1584** |
+
+## Test Run Result
+
+```
+59 passed in 0.03s   (test_story_5_2_extend_sample_auth_subscription.py)
+1584 passed in 0.44s (full pytest suite)
+```
+
+## Next Steps
+
+- All 16 gaps applied and verified green
+- Story 5.2 ready for sign-off; AC 1 through AC 3 are guarded by 59 contract tests
+- Story 5.3 will add reducer interaction to `DemoMain.cs`; regression guards for 5.2 DemoMain contracts are now in place

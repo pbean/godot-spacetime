@@ -84,6 +84,48 @@ CONNECTED — active session established
 
 The Output panel will first print `[Demo] Bootstrap ready — godot-spacetime addon enabled`, then log connection state transitions as `[Demo] Connection state: <state>`.
 
+## Auth and Session Resume
+
+`DemoMain` is wired with token persistence so authenticated sessions survive across runs.
+
+**Default behavior:** On the first run, `DemoMain` opens an anonymous session. The server assigns a new identity for that session.
+
+**Token persistence:** Before calling `Connect()`, `DemoMain` sets `Settings.TokenStore = new ProjectSettingsTokenStore()`. The SDK stores the server-assigned token under the Godot ProjectSetting key `spacetime/auth/token` once the session opens.
+
+**Session resume:** On subsequent runs the stored token is automatically restored — no code change is required. The Output panel will show the previously assigned identity instead of `"(new — token will be stored)"`.
+
+**Auth prerequisites:** The deployment must accept token-authenticated sessions. Both anonymous and token-authenticated sessions work with the smoke test module.
+
+**External project guidance:** External projects outside this repository cannot access `ProjectSettingsTokenStore` directly because it is `internal` to the addon assembly. External projects should implement the public `GodotSpacetime.Auth.ITokenStore` interface and assign their implementation to `Settings.TokenStore`.
+
+**Reset instructions:** To clear the stored token and start a fresh anonymous session, go to `Project > Project Settings` and remove the `spacetime/auth/token` entry, or, after confirming `Settings.TokenStore` is configured, call `await Settings.TokenStore.ClearTokenAsync()` before the next `Connect()` call.
+
+## Subscription and Live State
+
+After `Connected`, `DemoMain` subscribes to the smoke test table and observes live row changes.
+
+- After the connection reaches `Connected`, `DemoMain` calls `Subscribe(["SELECT * FROM smoke_test"])`. The Output panel shows `"[Demo] Subscribed to smoke_test — awaiting initial sync"`.
+- When the server confirms the subscription, `SubscriptionApplied` fires. `DemoMain` reads the local cache with `GetRows("SmokeTest").ToList()` and prints `"[Demo] Subscription applied — N row(s) in smoke_test"` where N is the current cache count.
+- Any live row mutations emit `"[Demo] Row changed — table: SmokeTest, type: Insert/Update/Delete"` for each change.
+- The SQL subscription query still uses `smoke_test`, but `GetRows()` follows the generated PascalCase table name `SmokeTest` defined in the runtime cache API.
+
+**Output panel expected message sequence:**
+
+```
+[Demo] Bootstrap ready — godot-spacetime addon enabled
+[Demo] Connection state: CONNECTING — opening a session to <host>/<database>
+[Demo] Connection state: CONNECTED — active session established
+[Demo] Subscribed to smoke_test — awaiting initial sync
+[Demo] Session identity: (new — token will be stored)
+[Demo] Subscription applied — N row(s) in smoke_test
+```
+
+The `Connected` line appears before the identity line because the SDK transitions to `ConnectionState.Connected` before it emits `ConnectionOpened`, and the demo starts the subscription from the `Connected` state handler.
+
+On the second run (session resumed), the `Connected` line changes to `"[Demo] Connection state: CONNECTED — authenticated session established"` and the identity line shows the previously assigned hex identity string instead of the `"(new — token will be stored)"` placeholder.
+
+The lifecycle terms `SubscriptionApplied` and `RowChanged` are defined in `docs/runtime-boundaries.md`.
+
 ## Reset to Clean State
 
 To reproduce the baseline workflow from scratch without maintainer intervention:
