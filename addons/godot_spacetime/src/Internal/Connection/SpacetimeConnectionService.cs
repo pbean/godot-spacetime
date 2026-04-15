@@ -7,6 +7,7 @@ using GodotSpacetime.Connection;
 using GodotSpacetime.Runtime.Cache;
 using GodotSpacetime.Runtime.Platform.DotNet;
 using GodotSpacetime.Subscriptions;
+using GodotSpacetime.Runtime.Reducers;
 using GodotSpacetime.Runtime.Subscriptions;
 
 namespace GodotSpacetime.Runtime.Connection;
@@ -25,6 +26,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private readonly SubscriptionRegistry _subscriptionRegistry = new();
     private readonly CacheViewAdapter _cacheViewAdapter = new();
     private readonly SpacetimeSdkRowCallbackAdapter _rowCallbackAdapter = new();
+    private readonly SpacetimeSdkReducerAdapter _reducerAdapter = new();
+    private readonly ReducerInvoker _reducerInvoker;
 
     /// <summary>
     /// Maps newHandleId → oldHandleId for in-flight overlap-first subscription replacements.
@@ -35,6 +38,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     public SpacetimeConnectionService()
     {
+        _reducerInvoker = new ReducerInvoker(_reducerAdapter);
         _stateMachine.StateChanged += status => OnStateChanged?.Invoke(status);
     }
 
@@ -216,6 +220,16 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     public IEnumerable<object> GetRows(string tableName) => _cacheViewAdapter.GetRows(tableName);
 
+    public void InvokeReducer(object reducerArgs)
+    {
+        if (CurrentStatus.State != ConnectionState.Connected)
+            throw new InvalidOperationException(
+                "InvokeReducer() requires an active Connected session. " +
+                "Call Connect() and wait for ConnectionState.Connected before invoking reducers.");
+
+        _reducerInvoker.Invoke(reducerArgs);
+    }
+
     public void FrameTick()
     {
         if (CurrentStatus.State == ConnectionState.Disconnected)
@@ -228,6 +242,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     {
         _reconnectPolicy.Reset();
         _cacheViewAdapter.SetDb(_adapter.GetDb());   // wire cache view on connect
+        _reducerAdapter.SetConnection(_adapter.Connection);  // wire reducer adapter on connect
         var db = _adapter.GetDb();                   // wire row callbacks
         if (db != null)
             _rowCallbackAdapter.RegisterCallbacks(db, this);
@@ -397,6 +412,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         _pendingReplacements.Clear();
         ClearCacheView();
         _adapter.Close();
+        _reducerAdapter.ClearConnection();
         _reconnectPolicy.Reset();
     }
 
