@@ -39,6 +39,9 @@ public partial class SpacetimeClient : Node
     [Signal]
     public delegate void SubscriptionAppliedEventHandler(SubscriptionAppliedEvent e);
 
+    [Signal]
+    public delegate void RowChangedEventHandler(RowChangedEvent e);
+
     [Export]
     public SpacetimeSettings? Settings { get; set; }
 
@@ -50,6 +53,7 @@ public partial class SpacetimeClient : Node
         _connectionService.OnStateChanged += HandleStateChanged;
         _connectionService.OnConnectionOpened += HandleConnectionOpened;
         _connectionService.OnSubscriptionApplied += HandleSubscriptionApplied;
+        _connectionService.OnRowChanged += HandleRowChanged;
     }
 
     public override void _ExitTree()
@@ -57,6 +61,7 @@ public partial class SpacetimeClient : Node
         _connectionService.OnStateChanged -= HandleStateChanged;
         _connectionService.OnConnectionOpened -= HandleConnectionOpened;
         _connectionService.OnSubscriptionApplied -= HandleSubscriptionApplied;
+        _connectionService.OnRowChanged -= HandleRowChanged;
     }
 
     public void Connect()
@@ -145,5 +150,16 @@ public partial class SpacetimeClient : Node
         }
 
         _signalAdapter.Dispatch(() => EmitSignal(SignalName.SubscriptionApplied, appliedEvent));
+    }
+
+    private void HandleRowChanged(RowChangedEvent rowChangedEvent)
+    {
+        if (_signalAdapter == null)
+        {
+            EmitSignal(SignalName.RowChanged, rowChangedEvent);
+            return;
+        }
+
+        _signalAdapter.Dispatch(() => EmitSignal(SignalName.RowChanged, rowChangedEvent));
     }
 }
