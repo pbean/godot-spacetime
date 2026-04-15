@@ -12,6 +12,14 @@ jobs:
   validate-release:
     runs-on: ubuntu-latest
 
+    env:
+      # Pinned per docs/compatibility-matrix.md and scripts/compatibility/support-baseline.json.
+      # Do not use `latest` — the release gate must be reproducible across reruns.
+      SPACETIME_VERSION: '2.1.0'
+      GODOT_VERSION: '4.6.2'
+      SPACETIME_DATA_DIR: /tmp/spacetime-e2e-data
+      SPACETIME_SERVER: local
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -26,12 +34,85 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up Rust (for spacetime module build)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install spacetime CLI (pinned ${{ env.SPACETIME_VERSION }})
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -sSf https://install.spacetimedb.com | \
+            bash -s -- --yes --version "${SPACETIME_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/spacetime" --version
+
+      - name: Install Godot ${{ env.GODOT_VERSION }} (mono)
+        run: |
+          set -euo pipefail
+          GODOT_ZIP="Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64.zip"
+          GODOT_DIR="Godot_v${GODOT_VERSION}-stable_mono_linux_x86_64"
+          curl -sSfL \
+            "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/${GODOT_ZIP}" \
+            -o /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          sudo mkdir -p /opt/godot-mono
+          sudo cp -r "/tmp/godot/${GODOT_DIR}/." /opt/godot-mono/
+          sudo ln -sf "/opt/godot-mono/${GODOT_DIR}.x86_64" /usr/local/bin/godot-mono
+          godot-mono --headless --version
+
+      - name: Build .NET project
+        run: |
+          set -euo pipefail
+          dotnet build godot-spacetime.sln -c Debug --no-restore 2>/dev/null || \
+            dotnet build godot-spacetime.sln -c Debug
+
+      - name: Start local SpacetimeDB daemon
+        run: |
+          set -euo pipefail
+          mkdir -p "${SPACETIME_DATA_DIR}"
+          nohup spacetime start \
+            --listen-addr 127.0.0.1:3000 \
+            --data-dir "${SPACETIME_DATA_DIR}" \
+            > /tmp/spacetime-start.log 2>&1 &
+          echo "SPACETIME_PID=$!" >> "$GITHUB_ENV"
+          # Register the `local` server nickname if the fresh CLI install did not
+          # already create one. Tolerate "already exists" so this step is idempotent.
+          spacetime server add local http://127.0.0.1:3000 --yes 2>/dev/null \
+            || spacetime server set-default local 2>/dev/null \
+            || true
+          # Wait for the daemon to accept connections. `spacetime server ping local`
+          # is the same probe used by tests/fixtures/spacetime_runtime.py — if the
+          # daemon is not reachable within 30s the release gate fails fast.
+          ready=0
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            if spacetime server ping local >/dev/null 2>&1; then
+              echo "SpacetimeDB daemon ready after ${i} iterations"
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != "1" ]; then
+            echo "SpacetimeDB daemon failed to start within 30s"
+            cat /tmp/spacetime-start.log || true
+            exit 1
+          fi
+
       - name: Validate release candidate
         run: |
+          set -euo pipefail
           if [ -n "${{ inputs.version }}" ]; then
             python3 scripts/packaging/validate-release-candidate.py --version "${{ inputs.version }}"
           else
             python3 scripts/packaging/validate-release-candidate.py
+          fi
+
+      - name: Stop local SpacetimeDB daemon
+        if: always()
+        run: |
+          if [ -n "${SPACETIME_PID:-}" ]; then
+            kill "${SPACETIME_PID}" 2>/dev/null || true
           fi
 
       - name: Upload validation report
@@ -40,4 +121,12 @@ jobs:
         with:
           name: validation-report
           path: release-candidates/validation-report-*.json
+          if-no-files-found: ignore
+
+      - name: Upload spacetime daemon log (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spacetime-daemon-log
+          path: /tmp/spacetime-start.log
           if-no-files-found: ignore

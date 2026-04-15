@@ -13,7 +13,7 @@ namespace GodotSpacetime.Demo;
 public partial class DemoMain : Node
 {
     private SpacetimeClient? _client;
-    private SubscriptionHandle? _subscriptionHandle;
+    private GodotSpacetime.Subscriptions.SubscriptionHandle? _subscriptionHandle;
 
     public override void _Ready()
     {

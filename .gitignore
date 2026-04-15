@@ -62,6 +62,13 @@ artifacts/
 dist/
 release/
 
+# Cargo build outputs from running `spacetime publish` against local modules.
+# The codegen script clears these on exit, but the publish path doesn't — so
+# developers and CI that run the dynamic lifecycle test (Story 7.1) would
+# otherwise see the tree perpetually dirty.
+spacetime/modules/*/target/
+spacetime/modules/*/Cargo.lock
+
 # General logs and patch leftovers
 *.log
 *.tmp

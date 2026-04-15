@@ -124,17 +124,30 @@ internal sealed class SpacetimeSdkReducerAdapter
         EventInfo evt,
         IReducerEventSink sink)
     {
+        // Skip the "Internal*" error-fallback event — it exists for unhandled-reducer
+        // forwarding, not per-reducer result routing. Everything else named "On<Name>"
+        // on RemoteReducers is a per-reducer event we want to wire.
+        if (evt.Name.StartsWith("Internal", StringComparison.Ordinal)) return;
+        if (!evt.Name.StartsWith("On", StringComparison.Ordinal)) return;
+
         var invoke = evt.EventHandlerType?.GetMethod("Invoke");
         if (invoke == null) return;
 
         var parameters = invoke.GetParameters();
 
-        // Only wire events with exactly 1 parameter — this naturally excludes
-        // InternalOnUnhandledReducerError (2 params: ReducerEventContext, Exception)
-        // and provides defense-in-depth against future SDK version changes.
-        if (parameters.Length != 1) return;
+        // Every per-reducer event has ReducerEventContext as its first parameter; any
+        // trailing parameters mirror the reducer's generated arguments. The dispatcher
+        // only needs the context — the args ride along inside ReducerEventContext.Event.
+        // Gate explicitly on the first-param TYPE name so a future SDK addition like
+        // `OnConnectionLost(ConnectionContext, ...)` on RemoteReducers cannot be
+        // mis-wired to the reducer dispatcher.
+        if (parameters.Length < 1) return;
+        if (parameters[0].ParameterType.Name != "ReducerEventContext") return;
 
         var ctxParam = Expression.Parameter(parameters[0].ParameterType, "ctx");
+        var trailingParams = new ParameterExpression[parameters.Length - 1];
+        for (var i = 1; i < parameters.Length; i++)
+            trailingParams[i - 1] = Expression.Parameter(parameters[i].ParameterType, $"arg{i}");
         var adapterConst = Expression.Constant(adapter);
         var sinkConst = Expression.Constant(sink);
         var ctxAsObject = Expression.Convert(ctxParam, typeof(object));
@@ -144,7 +157,11 @@ internal sealed class SpacetimeSdkReducerAdapter
             BindingFlags.NonPublic | BindingFlags.Instance)!;
 
         var body = Expression.Call(adapterConst, extractMethod, sinkConst, ctxAsObject);
-        var lambda = Expression.Lambda(evt.EventHandlerType!, body, ctxParam).Compile();
+        var lambdaParams = new ParameterExpression[parameters.Length];
+        lambdaParams[0] = ctxParam;
+        for (var i = 1; i < parameters.Length; i++)
+            lambdaParams[i] = trailingParams[i - 1];
+        var lambda = Expression.Lambda(evt.EventHandlerType!, body, lambdaParams).Compile();
         evt.AddEventHandler(reducers, lambda);
     }
 

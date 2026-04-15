@@ -614,6 +614,7 @@ namespace SpacetimeDB.Types
             return reducer switch
             {
                 Reducer.Ping args => Reducers.InvokePing(eventContext, args),
+                Reducer.PingInsert args => Reducers.InvokePingInsert(eventContext, args),
                 _ => throw new ArgumentOutOfRangeException("Reducer", $"Unknown reducer {reducer}")
             };
         }
