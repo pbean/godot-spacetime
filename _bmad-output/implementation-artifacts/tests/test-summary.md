@@ -375,6 +375,42 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 
 ---
 
+---
+
+## Story 2.4: Recover from Common Session and Identity Failures
+
+### Generated Tests (gap additions — 2026-04-14)
+
+**File:** `tests/test_story_2_4_failure_recovery.py`
+
+12 new tests added filling gaps discovered by QA pass. Total: 35 → **47** tests. All 47 pass.
+
+| New Test | Gap Filled | AC |
+|----------|------------|----|
+| `test_connection_auth_state_token_expired_after_auth_failed_in_enum` | Enum ordering (`TokenExpired` after `AuthFailed`) not verified | 2 |
+| `test_connection_auth_state_namespace_is_godot_spacetime_connection` | Namespace isolation not verified on this file | isolation |
+| `test_connection_service_anonymous_connect_fail_path_preserved` | Third `else` branch ("failed to connect:") not guarded | 3 |
+| `test_connection_service_restored_from_store_is_private_bool` | Type specificity `private bool` not verified | 1, 2 |
+| `test_connection_service_validate_settings_throws_argument_exception` | `ArgumentException` for missing Host/Database not verified | 3 |
+| `test_connection_service_finally_clears_restored_credentials` | Story 2.3 `finally` + `settings.Credentials = null` invariant not regression-guarded | structural |
+| `test_auth_status_panel_has_tools_preprocessor_guard` | `#if TOOLS` guard preservation explicitly required by spec but not tested | 4 |
+| `test_auth_status_panel_has_anonymous_label` | `ANONYMOUS` display label regression guard absent | regression |
+| `test_auth_status_panel_no_spacetimedb_reference` | Panel file missing from isolation boundary tests | isolation |
+| `test_runtime_boundaries_token_expired_only_for_token_restoration` | Doc precision: `TokenExpired` is only emitted for restoration sessions not tested | 2 |
+| `test_runtime_boundaries_auth_failed_described_in_failure_recovery` | Both failure categories in Failure Recovery section not verified | 1, 3 |
+| `test_runtime_boundaries_failure_recovery_references_connection_state_changed` | `ConnectionStateChanged` as observation surface not verified | 1 |
+
+### Original 35 tests (spec-mandated)
+
+- [x] `ConnectionAuthState.cs`: `TokenExpired` value, enum membership, `ClearTokenAsync` in XML doc (AC 2, 3)
+- [x] `SpacetimeConnectionService.cs`: `_restoredFromStore` field, assignment, `TokenExpired` usage, "stored token was rejected" message, ordering in `OnConnectError`, `AuthFailed` path preserved, both fields in `OnConnectError` (AC 1, 2)
+- [x] `ConnectionAuthStatusPanel.cs`: `TokenExpired` in switch, `TOKEN EXPIRED` label, `ClearTokenAsync` in action, `TokenExpired` before `AuthFailed` in file (AC 4)
+- [x] `docs/runtime-boundaries.md`: `TokenExpired` in table, `Failure Recovery` section, `ClearTokenAsync`, `ArgumentException`, token store reference (AC 1, 2, 3, 4)
+- [x] Regression guards: all four `ConnectionAuthState` prior values, `_credentialsProvided`/`restoredCredentials`/`GetTokenAsync`/`HandleDisconnectError` in service, `TOKEN RESTORED`/`AUTH FAILED`/`AUTH REQUIRED` in panel, `ITokenStore` interface methods (14 tests)
+- [x] Isolation guards: no `SpacetimeDB.*` in `ConnectionAuthState.cs` or `SpacetimeConnectionService.cs` (2 tests)
+
+---
+
 ## Totals
 
 | Suite | Tests |
@@ -390,9 +426,10 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 | `test_story_2_1_auth_config.py` | 57 |
 | `test_story_2_2_auth_session.py` | 53 |
 | `test_story_2_3_session_restore.py` | 29 |
-| **Full suite** | **614** |
+| `test_story_2_4_failure_recovery.py` | 47 |
+| **Full suite** | **665** |
 
-All 614 tests pass (`pytest -q` verified 2026-04-14).
+All 665 tests pass (`pytest -q` verified 2026-04-14).
 
 ## Next Steps
 
@@ -401,3 +438,4 @@ All 614 tests pass (`pytest -q` verified 2026-04-14).
 - Story 2.1 complete — auth/token storage boundary established with full contract coverage
 - Story 2.2 complete — auth session flow, WithToken injection, identity capture, auth state surfaces fully covered
 - Story 2.3 complete — token restore from ITokenStore wired into `Connect()`, all ACs and gaps covered
+- Story 2.4 complete — `TokenExpired` state, `_restoredFromStore` routing, panel recovery guidance, docs updated; all ACs covered

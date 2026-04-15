@@ -16,6 +16,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
     private string _database = string.Empty;
     private ITokenStore? _tokenStore;
     private bool _credentialsProvided;
+    private bool _restoredFromStore;
 
     public SpacetimeConnectionService()
     {
@@ -60,6 +61,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
         }
 
         _credentialsProvided = !string.IsNullOrWhiteSpace(settings.Credentials);
+        _restoredFromStore = restoredCredentials;   // ← track source of credentials for failure routing
         _reconnectPolicy.Reset();
 
         _stateMachine.Transition(ConnectionState.Connecting, $"CONNECTING — opening a session to {_host}/{_database}");
@@ -145,7 +147,15 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
 
         if (CurrentStatus.State == ConnectionState.Connecting)
         {
-            if (_credentialsProvided)
+            if (_restoredFromStore)
+            {
+                _stateMachine.Transition(
+                    ConnectionState.Disconnected,
+                    $"DISCONNECTED — stored token was rejected: {error.Message}",
+                    ConnectionAuthState.TokenExpired
+                );
+            }
+            else if (_credentialsProvided)
             {
                 _stateMachine.Transition(
                     ConnectionState.Disconnected,

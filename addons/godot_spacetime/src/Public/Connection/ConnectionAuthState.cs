@@ -17,4 +17,10 @@ public enum ConnectionAuthState
 
     /// <summary>Provided credentials were rejected. The connection did not complete due to an authentication failure.</summary>
     AuthFailed,
+
+    /// <summary>
+    /// A previously stored token was rejected by the server.
+    /// Clear the token store via <c>Settings.TokenStore?.ClearTokenAsync()</c> and reconnect to establish a new session.
+    /// </summary>
+    TokenExpired,
 }
