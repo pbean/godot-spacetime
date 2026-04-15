@@ -296,3 +296,68 @@ Senior review found one runtime teardown defect plus two documentation/evidence 
 
 - Senior review fixes applied and verified green
 - Story 4.3 ready for sign-off; AC 1 through AC 4 are guarded by 82 contract tests
+
+---
+
+# Test Automation Summary — Story 4.4 QA Gap Fill
+
+**Date:** 2026-04-14
+**Story:** 4.4 — Distinguish Recoverable Runtime Failures from Programming Faults
+**Baseline:** 1463 tests (end of Story 4.4 dev, 29 tests in `test_story_4_4_distinguish_recoverable_runtime_failures.py`)
+**After gap fill + senior review:** 1469 tests (+6)
+
+---
+
+## Gap Discovery Results
+
+All 29 pre-existing Story 4.4 tests passed. Gap analysis identified 5 behavioral contracts
+that were present in the implementation and docs but lacked test coverage. Senior review then
+added 1 more regression check to lock the `ConnectionClosed` clarification on the programming-fault
+docs path.
+
+---
+
+## Generated Tests
+
+### Gap Tests Added — `tests/test_story_4_4_distinguish_recoverable_runtime_failures.py`
+
+| Test | Gap Covered |
+|---|---|
+| `test_adapter_null_connection_throw_message_mentions_programming_fault` | Throw message in `Invoke()` contains `"This is a programming fault"` — validates diagnostic quality, not just throw presence (AC: 2, Task 1.1) |
+| `test_runtime_boundaries_has_reducer_error_model_section_heading` | Exact section heading `"Reducer Error Model: Programming Faults vs Recoverable Failures"` present in docs — validates the Task 3 structural deliverable (AC: 1, 2, 3) |
+| `test_adapter_extract_and_dispatch_uses_unknown_for_default_fallback` | `ReducerFailureCategory.Unknown` used in adapter — validates the `default`/fallback case maps to Unknown (regression guard) |
+| `test_spacetime_client_publish_validation_failure_fires_connection_state_changed_disconnected` | `ConnectionState.Disconnected` used in `PublishValidationFailure` context — validates the `ConnectionStateChanged(Disconnected)` side of fault surfacing alongside `GD.PushError` (AC: 2) |
+| `test_runtime_boundaries_has_key_rule_about_failure_category_check` | Doc contains "Key rule" / "Never check" guidance statement about not checking `ReducerCallError.FailureCategory` for programming faults (AC: 3) |
+| `test_runtime_boundaries_clarifies_programming_faults_do_not_emit_connection_closed` | Reducer docs explicitly state that the programming-fault validation path does not emit `ConnectionClosed`, preventing confusion between diagnostics and session-close events |
+
+---
+
+## Coverage
+
+| Area | Before (original) | After (gap fill) |
+|---|---|---|
+| `SpacetimeSdkReducerAdapter.cs` (null guard + dispatch) | 6 | 8 |
+| `docs/runtime-boundaries.md` (error model section) | 6 | 9 |
+| `SpacetimeClient.cs` (fault chain) | 5 | 6 |
+| Regression guards (recoverable types, signal bridge) | 12 | 12 |
+| **Total** | **29** | **35** |
+
+## Test Count
+
+| Milestone | Count |
+|---|---|
+| End of Story 4.3 senior review | 1434 |
+| Story 4.4 dev baseline | 1463 |
+| After Story 4.4 QA gap fill + senior review | **1469** |
+
+## Test Run Result
+
+```
+35 passed in 0.01s   (test_story_4_4_distinguish_recoverable_runtime_failures.py)
+1469 passed in 0.42s (full pytest suite)
+```
+
+## Next Steps
+
+- All 5 gap-fill tests plus 1 senior-review regression test applied and verified green
+- Story 4.4 ready for sign-off; AC 1 through AC 3 are guarded by 35 contract tests

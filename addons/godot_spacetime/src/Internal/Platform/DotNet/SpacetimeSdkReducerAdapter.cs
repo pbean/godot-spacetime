@@ -61,10 +61,9 @@ internal sealed class SpacetimeSdkReducerAdapter
     internal void Invoke(object reducerArgs)
     {
         if (_dbConnection == null)
-        {
-            Console.Error.WriteLine("[GodotSpacetime] SpacetimeSdkReducerAdapter.Invoke called with no active connection — ignoring.");
-            return;
-        }
+            throw new InvalidOperationException(
+                "SpacetimeSdkReducerAdapter.Invoke requires an active DbConnection. " +
+                "This is a programming fault — ensure ConnectionState.Connected is reached before invoking reducers.");
 
         if (reducerArgs is not IReducerArgs reducer)
             throw new ArgumentException(
