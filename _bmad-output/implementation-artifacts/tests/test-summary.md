@@ -1,66 +1,81 @@
-# Test Automation Summary — Story 3.3
+# Test Automation Summary — Story 3.4
 
-## Gap-fill tests added to `tests/test_story_3_3_observe_row_level_changes.py`
+## Generated Tests
 
-### RowChangedEvent.cs — readonly properties and nullable types
-- [x] `test_row_changed_event_table_name_is_get_only_property` — `TableName { get; }` has no setter
-- [x] `test_row_changed_event_old_row_is_nullable_object` — `object? OldRow` declared as nullable
-- [x] `test_row_changed_event_new_row_is_nullable_object` — `object? NewRow` declared as nullable
+### Contract / Static-Analysis Tests (pytest, Python)
+- [x] `tests/test_story_3_4_replace_active_subscriptions_safely_during_runtime.py` — 110 tests covering all story 3.4 deliverables
 
-### SpacetimeSdkRowCallbackAdapter.cs — imports, guards, and helpers
-- [x] `test_row_callback_adapter_imports_system_reflection` — `using System.Reflection;` present
-- [x] `test_row_callback_adapter_imports_linq_expressions` — `using System.Linq.Expressions;` present
-- [x] `test_row_callback_adapter_null_guards_arguments` — `ArgumentNullException.ThrowIfNull` guards
-- [x] `test_row_callback_adapter_uses_public_instance_binding_flags` — `BindingFlags.Public | BindingFlags.Instance`
-- [x] `test_row_callback_adapter_reads_public_fields_from_remote_tables` — `GetFields(BindingFlags.Public | BindingFlags.Instance)` present for generated field-backed table handles
-- [x] `test_row_callback_adapter_keeps_property_support_for_future_generator_shapes` — `GetProperties(BindingFlags.Public | BindingFlags.Instance)` retained as forward-compatible support
-- [x] `test_row_callback_adapter_tracks_registered_db_instances_to_avoid_duplicate_wiring` — `ConditionalWeakTable<object, RegistrationMarker>` tracks already-wired db objects
-- [x] `test_row_callback_adapter_short_circuits_when_same_db_is_registered_twice` — duplicate registration guard present
-- [x] `test_row_callback_adapter_dedupes_handles_seen_via_fields_and_properties` — `ReferenceEqualityComparer.Instance` prevents double-wiring the same handle through multiple member shapes
-- [x] `test_row_callback_adapter_has_try_wire_update_event_helper` — `TryWireUpdateEvent` helper exists
-- [x] `test_row_callback_adapter_has_try_wire_row_event_helper` — `TryWireRowEvent` helper exists
-- [x] `test_row_callback_adapter_register_callbacks_is_internal_method` — `internal void RegisterCallbacks`
+## Coverage by Component
 
-### Generated bindings sample — RemoteTables shape sanity checks
-- [x] `test_demo_generated_remote_tables_exposes_table_handles_as_public_fields` — sample generated bindings use public field-backed table handles
-- [x] `test_demo_generated_db_connection_exposes_db_as_single_property_instance` — sample generated `DbConnection` exposes a stable `Db` property
+| Component | Original Tests | Gap Tests Added | Total |
+|---|---|---|---|
+| `SubscriptionStatus.cs` | 8 | 0 | 8 |
+| `SubscriptionHandle.cs` | 11 | 7 | 18 |
+| `SubscriptionRegistry.cs` | 11 | 6 | 17 |
+| `SpacetimeSdkSubscriptionAdapter.cs` | 11 | 6 | 17 |
+| `SpacetimeConnectionService.cs` | 14 | 14 | 28 |
+| `SpacetimeClient.cs` | 6 | 5 | 11 |
+| Regression guards | 11 | 0 | 11 |
+| **Total** | **72** | **38** | **110** |
 
-### SpacetimeConnectionService.cs — invocation semantics
-- [x] `test_connection_service_calls_register_callbacks_on_adapter_field` — `_rowCallbackAdapter.RegisterCallbacks`
-- [x] `test_connection_service_calls_register_callbacks_with_this_as_sink` — `RegisterCallbacks(db, this)`
-- [x] `test_connection_service_invokes_on_row_changed_event` — `OnRowChanged?.Invoke` pattern
-- [x] `test_connection_service_insert_sets_null_old_row_and_row_as_new_row` — `RowChangeType.Insert, null, row`
-- [x] `test_connection_service_delete_sets_row_as_old_row_and_null_new_row` — `RowChangeType.Delete, row, null`
-- [x] `test_connection_service_update_passes_old_row_then_new_row` — `RowChangeType.Update, oldRow, newRow`
+## Gap Analysis Applied
 
-### SpacetimeClient.cs — delegate signature and thread-safe dispatch
-- [x] `test_spacetime_client_row_changed_delegate_accepts_row_changed_event_param` — `RowChangedEventHandler(RowChangedEvent`
-- [x] `test_spacetime_client_handle_row_changed_uses_signal_adapter_dispatch` — `_signalAdapter.Dispatch`
+### SubscriptionHandle.cs (7 new)
+- Namespace `GodotSpacetime.Subscriptions` declared
+- `partial class SubscriptionHandle` (Godot requirement)
+- Extends `RefCounted`
+- Constructor is `internal` (prevents external instantiation)
+- Uses `using Godot`
+- Uses `using System` (for Guid)
+- `Status` is NOT a Godot `[Signal]` (internal bookkeeping only)
 
-### docs/runtime-boundaries.md — section content and code examples
-- [x] `test_runtime_boundaries_has_observing_live_cache_updates_section` — section heading present
-- [x] `test_runtime_boundaries_has_row_changed_subscription_example` — `RowChanged +=` example
-- [x] `test_runtime_boundaries_has_switch_on_change_type_example` — `switch (e.ChangeType)` example
-- [x] `test_runtime_boundaries_documents_null_for_insert_old_row` — null semantics for Insert documented
-- [x] `test_runtime_boundaries_documents_null_for_delete_new_row` — null semantics for Delete documented
+### SubscriptionRegistry.cs (6 new)
+- `SubscriptionEntry` is a `sealed record`
+- `Register` has optional `sdkSubscription = null` parameter
+- `Unregister` method present
+- `Unregister(Guid)` parameter type verified
+- `UpdateSdkSubscription(Guid, object?)` parameter types verified
+- `Clear()` closes tracked handles before clearing registry state
 
-## Coverage
+### SpacetimeSdkSubscriptionAdapter.cs
+- `internal sealed class` declaration
+- Subscribe validates `connection` with `ArgumentNullException.ThrowIfNull`
+- Subscribe validates `querySqls`
+- Subscribe validates `sink`
+- Subscribe validates `handle`
+- `CreateAppliedCallback` private helper method present
+- `TryUnsubscribe()` degrades gracefully when the SDK close call throws
 
-| Component | Before | After | New |
-|-----------|--------|-------|-----|
-| RowChangeType.cs | 7 | 7 | 0 |
-| RowChangedEvent.cs | 10 | 13 | +3 |
-| SpacetimeSdkRowCallbackAdapter.cs | 14 | 26 | +12 |
-| Generated bindings sample | 0 | 2 | +2 |
-| SpacetimeConnectionService.cs | 13 | 19 | +6 |
-| SpacetimeClient.cs | 7 | 9 | +2 |
-| docs/runtime-boundaries.md | 9 | 14 | +5 |
-| Regression guards | 27 | 27 | 0 |
-| **Total** | **87** | **117** | **+30** |
+### SpacetimeConnectionService.cs (14 new)
+- `Unsubscribe` null-guards `handle` parameter
+- `Unsubscribe` calls `handle.Close()`
+- `Unsubscribe` calls `_subscriptionRegistry.Unregister(handle.HandleId)`
+- `Unsubscribe` cancels pending replacement bookkeeping for the handle
+- `ReplaceSubscription` null-guards `newQueries`
+- `ReplaceSubscription` registers new handle before SDK call
+- `ReplaceSubscription` wires `_pendingReplacements[newHandle.HandleId]`
+- `ReplaceSubscription` rejects handles already participating in an in-flight replacement
+- `_pendingReplacements` is `readonly`
+- `OnSubscriptionApplied` calls `Unregister(oldHandleId)` after overlap-first close
+- `OnSubscriptionError` calls `handle.Close()` on errored new handle
+- `OnSubscriptionError` best-effort closes the failed SDK subscription object
+- `ReplaceSubscription` catch path removes from `_pendingReplacements` and unregisters new handle
+- `ResetDisconnectedSessionState` clears `_pendingReplacements` on disconnect teardown
+
+### SpacetimeClient.cs (5 new)
+- Namespace `GodotSpacetime` declared
+- `ReplaceSubscription` return type is nullable `SubscriptionHandle?`
+- `Unsubscribe` wraps delegation in try/catch
+- `ReplaceSubscription` catches `InvalidOperationException` and returns null
+- `OnSubscriptionApplied` handler is wired (in `_EnterTree`)
 
 ## Results
 
 ```
-948 passed  (full suite — zero regressions)
-117 passed  (story 3.3 file only)
+1063 passed  (full suite — zero regressions)
+110 passed   (story 3.4 file only)
 ```
+
+## Next Steps
+- Run tests in CI on each PR
+- Story 3.5 will add `OnSubscriptionError` signal surface to gameplay code — add regression guard to this file at that point

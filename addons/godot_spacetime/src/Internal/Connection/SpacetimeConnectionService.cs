@@ -26,6 +26,13 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private readonly CacheViewAdapter _cacheViewAdapter = new();
     private readonly SpacetimeSdkRowCallbackAdapter _rowCallbackAdapter = new();
 
+    /// <summary>
+    /// Maps newHandleId → oldHandleId for in-flight overlap-first subscription replacements.
+    /// When the new subscription's OnSubscriptionApplied fires, the old subscription is closed.
+    /// When the new subscription errors, the old subscription is left untouched.
+    /// </summary>
+    private readonly Dictionary<Guid, Guid> _pendingReplacements = new();
+
     public SpacetimeConnectionService()
     {
         _stateMachine.StateChanged += status => OnStateChanged?.Invoke(status);
@@ -118,12 +125,89 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         try
         {
-            _subscriptionAdapter.Subscribe(connection, querySqls, this, handle);
+            var sdkSub = _subscriptionAdapter.Subscribe(connection, querySqls, this, handle);
+            _subscriptionRegistry.UpdateSdkSubscription(handle.HandleId, sdkSub);
             return handle;
         }
         catch
         {
             _subscriptionRegistry.Unregister(handle.HandleId);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Closes a previously applied subscription scope.
+    /// Safe to call when not connected — the handle is marked <c>Closed</c> and removed from the registry
+    /// regardless, but the SDK-level close is only attempted while connected.
+    /// Idempotent: calling with an already-<c>Closed</c> handle is a no-op.
+    /// </summary>
+    public void Unsubscribe(SubscriptionHandle handle)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+
+        if (handle.Status == SubscriptionStatus.Closed)
+            return;  // idempotent
+
+        RemovePendingReplacementReferences(handle.HandleId);
+
+        if (CurrentStatus.State == ConnectionState.Connected &&
+            _subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
+        {
+            _subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription);
+        }
+
+        handle.Close();
+        _subscriptionRegistry.Unregister(handle.HandleId);
+    }
+
+    /// <summary>
+    /// Replaces an active subscription with a new query set using overlap-first semantics.
+    /// The old subscription remains authoritative until the new subscription is confirmed applied.
+    /// If the new subscription errors before being applied, the old subscription is NOT closed.
+    /// </summary>
+    /// <param name="oldHandle">The currently active subscription handle to replace.</param>
+    /// <param name="newQueries">The new SQL query set for the replacement subscription.</param>
+    /// <returns>A new <see cref="SubscriptionHandle"/> for the in-flight replacement subscription.</returns>
+    public SubscriptionHandle ReplaceSubscription(SubscriptionHandle oldHandle, string[] newQueries)
+    {
+        ArgumentNullException.ThrowIfNull(oldHandle);
+        ArgumentNullException.ThrowIfNull(newQueries);
+
+        if (CurrentStatus.State != ConnectionState.Connected)
+            throw new InvalidOperationException(
+                "ReplaceSubscription() requires an active Connected session.");
+
+        if (oldHandle.Status != SubscriptionStatus.Active)
+            throw new InvalidOperationException(
+                "ReplaceSubscription() requires an Active subscription handle. " +
+                $"The provided handle has status: {oldHandle.Status}.");
+
+        if (HasPendingReplacementInFlight(oldHandle.HandleId))
+            throw new InvalidOperationException(
+                "ReplaceSubscription() requires a currently authoritative handle without another " +
+                "replacement already in flight.");
+
+        var connection = _adapter.Connection
+            ?? throw new InvalidOperationException(
+                "Not connected — no active IDbConnection.");
+
+        var newHandle = new SubscriptionHandle();
+        _subscriptionRegistry.Register(newHandle);
+
+        // Wire the overlap-first replacement hook: when newHandle is applied, close oldHandle
+        _pendingReplacements[newHandle.HandleId] = oldHandle.HandleId;
+
+        try
+        {
+            var sdkSub = _subscriptionAdapter.Subscribe(connection, newQueries, this, newHandle);
+            _subscriptionRegistry.UpdateSdkSubscription(newHandle.HandleId, sdkSub);
+            return newHandle;
+        }
+        catch
+        {
+            _pendingReplacements.Remove(newHandle.HandleId);
+            _subscriptionRegistry.Unregister(newHandle.HandleId);
             throw;
         }
     }
@@ -234,13 +318,33 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     void ISubscriptionEventSink.OnSubscriptionApplied(SubscriptionHandle handle)
     {
+        // Overlap-first replacement: if this is a pending replacement, close the old subscription now
+        if (_pendingReplacements.TryGetValue(handle.HandleId, out var oldHandleId))
+        {
+            _pendingReplacements.Remove(handle.HandleId);
+
+            if (_subscriptionRegistry.TryGetEntry(oldHandleId, out var oldEntry))
+            {
+                _subscriptionAdapter.TryUnsubscribe(oldEntry.SdkSubscription);
+                oldEntry.Handle.Supersede();
+                _subscriptionRegistry.Unregister(oldHandleId);
+            }
+        }
+
         OnSubscriptionApplied?.Invoke(new SubscriptionAppliedEvent(handle));
     }
 
     void ISubscriptionEventSink.OnSubscriptionError(SubscriptionHandle handle, Exception error)
     {
-        // Subscription failure recovery is implemented in Story 3.5.
-        // The error is observable via the SpacetimeDB SDK log output at the Platform/DotNet boundary.
+        // Remove pending replacement entry WITHOUT touching old handle — old remains active (AC: 5)
+        RemovePendingReplacementReferences(handle.HandleId);
+
+        if (_subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
+            _subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription);
+
+        _subscriptionRegistry.Unregister(handle.HandleId);
+        handle.Close();
+        // Story 3.5 will surface this error to gameplay code via a dedicated signal.
     }
 
     void IRowChangeEventSink.OnRowInserted(string tableName, object row)
@@ -288,9 +392,45 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private void ResetDisconnectedSessionState()
     {
         _subscriptionRegistry.Clear();
+        _pendingReplacements.Clear();
         ClearCacheView();
         _adapter.Close();
         _reconnectPolicy.Reset();
+    }
+
+    private bool HasPendingReplacementInFlight(Guid handleId)
+    {
+        if (_pendingReplacements.ContainsKey(handleId))
+            return true;
+
+        foreach (var pendingOldHandleId in _pendingReplacements.Values)
+        {
+            if (pendingOldHandleId == handleId)
+                return true;
+        }
+
+        return false;
+    }
+
+    private void RemovePendingReplacementReferences(Guid handleId)
+    {
+        _pendingReplacements.Remove(handleId);
+
+        List<Guid>? pendingHandlesToRemove = null;
+        foreach (var pair in _pendingReplacements)
+        {
+            if (pair.Value != handleId)
+                continue;
+
+            pendingHandlesToRemove ??= new List<Guid>();
+            pendingHandlesToRemove.Add(pair.Key);
+        }
+
+        if (pendingHandlesToRemove == null)
+            return;
+
+        foreach (var pendingHandleId in pendingHandlesToRemove)
+            _pendingReplacements.Remove(pendingHandleId);
     }
 
     private static void ValidateSettings(SpacetimeSettings settings)
