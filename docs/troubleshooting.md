@@ -1,0 +1,125 @@
+# Troubleshooting — GodotSpacetime SDK
+
+This guide covers common failure modes for installation, code generation, compatibility checks, connection, authentication, subscriptions, and reducers. Each section states the visible indicator, the likely cause, and the recovery action.
+
+`demo/README.md` is the source of truth for sample behavior. `docs/runtime-boundaries.md` is the source of truth for the runtime terminology used below.
+
+## Installation and Foundation
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| `validate-foundation.py` exits non-zero | `.NET SDK` not found, wrong Godot version, or solution restore failure | Follow the error output; confirm `.NET 8.0+` is installed and Godot `4.6.2` is the editor target |
+| Build errors on plugin enable | Solution incompatible with installed `.NET SDK` | Run `python3 scripts/compatibility/validate-foundation.py` and resolve reported issues; check `docs/install.md` for the supported baseline |
+
+The supported baseline is Godot `4.6.2`, `.NET 8.0+`, and SpacetimeDB `2.1+`. See `docs/compatibility-matrix.md` for the full declared baseline.
+
+## Code Generation
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| `"Spacetime Codegen"` panel shows `MISSING` | Bindings have not been generated yet | Run `bash scripts/codegen/generate-smoke-test.sh` from the repository root |
+| `"Spacetime Codegen"` panel shows `NOT CONFIGURED` | `spacetime/modules/smoke_test/` does not exist | Confirm the module directory exists, then rerun `bash scripts/codegen/generate-smoke-test.sh` |
+| `spacetime` CLI command not found | SpacetimeDB CLI not installed | Install the SpacetimeDB CLI `2.1+` |
+
+Running `bash scripts/codegen/generate-smoke-test.sh` clears the previous output before regenerating — no manual cleanup is required. Generated bindings are written to `demo/generated/smoke_test/`.
+
+See `docs/codegen.md` for the full generation workflow and module locations.
+
+## Compatibility Check
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| `"Spacetime Compat"` panel shows `INCOMPATIBLE` (bindings stale) | Module source has changed since bindings were last generated | Run `bash scripts/codegen/generate-smoke-test.sh` to regenerate |
+| `"Spacetime Compat"` panel shows `INCOMPATIBLE` (CLI version) | Bindings were generated with an older CLI that does not satisfy the declared `2.1+` baseline | Update the SpacetimeDB CLI to `2.1+`, then rerun `bash scripts/codegen/generate-smoke-test.sh` |
+
+The compatibility panel reads the CLI version embedded in generated bindings and compares it against the declared baseline. If regeneration does not resolve `INCOMPATIBLE`, check the CLI version with `spacetime version` and update to `2.1+`. See `docs/compatibility-matrix.md` for the declared baseline.
+
+## Connection
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| `"Spacetime Status"` panel shows `NOT CONFIGURED` | `SpacetimeSettings` resource not assigned to `SpacetimeClient`, or `SpacetimeClient` not registered as an autoload | Assign a `SpacetimeSettings` resource with `Host` and `Database` to the `SpacetimeClient` autoload entry in `Project > Project Settings > Autoload` |
+| `"Spacetime Status"` panel shows `DISCONNECTED` after `Connect()` | `Host` or `Database` does not point to a running SpacetimeDB deployment | Verify SpacetimeDB is running at the configured `Host` and that the `Database` name matches the deployed module |
+| `"Spacetime Status"` panel shows `DEGRADED` | The session hit a recoverable problem; reconnect policy is active | Wait for the reconnect policy to restore the session; check server availability if `DEGRADED` persists |
+| `ArgumentException` thrown from `Connect()` | `Host` or `Database` is missing from `SpacetimeSettings` | Set both `Host` and `Database` fields before calling `Connect()` |
+
+> **Note:** `ArgumentException` from `Connect()` is a **programming fault** — it fires synchronously before any connection attempt, not through the signal path. Set `Host` and `Database` before calling `Connect()`.
+
+Connection lifecycle state transitions are surfaced through the `SpacetimeClient.ConnectionStateChanged` signal. See `docs/connection.md` for the complete state table and editor panel labels.
+
+## Authentication
+
+Authentication failures surface through `SpacetimeClient.ConnectionStateChanged` — not as exceptions. The `ConnectionAuthState` value on the resulting `ConnectionStatus` identifies the failure category:
+
+Auth failures that prevent a session from reaching `Connected` do not emit `ConnectionClosed`.
+
+| ConnectionAuthState | Meaning | Recovery Action |
+|--------------------|---------|-----------------|
+| `TokenExpired` | A previously stored token was rejected by the server | Call `Settings.TokenStore?.ClearTokenAsync()` to remove the invalid token; the next `Connect()` call falls back to anonymous |
+| `AuthFailed` | Explicit credentials were rejected | Update `Settings.Credentials` with a valid token before reconnecting |
+
+If the configured `ITokenStore` throws, `Connect()` falls back to anonymous without corrupting session state. Check the `ITokenStore` implementation for errors.
+
+**Clearing a persisted token in the demo (`ProjectSettingsTokenStore`):**
+
+Go to `Project > Project Settings` and remove the `spacetime/auth/token` entry, or call:
+
+```csharp
+await Settings.TokenStore.ClearTokenAsync();
+```
+
+before the next `Connect()` call.
+
+See `docs/runtime-boundaries.md` for the complete `ConnectionAuthState` reference and `ITokenStore` interface.
+
+## Subscriptions
+
+Subscription failures surface through the `SpacetimeClient.SubscriptionFailed` signal. After the signal fires, the `SubscriptionHandle` transitions to `Closed` and the failed registry entry is cleaned up. Any previously authoritative subscription remains readable.
+
+Inspect `SubscriptionFailedEvent.ErrorMessage` to determine the recovery path:
+
+| ErrorMessage pattern | Likely Cause | Recovery Action |
+|---------------------|-------------|-----------------|
+| SQL syntax error | The query string passed to `Subscribe()` is malformed | Fix the query string; verify against the SQL subset supported by SpacetimeDB |
+| Table name not found | The table name in the query does not match the generated `RemoteTables` property | Regenerate bindings with `bash scripts/codegen/generate-smoke-test.sh`; confirm the module source exists |
+
+`Subscribe()` throws `InvalidOperationException` if called before `ConnectionState.Connected`. Wait for `SpacetimeClient.ConnectionStateChanged` to reach `Connected` before calling `Subscribe()`.
+
+See `docs/runtime-boundaries.md` for the full `SubscriptionHandle`, `SubscriptionAppliedEvent`, and `SubscriptionFailedEvent` API reference.
+
+## Reducers
+
+Reducer call outcomes fall into two distinct categories that must not be conflated.
+
+### Recoverable Runtime Failures
+
+These arrive asynchronously through the `SpacetimeClient.ReducerCallFailed` signal. Branch on `ReducerCallError.FailureCategory`:
+
+| ReducerFailureCategory | Meaning | Recovery Action |
+|------------------------|---------|-----------------|
+| `Failed` | Server rejected the reducer call (logic error or constraint) | Check server logs; retrying with the same arguments is unlikely to succeed |
+| `OutOfEnergy` | Server ran out of energy | Back off and retry after a delay |
+| `Unknown` | Status could not be determined | Handle defensively; do not retry automatically without additional context |
+
+### Programming Faults
+
+These surface via `GD.PushError` in the Godot Output panel and `SpacetimeClient.ConnectionStateChanged`. The `ReducerCallFailed` signal does **not** fire for programming faults.
+
+| Fault | Visible Indicator | Recovery Action |
+|-------|-------------------|-----------------|
+| `InvokeReducer()` called while not `Connected` | `GD.PushError` + `ConnectionStateChanged(Disconnected)` | Wait for `ConnectionState.Connected` before calling `InvokeReducer()` |
+| `InvokeReducer()` called with `null` | `GD.PushError` + `ConnectionStateChanged(Disconnected)` | Pass a valid generated `IReducerArgs` instance (e.g., `new SpacetimeDB.Types.Reducer.Ping()`) |
+| `InvokeReducer()` called with a non-`IReducerArgs` type | `GD.PushError` + `ConnectionStateChanged(Disconnected)` | Use a generated binding type from `SpacetimeDB.Types.Reducer.*` |
+
+For the expected success and failure output message sequences, see the `## Reducer Interaction` section in `demo/README.md`.
+
+See `docs/runtime-boundaries.md` for the complete reducer error model and `ReducerFailureCategory` reference.
+
+## See Also
+
+- `docs/runtime-boundaries.md` — Complete public API vocabulary, all lifecycle states, signals, and the reducer error model
+- `demo/README.md` — Canonical end-to-end sample; expected output message sequences for each lifecycle phase
+- `docs/quickstart.md` — Step-by-step setup guide with phase-specific failure indicators and recovery actions
+- `docs/install.md` — Installation prerequisites and foundation validation details
+- `docs/codegen.md` — Code generation workflow and module locations
+- `docs/compatibility-matrix.md` — Declared supported version baseline
