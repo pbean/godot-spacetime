@@ -44,6 +44,9 @@ packages/
 coverage/
 coverage*.xml
 
+# Release candidate archives (produced by scripts/packaging/package-release.py)
+release-candidates/
+
 # Python caches from validation scripts and pytest
 __pycache__/
 *.py[cod]
