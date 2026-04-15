@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Godot;
 using GodotSpacetime.Connection;
+using GodotSpacetime.Reducers;
 using GodotSpacetime.Runtime.Connection;
 using GodotSpacetime.Runtime.Events;
 using GodotSpacetime.Subscriptions;
@@ -45,6 +46,25 @@ public partial class SpacetimeClient : Node
     [Signal]
     public delegate void RowChangedEventHandler(RowChangedEvent e);
 
+    /// <summary>
+    /// Emitted when the server confirms a reducer invocation as committed.
+    /// Arrives asynchronously — the signal fires in a later frame than <c>InvokeReducer()</c> was called,
+    /// after <c>FrameTick</c> delivers the queued server message.
+    /// Inspect <c>ReducerCallResult.InvocationId</c> to correlate the outcome to a specific reducer call.
+    /// <c>GodotSignalAdapter</c> deferred dispatch ensures this fires on the main thread.
+    /// </summary>
+    [Signal]
+    public delegate void ReducerCallSucceededEventHandler(ReducerCallResult result);
+
+    /// <summary>
+    /// Emitted when a reducer invocation is rejected or fails on the server.
+    /// Arrives asynchronously — the signal fires in a later frame than <c>InvokeReducer()</c> was called.
+    /// Inspect <c>ReducerCallError.InvocationId</c> to correlate the failure and
+    /// <c>ReducerCallError.RecoveryGuidance</c> to branch on retry vs. user feedback paths.
+    /// </summary>
+    [Signal]
+    public delegate void ReducerCallFailedEventHandler(ReducerCallError error);
+
     [Export]
     public SpacetimeSettings? Settings { get; set; }
 
@@ -58,6 +78,8 @@ public partial class SpacetimeClient : Node
         _connectionService.OnSubscriptionApplied += HandleSubscriptionApplied;
         _connectionService.OnSubscriptionFailed += HandleSubscriptionFailed;
         _connectionService.OnRowChanged += HandleRowChanged;
+        _connectionService.OnReducerCallSucceeded += HandleReducerCallSucceeded;
+        _connectionService.OnReducerCallFailed += HandleReducerCallFailed;
     }
 
     public override void _ExitTree()
@@ -67,6 +89,8 @@ public partial class SpacetimeClient : Node
         _connectionService.OnSubscriptionApplied -= HandleSubscriptionApplied;
         _connectionService.OnSubscriptionFailed -= HandleSubscriptionFailed;
         _connectionService.OnRowChanged -= HandleRowChanged;
+        _connectionService.OnReducerCallSucceeded -= HandleReducerCallSucceeded;
+        _connectionService.OnReducerCallFailed -= HandleReducerCallFailed;
     }
 
     public void Connect()
@@ -249,5 +273,27 @@ public partial class SpacetimeClient : Node
         }
 
         _signalAdapter.Dispatch(() => EmitSignal(SignalName.RowChanged, rowChangedEvent));
+    }
+
+    private void HandleReducerCallSucceeded(ReducerCallResult result)
+    {
+        if (_signalAdapter == null)
+        {
+            EmitSignal(SignalName.ReducerCallSucceeded, result);
+            return;
+        }
+
+        _signalAdapter.Dispatch(() => EmitSignal(SignalName.ReducerCallSucceeded, result));
+    }
+
+    private void HandleReducerCallFailed(ReducerCallError error)
+    {
+        if (_signalAdapter == null)
+        {
+            EmitSignal(SignalName.ReducerCallFailed, error);
+            return;
+        }
+
+        _signalAdapter.Dispatch(() => EmitSignal(SignalName.ReducerCallFailed, error));
     }
 }

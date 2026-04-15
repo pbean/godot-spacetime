@@ -176,7 +176,36 @@ Row change dispatch is mediated by `SpacetimeSdkRowCallbackAdapter` (in `Interna
 
 A **Reducer** is a server-side callable procedure. You invoke reducers through generated binding types. The SDK surfaces the outcome as a [`ReducerCallResult`](../addons/godot_spacetime/src/Public/Reducers/ReducerCallResult.cs) on success, or a [`ReducerCallError`](../addons/godot_spacetime/src/Public/Reducers/ReducerCallError.cs) when the call fails or is rejected.
 
-Reducer results arrive asynchronously as SDK events, not as direct return values, because the execution happens on the server.
+Reducer results arrive **asynchronously** — the signal fires in a later frame than `InvokeReducer()` was called, after `FrameTick` delivers queued server messages. Gameplay code must **not** expect synchronous correlation between `InvokeReducer()` and `ReducerCallSucceeded`/`ReducerCallFailed`. Use `InvocationId` to correlate the outcome to the specific reducer call that produced it.
+
+**`ReducerCallResult` properties:**
+
+| Property | Type | Meaning |
+|----------|------|---------|
+| `ReducerName` | `string` | Identifies which reducer produced this result. |
+| `InvocationId` | `string` | Opaque SDK-generated identifier for the specific reducer invocation instance. |
+| `CalledAt` | `DateTimeOffset` | UTC timestamp recorded when the SDK accepted the reducer invocation. |
+| `CompletedAt` | `DateTimeOffset` | UTC timestamp recorded when the SDK surfaced the committed result. |
+
+**`ReducerCallError` properties:**
+
+| Property | Type | Meaning |
+|----------|------|---------|
+| `ReducerName` | `string` | Identifies which reducer failed. |
+| `InvocationId` | `string` | Opaque SDK-generated identifier for the specific reducer invocation instance. |
+| `CalledAt` | `DateTimeOffset` | UTC timestamp recorded when the SDK accepted the reducer invocation. |
+| `ErrorMessage` | `string` | Human-readable failure description from the server. |
+| `FailureCategory` | `ReducerFailureCategory` | Failure category for branching gameplay error handling. |
+| `RecoveryGuidance` | `string` | User-safe retry or feedback guidance derived from the failure category. |
+| `FailedAt` | `DateTimeOffset` | UTC timestamp recorded when the SDK surfaced the failure. |
+
+**`ReducerFailureCategory` enum — failure branching guidance:**
+
+| Value | When it fires | Recommended action |
+|-------|---------------|-------------------|
+| `Failed` | Server rejected the reducer (logic error or constraint) | Check server logs or module logic; retrying with the same arguments is unlikely to succeed. |
+| `OutOfEnergy` | Server ran out of energy | Back off and retry after a delay, or inform the player that the action is temporarily unavailable. |
+| `Unknown` | Status could not be determined | Handle defensively; do not retry automatically without additional context. |
 
 ### Reducer Invocation
 
@@ -202,6 +231,28 @@ SpacetimeClient.InvokeReducer(object reducerArgs)
 // After ConnectionState.Connected is reached:
 _client.InvokeReducer(new SpacetimeDB.Types.Reducer.Ping());
 ```
+
+### Reducer Results
+
+After an invocation reaches the server, the SDK delivers the outcome through an outbound callback path:
+
+```
+SpacetimeSdkReducerAdapter.RegisterCallbacks → per-reducer event hooks
+  └─ TrackPendingInvocation(reducerName) when InvokeReducer() is accepted
+  └─ ExtractAndDispatch(IReducerEventSink sink, object ctx)
+       └─ TakePendingInvocation(reducerName)
+       └─ status: Status.Committed → IReducerEventSink.OnReducerCallSucceeded
+       └─ status: Status.Failed → IReducerEventSink.OnReducerCallFailed (ReducerFailureCategory.Failed + RecoveryGuidance)
+       └─ status: Status.OutOfEnergy → IReducerEventSink.OnReducerCallFailed (ReducerFailureCategory.OutOfEnergy + RecoveryGuidance)
+SpacetimeConnectionService.IReducerEventSink → ReducerCallResult / ReducerCallError payloads
+SpacetimeClient.ReducerCallSucceeded / ReducerCallFailed signals → gameplay code
+```
+
+**Isolation zone:** `SpacetimeDB.Status` pattern matching happens **only** inside `SpacetimeSdkReducerAdapter.ExtractAndDispatch`. No `SpacetimeDB.*` types cross the boundary into `IReducerEventSink`, `SpacetimeConnectionService`, or `SpacetimeClient`. `ReducerFailureCategory` is a plain C# enum in the public `GodotSpacetime.Reducers` namespace with no `SpacetimeDB` dependency.
+
+**Callback registration and correlation:** `RegisterCallbacks` is called in `IConnectionEventSink.OnConnected` immediately after `SetConnection`, when the connection is live. A `ConditionalWeakTable` idempotency guard on the `Reducers` object prevents double-registration if the same connection instance survives a `Degraded → Connected` recovery. The reducer adapter also tracks pending invocations by reducer name so each callback can surface the original `InvocationId` and `CalledAt` back to gameplay code.
+
+**`ReducerCallSucceeded` / `ReducerCallFailed` signals:** These are dispatched through `GodotSignalAdapter.Dispatch` (CallDeferred), ensuring they fire on the main thread. Gameplay code can safely read from the scene tree in signal handlers. Inspect `ReducerCallError.RecoveryGuidance` when presenting player-safe feedback for failed reducer calls.
 
 ### Generated Bindings
 

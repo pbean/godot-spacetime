@@ -63,3 +63,92 @@ behavioral contracts across four files. All gaps were auto-applied.
 
 - All gaps applied; senior review follow-up coverage added for the compile-surface and invalid-argument boundary behavior
 - Run tests in CI with `python -m pytest tests/`
+
+---
+
+# Test Automation Summary — Story 4.2 Gap Analysis
+
+**Date:** 2026-04-14
+**Story:** 4.2 — Surface Reducer Results and Runtime Status to Gameplay Code
+
+---
+
+## Gap Discovery Results
+
+All 77 pre-existing Story 4.2 tests passed. Gap analysis identified 34 untested
+behavioral contracts across seven files. All gaps were auto-applied.
+
+---
+
+## Generated Tests
+
+### Gap Tests Added — `tests/test_story_4_2_surface_reducer_results.py`
+
+| Area | Tests Added | Key Contracts Covered |
+|---|---|---|
+| `ReducerCallResult.cs` | 3 | `DateTimeOffset CalledAt` type; `string ReducerName` type; `using System;` import |
+| `ReducerCallError.cs` | 3 | Full 3-param constructor signature; `DateTimeOffset FailedAt` type; `ReducerFailureCategory FailureCategory` type |
+| `ReducerFailureCategory.cs` | 2 | No SpacetimeDB import (isolation); exactly 3 enum cases |
+| `SpacetimeSdkReducerAdapter.cs` | 9 | `internal sealed` class; `using SpacetimeDB/GodotSpacetime.Reducers/System.Runtime.CompilerServices`; namespace; `private static ExtractAndDispatch`; `default:` case; interface param signatures |
+| `SpacetimeConnectionService.cs` | 4 | `event Action<ReducerCallResult>?` type; `event Action<ReducerCallError>?` type; Reducers import; `SetConnection` precedes `RegisterCallbacks` ordering |
+| `SpacetimeClient.cs` | 6 | Reducers import; delegate param types; null-guard on `_signalAdapter`; lambda dispatch for both signals |
+| `docs/runtime-boundaries.md` | 7 | `ExtractAndDispatch` path; isolation zone; `ReducerName`/`CalledAt`/`ErrorMessage`/`FailedAt` properties; `GodotSignalAdapter`/main-thread dispatch |
+
+---
+
+## Coverage
+
+| File | Before (original) | After (gap fill) |
+|---|---|---|
+| `ReducerCallResult.cs` | 7 tests | 10 tests |
+| `ReducerCallError.cs` | 8 tests | 11 tests |
+| `ReducerFailureCategory.cs` | 6 tests | 8 tests |
+| `SpacetimeSdkReducerAdapter.cs` | 15 tests | 24 tests |
+| `SpacetimeConnectionService.cs` | 10 tests | 14 tests |
+| `SpacetimeClient.cs` | 13 tests | 19 tests |
+| `docs/runtime-boundaries.md` | 8 tests | 15 tests |
+| Dynamic lifecycle + Regressions | 10 tests | 10 tests |
+
+## Test Count
+
+| Milestone | Count |
+|---|---|
+| End of Story 4.1 gap fill | 1210 |
+| Story 4.2 (original) | +77 → 1287 |
+| After Story 4.2 gap fill | **+34 → 1321** |
+| After senior review auto-fix | **+16 → 1342** |
+
+## Test Run Result
+
+```
+111 passed in 0.04s   (test_story_4_2_surface_reducer_results.py)
+```
+
+## Senior Review Auto-Fix
+
+The Story 4.2 review found two contract gaps: reducer outcomes could not distinguish repeated
+in-flight invocations of the same reducer, and failure payloads did not expose an explicit
+user-safe recovery path. The review auto-fix expanded the reducer payload surface and added
+regression coverage for the new contract.
+
+### Senior Review Follow-up Tests — `tests/test_story_4_2_surface_reducer_results.py`
+
+| Area | Tests Added | Key Contracts Covered |
+|---|---|---|
+| `ReducerCallResult.cs` | 5 | `InvocationId`; `CompletedAt`; richer internal constructor correlation data |
+| `ReducerCallError.cs` | 7 | `InvocationId`; `CalledAt`; `RecoveryGuidance`; richer constructor correlation data |
+| `SpacetimeSdkReducerAdapter.cs` | 4 | pending-invocation tracking; instance `ExtractAndDispatch`; richer sink signatures; recovery-guidance mapping |
+| `docs/runtime-boundaries.md` | 5 | `InvocationId`; `CompletedAt`; `RecoveryGuidance`; pending-invocation correlation path |
+
+### Senior Review Validation Result
+
+```
+127 passed in 0.06s   (tests/test_story_4_2_surface_reducer_results.py)
+1342 passed in 0.38s  (full pytest suite)
+dotnet build godot-spacetime.sln -c Debug  # succeeded
+```
+
+## Next Steps
+
+- All gaps and senior-review fixes applied and verified green
+- Story 4.2 ready for sign-off; AC 1 through AC 3 are now guarded by the reviewed contract suite
