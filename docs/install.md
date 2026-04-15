@@ -10,6 +10,8 @@ If you are validating a candidate addon artifact instead of the repository sourc
 - `.NET` SDK: `8.0+`
 - SpacetimeDB baseline: `2.1+`
 
+For the authoritative version support declarations, support status definitions, and compatibility triage timeline, see [docs/compatibility-matrix.md](compatibility-matrix.md).
+
 ## Bootstrap Steps
 
 1. Install a supported Godot `.NET` editor and a local `.NET 8` SDK.
@@ -44,3 +46,4 @@ The support baseline metadata used by the validation script lives in `scripts/co
 - `docs/quickstart.md` for the step-by-step first-setup workflow from install through first connection.
 - `demo/README.md` for the canonical end-to-end sample covering install, code generation, connection, auth, subscriptions, and reducer interaction.
 - `docs/runtime-boundaries.md` for the full runtime API reference covering connection, auth, subscriptions, cache, reducers, and the complete public SDK concept vocabulary.
+- `docs/compatibility-matrix.md` for the canonical supported version matrix, support policy, and compatibility triage timeline.
