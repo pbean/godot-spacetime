@@ -515,3 +515,97 @@ contracts across `demo/DemoMain.cs` and `demo/README.md`. All gaps were auto-app
 - All 16 gaps applied and verified green
 - Story 5.2 ready for sign-off; AC 1 through AC 3 are guarded by 59 contract tests
 - Story 5.3 will add reducer interaction to `DemoMain.cs`; regression guards for 5.2 DemoMain contracts are now in place
+
+---
+
+# Test Automation Summary — Story 5.3 QA Gap Fill
+
+**Date:** 2026-04-14
+**Story:** 5.3 — Demonstrate Reducer Interaction and Troubleshooting Comparison Paths
+**Baseline:** 1642 tests (end of Story 5.3 dev, 51 tests in `test_story_5_3_demonstrate_reducer_interaction.py`)
+**After gap fill:** 1654 tests (+12)
+
+---
+
+## Gap Discovery Results
+
+All 51 pre-existing Story 5.3 tests passed. Gap analysis identified 12 untested behavioral
+contracts across `demo/DemoMain.cs`, `demo/scenes/reducer_smoke.tscn`, and `demo/README.md`.
+All gaps were auto-applied.
+
+---
+
+## Generated Tests
+
+### Gap Tests Added — `tests/test_story_5_3_demonstrate_reducer_interaction.py`
+
+#### `demo/DemoMain.cs` — signal wiring pattern and `_ExitTree` cleanup (4)
+
+| Test | Gap Covered |
+|---|---|
+| `test_demo_main_cs_uses_double_wiring_pattern_for_reducer_call_succeeded` | `-= then +=` pattern for `ReducerCallSucceeded` prevents duplicate handler registration (Task 1.3) |
+| `test_demo_main_cs_uses_double_wiring_pattern_for_reducer_call_failed` | `-= then +=` pattern for `ReducerCallFailed` prevents duplicate handler registration (Task 1.3) |
+| `test_demo_main_cs_unsubscribes_reducer_call_succeeded_in_exit_tree` | `ReducerCallSucceeded -=` in `_ExitTree()` section — lifecycle cleanup (Task 1.4) |
+| `test_demo_main_cs_unsubscribes_reducer_call_failed_in_exit_tree` | `ReducerCallFailed -=` in `_ExitTree()` section — lifecycle cleanup (Task 1.4) |
+
+#### `demo/DemoMain.cs` — exact log output format (1)
+
+| Test | Gap Covered |
+|---|---|
+| `test_demo_main_cs_has_ping_invoked_log_message` | `[Demo] Ping reducer invoked` log prefix — confirms exact documented output sequence (AC: 1) |
+
+#### `demo/scenes/reducer_smoke.tscn` — minimal scene structural content (2)
+
+| Test | Gap Covered |
+|---|---|
+| `test_reducer_smoke_tscn_has_godot4_format_version` | `format=3` — Godot 4 scene format declaration (Task 4.4) |
+| `test_reducer_smoke_tscn_has_node_type_node` | `type="Node"` — minimal placeholder node with no script (Task 4.4) |
+
+#### `demo/README.md` — section ordering (2)
+
+| Test | Gap Covered |
+|---|---|
+| `test_demo_readme_reducer_section_placed_after_subscription_section` | `## Reducer Interaction` index > `## Subscription and Live State` index (Task 3.1) |
+| `test_demo_readme_reducer_section_placed_before_reset_section` | `## Reducer Interaction` index < `## Reset to Clean State` index (Task 3.1) |
+
+#### `demo/README.md` — async delivery and enum value documentation depth (3)
+
+| Test | Gap Covered |
+|---|---|
+| `test_demo_readme_mentions_frame_tick_for_async_delivery` | `FrameTick` explains async delivery mechanism for troubleshooting (AC: 2) |
+| `test_demo_readme_documents_out_of_energy_failure_category` | `OutOfEnergy` enum value documented for category-based branching (AC: 2) |
+| `test_demo_readme_references_reducer_failure_category_cs_path` | `ReducerFailureCategory.cs` SDK path cross-referenced for enum documentation (AC: 3) |
+
+---
+
+## Coverage
+
+| Area | Before (original) | After (gap fill) |
+|---|---|---|
+| Existence tests | 3 | 3 |
+| `demo/DemoMain.cs` content | 17 | 22 |
+| `demo/README.md` content | 11 | 16 |
+| `demo/scenes/reducer_smoke.tscn` content | 2 | 4 |
+| Regression guards | 18 | 18 |
+| **Total** | **51** | **63** |
+
+## Test Count
+
+| Milestone | Count |
+|---|---|
+| End of Story 5.2 gap fill | 1584 |
+| Story 5.3 dev baseline (with original 51 tests) | 1642 |
+| After Story 5.3 QA gap fill | **1654** |
+
+## Test Run Result
+
+```
+63 passed in 0.04s   (test_story_5_3_demonstrate_reducer_interaction.py)
+1654 passed in 0.45s (full pytest suite)
+```
+
+## Next Steps
+
+- All 12 gaps applied and verified green
+- Story 5.3 ready for sign-off; AC 1 through AC 3 are guarded by 63 contract tests
+- Epic 5 demo is complete — connect → authenticate → subscribe → observe → mutate → react to result is fully covered

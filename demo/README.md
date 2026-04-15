@@ -126,6 +126,40 @@ On the second run (session resumed), the `Connected` line changes to `"[Demo] Co
 
 The lifecycle terms `SubscriptionApplied` and `RowChanged` are defined in `docs/runtime-boundaries.md`.
 
+## Reducer Interaction
+
+After `SubscriptionApplied` fires and the row count is logged, `DemoMain` automatically invokes the `Ping` reducer via `InvokeReducer(new Reducer.Ping())`.
+
+The call is asynchronous — the server acknowledgement arrives in a later frame (after `FrameTick` delivers the queued server message).
+
+**Success path:** `ReducerCallSucceeded` fires with the reducer name and invocation ID:
+
+```
+[Demo] Reducer 'ping' succeeded (id: ...)
+```
+
+**Failure path:** `ReducerCallFailed` fires with failure category (`Failed`, `OutOfEnergy`, or `Unknown`) plus machine-readable `RecoveryGuidance` for branching:
+
+```
+[Demo] Reducer 'ping' failed — <category>: <message> | guidance: <guidance>
+```
+
+**Troubleshooting comparison path:** The expected output for a healthy Ping flow is `succeeded` — if `ReducerCallFailed` appears instead, the category and recovery guidance identify whether to retry, check server logs, or back off.
+
+**Programming faults are a separate path:** If `InvokeReducer()` is called before `Connected`, with `null`, or with a non-generated reducer arg, the SDK surfaces the problem through `ConnectionStateChanged` plus `GD.PushError`. Those calling-code faults do **not** fire `ReducerCallFailed`, so compare them against the runtime-boundaries programming-fault guidance instead of the server-failure path above.
+
+**Full expected Output panel sequence (extending the Story 5.2 sequence):**
+
+```
+[Demo] Subscription applied — N row(s) in smoke_test
+[Demo] Ping reducer invoked — awaiting server acknowledgement
+[Demo] Reducer 'ping' succeeded (id: <invocation-id>)
+```
+
+The lifecycle terms `ReducerCallSucceeded` and `ReducerCallFailed` are defined in `docs/runtime-boundaries.md`.
+
+`ReducerFailureCategory` values (`Failed`, `OutOfEnergy`, `Unknown`) are documented in the SDK at `addons/godot_spacetime/src/Public/Reducers/ReducerFailureCategory.cs`.
+
 ## Reset to Clean State
 
 To reproduce the baseline workflow from scratch without maintainer intervention:
