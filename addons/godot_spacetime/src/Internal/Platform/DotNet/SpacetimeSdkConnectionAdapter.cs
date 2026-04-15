@@ -31,6 +31,13 @@ internal sealed class SpacetimeSdkConnectionAdapter
 {
     private IDbConnection? _dbConnection;
 
+    /// <summary>
+    /// Provides access to the active <c>IDbConnection</c> for sibling adapters in the
+    /// <c>Internal/Platform/DotNet/</c> isolation zone (e.g., <c>SpacetimeSdkSubscriptionAdapter</c>).
+    /// Returns <c>null</c> when not connected.
+    /// </summary>
+    internal IDbConnection? Connection => _dbConnection;
+
     public void Open(SpacetimeSettings settings, IConnectionEventSink sink)
     {
         ArgumentNullException.ThrowIfNull(settings);

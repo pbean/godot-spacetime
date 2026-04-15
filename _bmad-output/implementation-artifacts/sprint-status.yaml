@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-12T00:51:47-0700
-last_updated: 2026-04-14T17:00:04-0700
+last_updated: 2026-04-14T17:36:47-0700
 project: godot-spacetime
 project_key: NOKEY
 tracking_system: file-system
@@ -59,9 +59,9 @@ development_status:
   2-2-authenticate-a-client-session-through-supported-identity-flows: done
   2-3-restore-a-previous-session-from-persisted-auth-state: done
   2-4-recover-from-common-session-and-identity-failures: done
-  epic-2-retrospective: optional
-  epic-3: backlog
-  3-1-apply-a-subscription-and-receive-initial-synchronized-state: backlog
+  epic-2-retrospective: done
+  epic-3: in-progress
+  3-1-apply-a-subscription-and-receive-initial-synchronized-state: done
   3-2-read-synchronized-local-cache-data-from-godot-code: backlog
   3-3-observe-row-level-changes-for-subscribed-data: backlog
   3-4-replace-active-subscriptions-safely-during-runtime: backlog

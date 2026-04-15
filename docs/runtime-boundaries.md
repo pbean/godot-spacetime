@@ -84,9 +84,23 @@ event stream for expected runtime failures, not catch exceptions from the SDK co
 
 ### Subscriptions — `SubscriptionHandle` and `SubscriptionAppliedEvent`
 
-A **Subscription** is a query scope that keeps a local cache slice synchronized with the server. You apply a subscription through `SpacetimeClient`; the SDK returns a [`SubscriptionHandle`](../addons/godot_spacetime/src/Public/Subscriptions/SubscriptionHandle.cs) you can use to manage that scope.
+A **Subscription** is a query scope that keeps a local cache slice synchronized with the server. You apply a subscription through [`SpacetimeClient.Subscribe(string[] queries)`](../addons/godot_spacetime/src/Public/SpacetimeClient.cs) once `ConnectionState.Connected` is reached. The SDK returns a [`SubscriptionHandle`](../addons/godot_spacetime/src/Public/Subscriptions/SubscriptionHandle.cs) immediately; the handle's `HandleId` is stable for the lifetime of the scope.
 
-When the initial synchronization for a subscription is complete, a [`SubscriptionAppliedEvent`](../addons/godot_spacetime/src/Public/Subscriptions/SubscriptionAppliedEvent.cs) is raised. After that point, the local cache reflects the subscribed data.
+**Applying a subscription:**
+```csharp
+// In a ConnectionStateChanged handler or after verifying Connected state:
+var handle = SpacetimeClient.Subscribe(new[] { "SELECT * FROM player" });
+// handle.HandleId is assigned immediately and stays stable
+```
+
+**Guard:** `Subscribe()` throws `InvalidOperationException` if called before `ConnectionState.Connected`. It is safe to call from a `ConnectionStateChanged` handler once the state reaches `Connected`.
+
+When the initial synchronization is complete, the `SpacetimeClient.SubscriptionApplied` signal fires with a [`SubscriptionAppliedEvent`](../addons/godot_spacetime/src/Public/Subscriptions/SubscriptionAppliedEvent.cs). After that point, the local cache reflects the subscribed data and is ready to read through generated binding types.
+
+| `SubscriptionAppliedEvent` property | Type | Meaning |
+|-------------------------------------|------|---------|
+| `Handle` | `SubscriptionHandle` | The handle whose subscription is now synchronized. Same object returned from `Subscribe()`. |
+| `AppliedAt` | `DateTimeOffset` | UTC timestamp at which the SDK confirmed the subscription was applied. |
 
 ### Cache
 

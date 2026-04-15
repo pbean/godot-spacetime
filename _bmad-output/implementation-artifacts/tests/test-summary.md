@@ -411,6 +411,50 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 
 ---
 
+---
+
+---
+
+## Story 3.1: Apply a Subscription and Receive Initial Synchronized State
+
+### Generated Tests (gap additions — 2026-04-14)
+
+**File:** `tests/test_story_3_1_subscription_apply.py`
+
+14 new tests added filling gaps discovered by QA pass. Total: 61 → **75** tests. All 75 pass.
+
+| New Test | Gap Filled | AC |
+|----------|------------|----|
+| `test_subscription_handle_has_using_system` | `using System;` directive not verified | 3 |
+| `test_subscription_handle_constructor_body_assigns_new_guid` | `HandleId = Guid.NewGuid()` constructor body assignment not verified | 3 |
+| `test_subscription_applied_event_constructor_assigns_handle` | `Handle = handle` constructor body assignment not verified | 2 |
+| `test_subscription_applied_event_constructor_assigns_applied_at_utc_now` | `AppliedAt = DateTimeOffset.UtcNow` constructor body assignment not verified | 2 |
+| `test_subscription_registry_has_unregister_method` | `Unregister(Guid)` method not tested | 3 |
+| `test_subscription_registry_active_handles_is_ireadonlycollection` | `IReadOnlyCollection<SubscriptionHandle>` return type not verified | 3 |
+| `test_connection_service_subscribe_registers_handle_in_registry` | `_subscriptionRegistry.Register(handle)` call in `Subscribe` not tested | 3 |
+| `test_connection_service_on_subscription_error_is_noop_stub` | `OnSubscriptionError` no-op stub referencing Story 3.5 not tested | 1 |
+| `test_connection_service_has_using_runtime_subscriptions` | `using GodotSpacetime.Runtime.Subscriptions;` import not verified | 3 |
+| `test_subscription_adapter_has_argument_null_guards` | `ArgumentNullException.ThrowIfNull` null guards in `Subscribe` not tested | 1 |
+| `test_spacetime_client_has_using_godot_spacetime_subscriptions` | `using GodotSpacetime.Subscriptions;` import not verified | 1 |
+| `test_spacetime_client_handle_subscription_applied_emits_signal` | `EmitSignal(SignalName.SubscriptionApplied, ...)` not tested | 2 |
+| `test_spacetime_client_handle_subscription_applied_uses_dispatch` | `_signalAdapter.Dispatch` pattern in `HandleSubscriptionApplied` not tested | 2 |
+| `test_connection_adapter_connection_property_has_null_when_not_connected_doc` | XML doc comment "Returns null when not connected" not verified | 1 |
+
+### Original 61 tests (spec-mandated)
+
+- [x] `SubscriptionHandle.cs`: HandleId, Guid type, internal ctor, namespace (AC 3)
+- [x] `SubscriptionAppliedEvent.cs`: Handle, AppliedAt, DateTimeOffset, internal ctor, `using System;`, namespace (AC 2)
+- [x] `SpacetimeSdkSubscriptionAdapter.cs`: ISubscriptionEventSink interface, Subscribe params, Expression trees, InvokeWithDelegate, CreateAppliedCallback, CreateErrorCallback, no stub pragma (AC 1, 2)
+- [x] `SpacetimeSdkConnectionAdapter.cs`: Connection property presence and `_dbConnection` return (AC 1)
+- [x] `SpacetimeConnectionService.cs`: ISubscriptionEventSink, adapter/registry fields, OnSubscriptionApplied event, Subscribe method, Connected guard, fires event, constructs event, Clear on disconnect (AC 1, 2, 3)
+- [x] `SpacetimeClient.cs`: SubscriptionAppliedEventHandler signal, Subscribe method, SubscriptionHandle return, HandleSubscriptionApplied, wire/unwire in Enter/ExitTree (AC 1, 2, 3)
+- [x] `SubscriptionRegistry.cs`: Register, Clear, ActiveHandles, namespace, no SpacetimeDB reference (AC 3)
+- [x] `docs/runtime-boundaries.md`: Subscribe usage, SubscriptionApplied signal, HandleId, AppliedAt, InvalidOperationException guard (AC 1, 2, 3)
+- [x] Regression guards: connection adapter Open/FrameTick/Close/IConnectionEventSink, service OnStateChanged/OnConnectionOpened/OnConnectError/IConnectionEventSink, SpacetimeClient ConnectionStateChanged/ConnectionOpenedEventHandler/Connect()/Disconnect()
+- [x] Isolation guards: no SpacetimeDB.* in SpacetimeConnectionService, SpacetimeClient, SubscriptionRegistry
+
+---
+
 ## Totals
 
 | Suite | Tests |
@@ -427,9 +471,10 @@ All 59 failing tests represent unimplemented Story 1.9 deliverables. 10 tests al
 | `test_story_2_2_auth_session.py` | 53 |
 | `test_story_2_3_session_restore.py` | 29 |
 | `test_story_2_4_failure_recovery.py` | 47 |
-| **Full suite** | **665** |
+| `test_story_3_1_subscription_apply.py` | 75 |
+| **Full suite** | **741** |
 
-All 665 tests pass (`pytest -q` verified 2026-04-14).
+All 741 tests pass (`pytest -q` verified 2026-04-14).
 
 ## Next Steps
 
@@ -439,3 +484,4 @@ All 665 tests pass (`pytest -q` verified 2026-04-14).
 - Story 2.2 complete — auth session flow, WithToken injection, identity capture, auth state surfaces fully covered
 - Story 2.3 complete — token restore from ITokenStore wired into `Connect()`, all ACs and gaps covered
 - Story 2.4 complete — `TokenExpired` state, `_restoredFromStore` routing, panel recovery guidance, docs updated; all ACs covered
+- Story 3.1 complete — subscription apply surface (SubscriptionHandle, SubscriptionAppliedEvent, SubscriptionRegistry, adapter, service, client), all ACs and gaps covered

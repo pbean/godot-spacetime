@@ -4,10 +4,12 @@ using System.Threading.Tasks;
 using GodotSpacetime.Auth;
 using GodotSpacetime.Connection;
 using GodotSpacetime.Runtime.Platform.DotNet;
+using GodotSpacetime.Subscriptions;
+using GodotSpacetime.Runtime.Subscriptions;
 
 namespace GodotSpacetime.Runtime.Connection;
 
-internal sealed class SpacetimeConnectionService : IConnectionEventSink
+internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscriptionEventSink
 {
     private readonly ConnectionStateMachine _stateMachine = new();
     private readonly ReconnectPolicy _reconnectPolicy = new();
@@ -17,6 +19,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
     private ITokenStore? _tokenStore;
     private bool _credentialsProvided;
     private bool _restoredFromStore;
+    private readonly SpacetimeSdkSubscriptionAdapter _subscriptionAdapter = new();
+    private readonly SubscriptionRegistry _subscriptionRegistry = new();
 
     public SpacetimeConnectionService()
     {
@@ -26,6 +30,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
     public event Action<ConnectionStatus>? OnStateChanged;
 
     public event Action<ConnectionOpenedEvent>? OnConnectionOpened;
+
+    public event Action<SubscriptionAppliedEvent>? OnSubscriptionApplied;
 
     public ConnectionStatus CurrentStatus => _stateMachine.CurrentStatus;
 
@@ -88,6 +94,32 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
     public void Disconnect()
     {
         Disconnect("DISCONNECTED — not connected to SpacetimeDB");
+    }
+
+    public SubscriptionHandle Subscribe(string[] querySqls)
+    {
+        if (CurrentStatus.State != ConnectionState.Connected)
+            throw new InvalidOperationException(
+                "Subscribe() requires an active Connected session. " +
+                "Call Connect() and wait for ConnectionState.Connected before applying subscriptions.");
+
+        var connection = _adapter.Connection
+            ?? throw new InvalidOperationException(
+                "Not connected — no active IDbConnection. Call Connect() first.");
+
+        var handle = new SubscriptionHandle();
+        _subscriptionRegistry.Register(handle);
+
+        try
+        {
+            _subscriptionAdapter.Subscribe(connection, querySqls, this, handle);
+            return handle;
+        }
+        catch
+        {
+            _subscriptionRegistry.Unregister(handle.HandleId);
+            throw;
+        }
     }
 
     public void FrameTick()
@@ -187,6 +219,17 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
         HandleDisconnectError(error);
     }
 
+    void ISubscriptionEventSink.OnSubscriptionApplied(SubscriptionHandle handle)
+    {
+        OnSubscriptionApplied?.Invoke(new SubscriptionAppliedEvent(handle));
+    }
+
+    void ISubscriptionEventSink.OnSubscriptionError(SubscriptionHandle handle, Exception error)
+    {
+        // Subscription failure recovery is implemented in Story 3.5.
+        // The error is observable via the SpacetimeDB SDK log output at the Platform/DotNet boundary.
+    }
+
     private void HandleDisconnectError(Exception error)
     {
         if (CurrentStatus.State == ConnectionState.Connected && _reconnectPolicy.TryBeginRetry(out var attemptNumber, out var delay))
@@ -203,6 +246,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink
 
     private void Disconnect(string description)
     {
+        _subscriptionRegistry.Clear();
         _adapter.Close();
         _reconnectPolicy.Reset();
 
