@@ -37,6 +37,16 @@ public partial class SpacetimeClient : Node
     [Signal]
     public delegate void ConnectionOpenedEventHandler(ConnectionOpenedEvent e);
 
+    /// <summary>
+    /// Emitted when a live connection session ends.
+    /// Fires after <c>ConnectionStateChanged</c> transitions to <c>Disconnected</c>.
+    /// <c>ConnectionCloseReason.Clean</c>: explicit <c>Disconnect()</c> or clean server-side close.
+    /// <c>ConnectionCloseReason.Error</c>: session lost due to network or protocol error after being established.
+    /// Does NOT fire for failed connect attempts — <c>ConnectionStateChanged</c> covers those via Disconnected state.
+    /// </summary>
+    [Signal]
+    public delegate void ConnectionClosedEventHandler(ConnectionClosedEvent e);
+
     [Signal]
     public delegate void SubscriptionAppliedEventHandler(SubscriptionAppliedEvent e);
 
@@ -75,6 +85,7 @@ public partial class SpacetimeClient : Node
         _signalAdapter ??= new GodotSignalAdapter(this);
         _connectionService.OnStateChanged += HandleStateChanged;
         _connectionService.OnConnectionOpened += HandleConnectionOpened;
+        _connectionService.OnConnectionClosed += HandleConnectionClosed;
         _connectionService.OnSubscriptionApplied += HandleSubscriptionApplied;
         _connectionService.OnSubscriptionFailed += HandleSubscriptionFailed;
         _connectionService.OnRowChanged += HandleRowChanged;
@@ -86,6 +97,7 @@ public partial class SpacetimeClient : Node
     {
         _connectionService.OnStateChanged -= HandleStateChanged;
         _connectionService.OnConnectionOpened -= HandleConnectionOpened;
+        _connectionService.OnConnectionClosed -= HandleConnectionClosed;
         _connectionService.OnSubscriptionApplied -= HandleSubscriptionApplied;
         _connectionService.OnSubscriptionFailed -= HandleSubscriptionFailed;
         _connectionService.OnRowChanged -= HandleRowChanged;
@@ -240,6 +252,17 @@ public partial class SpacetimeClient : Node
         }
 
         _signalAdapter.Dispatch(() => EmitSignal(SignalName.ConnectionOpened, openedEvent));
+    }
+
+    private void HandleConnectionClosed(ConnectionClosedEvent e)
+    {
+        if (_signalAdapter == null)
+        {
+            EmitSignal(SignalName.ConnectionClosed, e);
+            return;
+        }
+
+        _signalAdapter.Dispatch(() => EmitSignal(SignalName.ConnectionClosed, e));
     }
 
     private void HandleSubscriptionApplied(SubscriptionAppliedEvent appliedEvent)

@@ -23,6 +23,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private ITokenStore? _tokenStore;
     private bool _credentialsProvided;
     private bool _restoredFromStore;
+    private bool _isTearingDownConnection;
     private readonly SpacetimeSdkSubscriptionAdapter _subscriptionAdapter = new();
     private readonly SubscriptionRegistry _subscriptionRegistry = new();
     private readonly CacheViewAdapter _cacheViewAdapter = new();
@@ -46,6 +47,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     public event Action<ConnectionStatus>? OnStateChanged;
 
     public event Action<ConnectionOpenedEvent>? OnConnectionOpened;
+
+    public event Action<ConnectionClosedEvent>? OnConnectionClosed;
 
     public event Action<SubscriptionAppliedEvent>? OnSubscriptionApplied;
 
@@ -102,8 +105,14 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         }
         catch (Exception ex)
         {
-            ResetDisconnectedSessionState();
-            _stateMachine.Transition(ConnectionState.Disconnected, $"DISCONNECTED — failed to start the connection: {ex.Message}");
+            RunConnectionTeardown(() =>
+            {
+                ResetDisconnectedSessionState();
+                _stateMachine.Transition(
+                    ConnectionState.Disconnected,
+                    $"DISCONNECTED — failed to start the connection: {ex.Message}"
+                );
+            });
             throw;
         }
         finally
@@ -298,30 +307,34 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         if (CurrentStatus.State == ConnectionState.Connecting)
         {
-            ResetDisconnectedSessionState();
-            if (_restoredFromStore)
+            RunConnectionTeardown(() =>
             {
-                _stateMachine.Transition(
-                    ConnectionState.Disconnected,
-                    $"DISCONNECTED — stored token was rejected: {error.Message}",
-                    ConnectionAuthState.TokenExpired
-                );
-            }
-            else if (_credentialsProvided)
-            {
-                _stateMachine.Transition(
-                    ConnectionState.Disconnected,
-                    $"DISCONNECTED — authentication failed: {error.Message}",
-                    ConnectionAuthState.AuthFailed
-                );
-            }
-            else
-            {
+                ResetDisconnectedSessionState();
+                if (_restoredFromStore)
+                {
+                    _stateMachine.Transition(
+                        ConnectionState.Disconnected,
+                        $"DISCONNECTED — stored token was rejected: {error.Message}",
+                        ConnectionAuthState.TokenExpired
+                    );
+                    return;
+                }
+
+                if (_credentialsProvided)
+                {
+                    _stateMachine.Transition(
+                        ConnectionState.Disconnected,
+                        $"DISCONNECTED — authentication failed: {error.Message}",
+                        ConnectionAuthState.AuthFailed
+                    );
+                    return;
+                }
+
                 _stateMachine.Transition(
                     ConnectionState.Disconnected,
                     $"DISCONNECTED — failed to connect: {error.Message}"
                 );
-            }
+            });
             return;
         }
 
@@ -330,6 +343,9 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     void IConnectionEventSink.OnDisconnected(Exception? error)
     {
+        if (_isTearingDownConnection || CurrentStatus.State == ConnectionState.Disconnected)
+            return;
+
         if (error == null)
         {
             Disconnect("DISCONNECTED — not connected to SpacetimeDB");
@@ -418,18 +434,41 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 $"DEGRADED — session experiencing issues; reconnecting (attempt {attemptNumber}/{_reconnectPolicy.MaxAttempts}, backoff {delay.TotalSeconds:0.#}s): {error.Message}"
             );
             return;
+            // NO ConnectionClosed here — session is degraded, not ended
         }
 
-        ResetDisconnectedSessionState();
-        _stateMachine.Transition(ConnectionState.Disconnected, $"DISCONNECTED — connection lost: {error.Message}");
+        RunConnectionTeardown(() =>
+        {
+            ResetDisconnectedSessionState();
+            _stateMachine.Transition(ConnectionState.Disconnected, $"DISCONNECTED — connection lost: {error.Message}");
+        });
+        OnConnectionClosed?.Invoke(new ConnectionClosedEvent
+        {
+            CloseReason = ConnectionCloseReason.Error,
+            ErrorMessage = error.Message,
+            ClosedAt = DateTimeOffset.UtcNow,
+        });
     }
 
     private void Disconnect(string description)
     {
-        ResetDisconnectedSessionState();
+        var prevState = CurrentStatus.State;
+        RunConnectionTeardown(() =>
+        {
+            ResetDisconnectedSessionState();
+            if (CurrentStatus.State != ConnectionState.Disconnected)
+                _stateMachine.Transition(ConnectionState.Disconnected, description);
+        });
 
-        if (CurrentStatus.State != ConnectionState.Disconnected)
-            _stateMachine.Transition(ConnectionState.Disconnected, description);
+        // Fire ConnectionClosed only for live sessions (Connected or Degraded).
+        // The prevState check prevents false positives for Connecting→Disconnected failures.
+        // Teardown reentrancy is handled by RunConnectionTeardown + the OnDisconnected guard.
+        if (prevState is ConnectionState.Connected or ConnectionState.Degraded)
+            OnConnectionClosed?.Invoke(new ConnectionClosedEvent
+            {
+                CloseReason = ConnectionCloseReason.Clean,
+                ClosedAt = DateTimeOffset.UtcNow,
+            });
     }
 
     private void ClearCacheView() => _cacheViewAdapter.SetDb(null);
@@ -477,6 +516,20 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         foreach (var pendingHandleId in pendingHandlesToRemove)
             _pendingReplacements.Remove(pendingHandleId);
+    }
+
+    private void RunConnectionTeardown(Action teardown)
+    {
+        var wasTearingDownConnection = _isTearingDownConnection;
+        _isTearingDownConnection = true;
+        try
+        {
+            teardown();
+        }
+        finally
+        {
+            _isTearingDownConnection = wasTearingDownConnection;
+        }
     }
 
     private static void ValidateSettings(SpacetimeSettings settings)
