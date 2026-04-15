@@ -102,8 +102,8 @@ internal sealed class SpacetimeSdkSubscriptionAdapter
         }
         catch (Exception)
         {
-            // Story 3.5 will add an explicit failure surface; for now unsubscribe is best-effort so
-            // the caller can still mark the handle terminal and clean up local bookkeeping.
+            // SDK close is best-effort so the caller can still mark the handle terminal
+            // and clean up local bookkeeping even when the reflected method fails.
             return false;
         }
     }

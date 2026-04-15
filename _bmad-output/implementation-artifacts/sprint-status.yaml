@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-12T00:51:47-0700
-last_updated: 2026-04-14T19:01:00-0700
+last_updated: 2026-04-14T19:23:56-0700
 project: godot-spacetime
 project_key: NOKEY
 tracking_system: file-system
@@ -65,7 +65,7 @@ development_status:
   3-2-read-synchronized-local-cache-data-from-godot-code: done
   3-3-observe-row-level-changes-for-subscribed-data: done
   3-4-replace-active-subscriptions-safely-during-runtime: done
-  3-5-detect-invalid-subscription-states-and-failures: backlog
+  3-5-detect-invalid-subscription-states-and-failures: done
   epic-3-retrospective: optional
   epic-4: backlog
   4-1-invoke-generated-reducers-from-the-godot-facing-sdk: backlog

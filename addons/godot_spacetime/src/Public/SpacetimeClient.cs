@@ -20,7 +20,7 @@ namespace GodotSpacetime;
 /// <list type="bullet">
 ///   <item>Configure <see cref="SpacetimeSettings"/> (Host, Database)</item>
 ///   <item>Call Connect() — watch ConnectionState events for lifecycle transitions</item>
-///   <item>Apply subscriptions — receive SubscriptionAppliedEvent when cache is ready</item>
+///   <item>Apply subscriptions — receive SubscriptionAppliedEvent when cache is ready, or SubscriptionFailedEvent when a request is rejected or later errors</item>
 ///   <item>Read cache via GetRows() and cast rows to generated binding types — invoke reducers as needed</item>
 /// </list>
 /// </summary>
@@ -40,6 +40,9 @@ public partial class SpacetimeClient : Node
     public delegate void SubscriptionAppliedEventHandler(SubscriptionAppliedEvent e);
 
     [Signal]
+    public delegate void SubscriptionFailedEventHandler(SubscriptionFailedEvent e);
+
+    [Signal]
     public delegate void RowChangedEventHandler(RowChangedEvent e);
 
     [Export]
@@ -53,6 +56,7 @@ public partial class SpacetimeClient : Node
         _connectionService.OnStateChanged += HandleStateChanged;
         _connectionService.OnConnectionOpened += HandleConnectionOpened;
         _connectionService.OnSubscriptionApplied += HandleSubscriptionApplied;
+        _connectionService.OnSubscriptionFailed += HandleSubscriptionFailed;
         _connectionService.OnRowChanged += HandleRowChanged;
     }
 
@@ -61,6 +65,7 @@ public partial class SpacetimeClient : Node
         _connectionService.OnStateChanged -= HandleStateChanged;
         _connectionService.OnConnectionOpened -= HandleConnectionOpened;
         _connectionService.OnSubscriptionApplied -= HandleSubscriptionApplied;
+        _connectionService.OnSubscriptionFailed -= HandleSubscriptionFailed;
         _connectionService.OnRowChanged -= HandleRowChanged;
     }
 
@@ -116,7 +121,9 @@ public partial class SpacetimeClient : Node
     /// <summary>
     /// Replaces an active subscription with a new query set using overlap-first semantics.
     /// The old subscription remains authoritative until the new subscription is confirmed applied.
-    /// Returns the new handle; the SubscriptionApplied signal fires when the replacement is live.
+    /// If the replacement fails, the SubscriptionFailed signal fires for the new handle while the
+    /// old subscription remains authoritative. Returns the new handle; the SubscriptionApplied
+    /// signal fires when the replacement is live.
     /// </summary>
     public SubscriptionHandle? ReplaceSubscription(SubscriptionHandle oldHandle, string[] newQueries)
     {
@@ -190,6 +197,17 @@ public partial class SpacetimeClient : Node
         }
 
         _signalAdapter.Dispatch(() => EmitSignal(SignalName.SubscriptionApplied, appliedEvent));
+    }
+
+    private void HandleSubscriptionFailed(SubscriptionFailedEvent failedEvent)
+    {
+        if (_signalAdapter == null)
+        {
+            EmitSignal(SignalName.SubscriptionFailed, failedEvent);
+            return;
+        }
+
+        _signalAdapter.Dispatch(() => EmitSignal(SignalName.SubscriptionFailed, failedEvent));
     }
 
     private void HandleRowChanged(RowChangedEvent rowChangedEvent)

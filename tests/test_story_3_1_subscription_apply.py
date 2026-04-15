@@ -599,13 +599,13 @@ def test_connection_service_subscribe_unregisters_handle_on_synchronous_failure(
     )
 
 
-def test_connection_service_on_subscription_error_is_noop_stub() -> None:
+def test_connection_service_on_subscription_error_is_implemented() -> None:
     content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
     assert "OnSubscriptionError" in content, (
         "SpacetimeConnectionService.cs must have OnSubscriptionError implementation (AC 1)"
     )
-    assert "3.5" in content, (
-        "SpacetimeConnectionService.OnSubscriptionError no-op stub must reference Story 3.5 (AC 1)"
+    assert "OnSubscriptionFailed" in content, (
+        "SpacetimeConnectionService.OnSubscriptionError must surface the failure via OnSubscriptionFailed (Story 3.5 complete)"
     )
 
 

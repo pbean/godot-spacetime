@@ -44,6 +44,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     public event Action<SubscriptionAppliedEvent>? OnSubscriptionApplied;
 
+    public event Action<SubscriptionFailedEvent>? OnSubscriptionFailed;
+
     public event Action<RowChangedEvent>? OnRowChanged;
 
     public ConnectionStatus CurrentStatus => _stateMachine.CurrentStatus;
@@ -344,7 +346,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         _subscriptionRegistry.Unregister(handle.HandleId);
         handle.Close();
-        // Story 3.5 will surface this error to gameplay code via a dedicated signal.
+        OnSubscriptionFailed?.Invoke(new SubscriptionFailedEvent(handle, error));
     }
 
     void IRowChangeEventSink.OnRowInserted(string tableName, object row)

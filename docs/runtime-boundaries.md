@@ -82,7 +82,7 @@ Recoverable auth failures are distinct from unrecoverable programming faults (e.
 The separation ensures that gameplay error-handling code only needs to react to the `ConnectionStatus`
 event stream for expected runtime failures, not catch exceptions from the SDK connection path.
 
-### Subscriptions — `SubscriptionHandle` and `SubscriptionAppliedEvent`
+### Subscriptions — `SubscriptionHandle`, `SubscriptionAppliedEvent`, and `SubscriptionFailedEvent`
 
 A **Subscription** is a query scope that keeps a local cache slice synchronized with the server. You apply a subscription through [`SpacetimeClient.Subscribe(string[] queries)`](../addons/godot_spacetime/src/Public/SpacetimeClient.cs) once `ConnectionState.Connected` is reached. The SDK returns a [`SubscriptionHandle`](../addons/godot_spacetime/src/Public/Subscriptions/SubscriptionHandle.cs) immediately; the handle's `HandleId` is stable for the lifetime of the scope.
 
@@ -102,9 +102,17 @@ When the initial synchronization is complete, the `SpacetimeClient.SubscriptionA
 | `Handle` | `SubscriptionHandle` | The handle whose subscription is now synchronized. Same object returned from `Subscribe()`. |
 | `AppliedAt` | `DateTimeOffset` | UTC timestamp at which the SDK confirmed the subscription was applied. |
 
+If a subscription is rejected or later enters an error path, the `SpacetimeClient.SubscriptionFailed` signal fires with a [`SubscriptionFailedEvent`](../addons/godot_spacetime/src/Public/Subscriptions/SubscriptionFailedEvent.cs). The failed handle has already transitioned to `Closed`, the failed registry entry has been cleaned up, and any still-authoritative subscription remains readable.
+
+| `SubscriptionFailedEvent` property | Type | Meaning |
+|------------------------------------|------|---------|
+| `Handle` | `SubscriptionHandle` | The handle whose subscription request failed. This is the same handle returned from `Subscribe()` or `ReplaceSubscription()`. |
+| `ErrorMessage` | `string` | Human-readable failure detail from the runtime error, used to decide whether query correction, binding regeneration, or a retry is the right next step. |
+| `FailedAt` | `DateTimeOffset` | UTC timestamp at which the SDK recorded the failure event. |
+
 ### Cache — Reading Synchronized Local State
 
-The **Cache** is the local synchronized read model populated by active subscriptions. Reads from the cache are always local — no network round-trip. The cache is populated and kept current by the SDK runtime; you read from it after the `SubscriptionApplied` signal fires.
+The **Cache** is the local synchronized read model populated by active subscriptions. Reads from the cache are always local — no network round-trip. The cache is populated and kept current by the SDK runtime; you read from it after the `SubscriptionApplied` signal fires. If a replacement subscription fails, the previously authoritative synchronized state remains readable.
 
 **Supported cache-access path:** `SpacetimeClient.GetRows(string tableName)` returns an `IEnumerable<object>` of all currently cached rows for the specified table. The table name must match the generated property name on the `RemoteTables` type — PascalCase, case-sensitive (e.g., `"Player"` for a `Player` table).
 
@@ -202,8 +210,9 @@ SpacetimeClient (autoload, configured with SpacetimeSettings)
   └─ Connect()
        └─ ConnectionState events (Disconnected → Connecting → Connected)
             └─ Apply subscriptions (returns SubscriptionHandle)
-                 └─ SubscriptionAppliedEvent → read cache via GetRows() and generated row casts
-                      └─ Invoke reducers → ReducerCallResult / ReducerCallError events
+                 ├─ SubscriptionAppliedEvent → read cache via GetRows() and generated row casts
+                 │    └─ Invoke reducers → ReducerCallResult / ReducerCallError events
+                 └─ SubscriptionFailedEvent → inspect ErrorMessage and decide whether to retry, correct the query, or regenerate bindings
 ```
 
 You interact with `SpacetimeClient` through its public API; the underlying runtime handling is not part of the SDK surface.
