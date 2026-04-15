@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using GodotSpacetime.Auth;
 using GodotSpacetime.Connection;
+using GodotSpacetime.Runtime.Cache;
 using GodotSpacetime.Runtime.Platform.DotNet;
 using GodotSpacetime.Subscriptions;
 using GodotSpacetime.Runtime.Subscriptions;
@@ -21,6 +23,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private bool _restoredFromStore;
     private readonly SpacetimeSdkSubscriptionAdapter _subscriptionAdapter = new();
     private readonly SubscriptionRegistry _subscriptionRegistry = new();
+    private readonly CacheViewAdapter _cacheViewAdapter = new();
 
     public SpacetimeConnectionService()
     {
@@ -78,7 +81,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         }
         catch (Exception ex)
         {
-            _adapter.Close();
+            ResetDisconnectedSessionState();
             _stateMachine.Transition(ConnectionState.Disconnected, $"DISCONNECTED — failed to start the connection: {ex.Message}");
             throw;
         }
@@ -122,6 +125,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         }
     }
 
+    public IEnumerable<object> GetRows(string tableName) => _cacheViewAdapter.GetRows(tableName);
+
     public void FrameTick()
     {
         if (CurrentStatus.State == ConnectionState.Disconnected)
@@ -133,6 +138,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     void IConnectionEventSink.OnConnected(string identity, string token)
     {
         _reconnectPolicy.Reset();
+        _cacheViewAdapter.SetDb(_adapter.GetDb());   // wire cache view on connect
         if (_tokenStore != null)
         {
             // Optional token persistence must never break a successful connection.
@@ -175,10 +181,11 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     void IConnectionEventSink.OnConnectError(Exception error)
     {
-        _adapter.Close();
+        ClearCacheView();
 
         if (CurrentStatus.State == ConnectionState.Connecting)
         {
+            ResetDisconnectedSessionState();
             if (_restoredFromStore)
             {
                 _stateMachine.Transition(
@@ -232,6 +239,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     private void HandleDisconnectError(Exception error)
     {
+        ClearCacheView();
+
         if (CurrentStatus.State == ConnectionState.Connected && _reconnectPolicy.TryBeginRetry(out var attemptNumber, out var delay))
         {
             _stateMachine.Transition(
@@ -241,17 +250,26 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
             return;
         }
 
+        ResetDisconnectedSessionState();
         _stateMachine.Transition(ConnectionState.Disconnected, $"DISCONNECTED — connection lost: {error.Message}");
     }
 
     private void Disconnect(string description)
     {
-        _subscriptionRegistry.Clear();
-        _adapter.Close();
-        _reconnectPolicy.Reset();
+        ResetDisconnectedSessionState();
 
         if (CurrentStatus.State != ConnectionState.Disconnected)
             _stateMachine.Transition(ConnectionState.Disconnected, description);
+    }
+
+    private void ClearCacheView() => _cacheViewAdapter.SetDb(null);
+
+    private void ResetDisconnectedSessionState()
+    {
+        _subscriptionRegistry.Clear();
+        ClearCacheView();
+        _adapter.Close();
+        _reconnectPolicy.Reset();
     }
 
     private static void ValidateSettings(SpacetimeSettings settings)

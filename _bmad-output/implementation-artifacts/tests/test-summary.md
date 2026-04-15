@@ -485,3 +485,73 @@ All 741 tests pass (`pytest -q` verified 2026-04-14).
 - Story 2.3 complete — token restore from ITokenStore wired into `Connect()`, all ACs and gaps covered
 - Story 2.4 complete — `TokenExpired` state, `_restoredFromStore` routing, panel recovery guidance, docs updated; all ACs covered
 - Story 3.1 complete — subscription apply surface (SubscriptionHandle, SubscriptionAppliedEvent, SubscriptionRegistry, adapter, service, client), all ACs and gaps covered
+- Story 3.2 complete — cache read surface (CacheViewAdapter, GetDb, GetRows chain), 75 tests (54 original + 21 gap tests applied); 821 total suite tests green
+
+---
+
+## Story 3.2: Read Synchronized Local Cache Data from Godot Code
+
+### Generated Tests
+
+- [x] `tests/test_story_3_2_read_synchronized_cache.py` — 75 tests, all passing
+
+### Coverage Breakdown
+
+#### Original coverage (54 tests)
+
+| Area | Tests |
+|------|-------|
+| `CacheViewAdapter.cs` — file, namespace, class, methods, IEnumerable, Cast, isolation | 12 |
+| `SpacetimeSdkConnectionAdapter.cs` — GetDb, reflection, XML doc, regression guard | 4 |
+| `SpacetimeConnectionService.cs` — field, SetDb wiring, GetRows delegation, isolation | 10 |
+| `SpacetimeClient.cs` — GetRows method, IEnumerable<object>, delegation, isolation | 4 |
+| `docs/runtime-boundaries.md` — GetRows, cast example, IEnumerable, SubscriptionApplied, CacheViewAdapter, guard | 6 |
+| Regression guards — prior story deliverables | 18 |
+
+#### Gap tests auto-applied (21 new tests)
+
+| Gap | Test |
+|-----|------|
+| `CacheViewAdapter.cs` imports `System.Linq` | `test_cache_view_adapter_imports_system_linq` |
+| `CacheViewAdapter.cs` imports `System.Reflection` | `test_cache_view_adapter_imports_system_reflection` |
+| `CacheViewAdapter.cs` imports `System.Collections.Generic` | `test_cache_view_adapter_imports_system_collections_generic` |
+| `CacheViewAdapter.cs` `private object? _db` field | `test_cache_view_adapter_has_private_db_field` |
+| `CacheViewAdapter.GetRows` return type `IEnumerable<object>` | `test_cache_view_adapter_get_rows_return_type_is_ienumerable_object` |
+| `CacheViewAdapter.GetRows` `tableHandle is null` guard | `test_cache_view_adapter_returns_empty_when_table_handle_null` |
+| `CacheViewAdapter.GetRows` throws `InvalidOperationException` | `test_cache_view_adapter_throws_invalid_operation_for_unknown_table` |
+| `CacheViewAdapter.GetRows` error message references `RemoteTables` | `test_cache_view_adapter_error_message_references_remote_tables` |
+| `GetDb()` is `internal object?` (not public) | `test_connection_adapter_get_db_is_internal_method` |
+| `GetDb()` uses null-conditional `?.` on `_dbConnection` | `test_connection_adapter_get_db_uses_null_conditional_on_db_connection` |
+| `GetDb()` calls `GetValue(_dbConnection)` | `test_connection_adapter_get_db_calls_get_value` |
+| `SpacetimeConnectionService.GetRows` signature is `public IEnumerable<object>` | `test_connection_service_get_rows_has_public_ienumerable_object_signature` |
+| `_cacheViewAdapter` is `private readonly` | `test_connection_service_cache_view_adapter_is_private_readonly` |
+| `_cacheViewAdapter = new()` initialization | `test_connection_service_cache_view_adapter_initialized_with_new` |
+| `SpacetimeConnectionService` clears cache on connect error | `test_connection_service_clears_cache_view_on_connect_error` |
+| `SpacetimeConnectionService` clears cache on disconnect error | `test_connection_service_clears_cache_view_on_disconnect_error` |
+| `SpacetimeClient.cs` docs mention `GetRows()` cache path | `test_spacetime_client_docs_mention_get_rows_cache_path` |
+| `docs/runtime-boundaries.md` references `RemoteTables` | `test_runtime_boundaries_references_remote_tables` |
+| `docs/runtime-boundaries.md` references `InvalidOperationException` | `test_runtime_boundaries_references_invalid_operation_exception` |
+| `docs/runtime-boundaries.md` shows `GetRows("Player")` example | `test_runtime_boundaries_has_get_rows_player_code_example` |
+| `docs/runtime-boundaries.md` workflow shows `GetRows()` cache path | `test_runtime_boundaries_spacetime_client_workflow_mentions_get_rows` |
+
+### Cumulative Suite
+
+| Test file | Tests |
+|-----------|-------|
+| `test_story_1_3_sdk_concepts.py` | 100 |
+| `test_story_1_4_adapter_boundary.py` | 40 |
+| `test_story_1_5_gdscript_continuity.py` | 68 |
+| `test_story_1_6_generate_bindings.py` | 65 |
+| `test_story_1_7_schema_concepts.py` | 51 |
+| `test_story_1_8_compatibility.py` | 49 |
+| `test_story_1_9_connection.py` | 53 |
+| `test_story_1_10_quickstart.py` | 57 |
+| `test_story_2_1_auth_config.py` | 57 |
+| `test_story_2_2_auth_session.py` | 53 |
+| `test_story_2_3_session_restore.py` | 29 |
+| `test_story_2_4_failure_recovery.py` | 47 |
+| `test_story_3_1_subscription_apply.py` | 75 |
+| `test_story_3_2_read_synchronized_cache.py` | 75 |
+| **Full suite** | **821** |
+
+All 821 tests pass (`pytest -q` verified 2026-04-14).
