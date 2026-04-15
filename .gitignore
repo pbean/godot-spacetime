@@ -4,6 +4,7 @@
 .claude/
 _bmad/
 _bmad-output/
+addons/test_bridge/
 
 # Environment files
 .env
