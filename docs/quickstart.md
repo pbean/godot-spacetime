@@ -103,6 +103,8 @@ func _on_state_changed(status: ConnectionStatus) -> void:
     print("Connection state: ", status.Description)
 ```
 
+For the C# equivalent, see `demo/DemoMain.cs` — the demo project uses C# and mirrors this step.
+
 `SpacetimeClient` must already be registered as an autoload and have a `SpacetimeSettings` resource with `Host` and `Database` assigned before calling `Connect()`.
 
 After `Connect()` succeeds, the `"Spacetime Status"` panel shows:
@@ -133,3 +135,9 @@ docs/codegen.md
 
 docs/connection.md
 — Connection lifecycle states, signals, and editor status labels.
+
+docs/runtime-boundaries.md
+— Full runtime API reference covering connection, auth, subscriptions, cache, reducers, and the complete signal catalog.
+
+demo/README.md
+— The canonical end-to-end sample. Mirrors these quickstart steps and extends them through auth, session resume, subscription, and reducer interaction.
