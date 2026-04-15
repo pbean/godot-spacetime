@@ -95,18 +95,32 @@ var handle = SpacetimeClient.Subscribe(new[] { "SELECT * FROM player" });
 
 **Guard:** `Subscribe()` throws `InvalidOperationException` if called before `ConnectionState.Connected`. It is safe to call from a `ConnectionStateChanged` handler once the state reaches `Connected`.
 
-When the initial synchronization is complete, the `SpacetimeClient.SubscriptionApplied` signal fires with a [`SubscriptionAppliedEvent`](../addons/godot_spacetime/src/Public/Subscriptions/SubscriptionAppliedEvent.cs). After that point, the local cache reflects the subscribed data and is ready to read through generated binding types.
+When the initial synchronization is complete, the `SpacetimeClient.SubscriptionApplied` signal fires with a [`SubscriptionAppliedEvent`](../addons/godot_spacetime/src/Public/Subscriptions/SubscriptionAppliedEvent.cs). After that point, the local cache reflects the subscribed data and is ready to read through `SpacetimeClient.GetRows()` and generated row casts.
 
 | `SubscriptionAppliedEvent` property | Type | Meaning |
 |-------------------------------------|------|---------|
 | `Handle` | `SubscriptionHandle` | The handle whose subscription is now synchronized. Same object returned from `Subscribe()`. |
 | `AppliedAt` | `DateTimeOffset` | UTC timestamp at which the SDK confirmed the subscription was applied. |
 
-### Cache
+### Cache — Reading Synchronized Local State
 
-The **Cache** is the local synchronized read model populated by active subscriptions. Reads from the cache are always local (no network round-trip). The cache is populated and kept current by the SDK runtime; you read from it through generated binding types specific to your module's schema.
+The **Cache** is the local synchronized read model populated by active subscriptions. Reads from the cache are always local — no network round-trip. The cache is populated and kept current by the SDK runtime; you read from it after the `SubscriptionApplied` signal fires.
 
-There is no direct public cache type in the core SDK — cache access is surfaced through **Generated Bindings** (see below).
+**Supported cache-access path:** `SpacetimeClient.GetRows(string tableName)` returns an `IEnumerable<object>` of all currently cached rows for the specified table. The table name must match the generated property name on the `RemoteTables` type — PascalCase, case-sensitive (e.g., `"Player"` for a `Player` table).
+
+**Reading cache rows:**
+```csharp
+// In a SubscriptionApplied handler or after verifying the cache is ready:
+foreach (var row in SpacetimeClient.GetRows("Player"))
+{
+    var player = (SpacetimeDB.Types.Player)row;
+    GD.Print(player.Name);
+}
+```
+
+**Guard:** `GetRows()` returns an empty sequence — not an exception — when the connection is not active or the cache is empty for the requested table. It throws `InvalidOperationException` only if the table name does not exist in the generated `RemoteTables` type (coding error, not a runtime condition).
+
+Cache access is mediated by `CacheViewAdapter` (in `Internal/Cache/`) which wraps the generated `RemoteTables` object via reflection. Gameplay code must not access the underlying transport state directly — always go through `SpacetimeClient.GetRows()`.
 
 ### Reducers — `ReducerCallResult` and `ReducerCallError`
 
@@ -146,7 +160,7 @@ SpacetimeClient (autoload, configured with SpacetimeSettings)
   └─ Connect()
        └─ ConnectionState events (Disconnected → Connecting → Connected)
             └─ Apply subscriptions (returns SubscriptionHandle)
-                 └─ SubscriptionAppliedEvent → read from Cache via generated bindings
+                 └─ SubscriptionAppliedEvent → read cache via GetRows() and generated row casts
                       └─ Invoke reducers → ReducerCallResult / ReducerCallError events
 ```
 

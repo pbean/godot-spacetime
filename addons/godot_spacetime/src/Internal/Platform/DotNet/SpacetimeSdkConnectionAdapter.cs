@@ -38,6 +38,17 @@ internal sealed class SpacetimeSdkConnectionAdapter
     /// </summary>
     internal IDbConnection? Connection => _dbConnection;
 
+    /// <summary>
+    /// Gets the generated <c>RemoteTables</c> object (the <c>Db</c> property of the active
+    /// <c>IDbConnection</c>) for use by the <c>CacheViewAdapter</c>.
+    /// Returns <c>null</c> when not connected or when the generated <c>DbConnection</c> type
+    /// does not expose a <c>Db</c> property.
+    /// </summary>
+    internal object? GetDb() =>
+        _dbConnection?.GetType()
+            .GetProperty("Db", BindingFlags.Public | BindingFlags.Instance)
+            ?.GetValue(_dbConnection);
+
     public void Open(SpacetimeSettings settings, IConnectionEventSink sink)
     {
         ArgumentNullException.ThrowIfNull(settings);

@@ -1,0 +1,65 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+
+namespace GodotSpacetime.Runtime.Cache;
+
+/// <summary>
+/// Provides read access to the synchronized local client cache through the generated RemoteTables object.
+///
+/// This adapter wraps the generated <c>Db</c> property of the active <c>IDbConnection</c>
+/// and exposes it through a reflection-based enumeration path. Gameplay code must not access
+/// the underlying transport state directly — use <c>SpacetimeClient.GetRows()</c> instead.
+///
+/// See <c>docs/runtime-boundaries.md</c> — "Cache — Reading Synchronized Local State" for usage.
+/// </summary>
+internal sealed class CacheViewAdapter
+{
+    private object? _db;
+
+    /// <summary>
+    /// Sets the generated <c>RemoteTables</c> object to use for cache reads.
+    /// Called by <see cref="GodotSpacetime.Runtime.Connection.SpacetimeConnectionService"/>
+    /// when a connection is established (<c>OnConnected</c>) and cleared on disconnect.
+    /// </summary>
+    internal void SetDb(object? db) => _db = db;
+
+    /// <summary>
+    /// Returns all rows currently in the local client cache for the specified table name.
+    /// The table name must match the generated property name on the <c>RemoteTables</c> type
+    /// (case-sensitive, PascalCase — e.g., <c>"Player"</c>, <c>"Monster"</c>).
+    ///
+    /// Returns an empty sequence when no connection is active or the subscription cache is empty.
+    /// Each returned object can be cast to the corresponding generated row type.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the table name does not exist in the generated <c>RemoteTables</c> type.
+    /// Ensure bindings are generated for a module that declares the requested table.
+    /// </exception>
+    internal IEnumerable<object> GetRows(string tableName)
+    {
+        ArgumentNullException.ThrowIfNull(tableName);
+
+        if (_db == null)
+            return [];
+
+        var tableProperty = _db.GetType()
+            .GetProperty(tableName, BindingFlags.Public | BindingFlags.Instance)
+            ?? throw new InvalidOperationException(
+                $"Table '{tableName}' not found in the generated RemoteTables. " +
+                $"Ensure bindings are generated for a module that declares a table named '{tableName}'.");
+
+        var tableHandle = tableProperty.GetValue(_db);
+        if (tableHandle is null)
+            return [];
+
+        if (tableHandle is IEnumerable enumerable)
+            return enumerable.Cast<object>();
+
+        throw new InvalidOperationException(
+            $"Table handle for '{tableName}' does not implement IEnumerable. " +
+            $"Ensure bindings are generated from a compatible SpacetimeDB module version.");
+    }
+}

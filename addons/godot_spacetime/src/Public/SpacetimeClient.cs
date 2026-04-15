@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Godot;
 using GodotSpacetime.Connection;
 using GodotSpacetime.Runtime.Connection;
@@ -20,7 +21,7 @@ namespace GodotSpacetime;
 ///   <item>Configure <see cref="SpacetimeSettings"/> (Host, Database)</item>
 ///   <item>Call Connect() — watch ConnectionState events for lifecycle transitions</item>
 ///   <item>Apply subscriptions — receive SubscriptionAppliedEvent when cache is ready</item>
-///   <item>Read cache via generated bindings — invoke reducers as needed</item>
+///   <item>Read cache via GetRows() and cast rows to generated binding types — invoke reducers as needed</item>
 /// </list>
 /// </summary>
 public partial class SpacetimeClient : Node
@@ -89,6 +90,13 @@ public partial class SpacetimeClient : Node
     {
         return _connectionService.Subscribe(querySqls);
     }
+
+    /// <summary>
+    /// Returns the rows currently cached for the specified table.
+    /// Call after the <c>SubscriptionApplied</c> signal fires, then cast each row to the generated table type.
+    /// </summary>
+    public IEnumerable<object> GetRows(string tableName) =>
+        _connectionService.GetRows(tableName);
 
     public override void _Process(double delta)
     {
