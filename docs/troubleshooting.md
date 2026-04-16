@@ -47,9 +47,21 @@ The compatibility panel reads the CLI version embedded in generated bindings and
 
 Connection lifecycle state transitions are surfaced through the `SpacetimeClient.ConnectionStateChanged` signal. See `docs/connection.md` for the complete state table and editor panel labels.
 
+## Multi-Module Connections
+
+Story 10.1 keeps the single-client path as the default and adds a multi-module
+composition path on top of it.
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| `Connect()` fails during client registration or the project logs a duplicate-client error | duplicate client identifiers | Give each live `SpacetimeClient` a distinct `ConnectionId`; keep `SpacetimeClient` for the default client only |
+| `Connect()` fails with a generated binding resolution message, or `GetDb<TDb>()` throws a wrong-type mismatch | wrong generated namespace | Set `SpacetimeSettings.GeneratedBindingsNamespace` to the namespace used when that module's bindings were generated |
+| `RowReceiver` shows the wrong table dropdown or binds the wrong module | `ClientPath` points at the wrong client, or the selected client's bindings are not compiled | Point `ClientPath` at the intended client node and confirm the matching generated namespace is compiled into the project |
+| `"Spacetime Status"` panel still shows only the default client while multiple clients are present | default-client-only panel behavior | This is expected in Story 10.1. Use `CurrentStatus` / `CurrentTelemetry` on the specific client instance for non-default connections |
+
 ## Telemetry
 
-Story 9.3 adds `SpacetimeClient.CurrentTelemetry` plus Godot `Performance` custom monitor output for the core connection metrics.
+Story 9.3 adds `SpacetimeClient.CurrentTelemetry` plus Godot `Performance` custom monitor output for the core connection metrics. In Story 10.1 the custom monitor IDs remain tied to the default `SpacetimeClient` path; per-client telemetry for non-default connections still comes from each instance's `CurrentTelemetry` property.
 
 | Visible Indicator | Likely Cause | Recovery Action |
 |-------------------|-------------|-----------------|

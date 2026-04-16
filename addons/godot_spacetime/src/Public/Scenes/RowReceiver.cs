@@ -1,8 +1,7 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 using Godot;
+using GodotSpacetime.Runtime.Platform.DotNet;
 using GodotSpacetime.Subscriptions;
 
 namespace GodotSpacetime.Scenes;
@@ -16,14 +15,17 @@ namespace GodotSpacetime.Scenes;
 /// <c>row_inserted</c>, <c>row_updated</c>, or <c>row_deleted</c> to receive typed row events
 /// without writing signal connection boilerplate.
 ///
-/// Requires <c>SpacetimeClient</c> registered as an autoload at <c>/root/SpacetimeClient</c>.
-/// A warning is pushed (not an error) if the autoload is not found at runtime.
+/// By default the node targets <c>/root/SpacetimeClient</c> so existing scenes continue to work
+/// unchanged. Set <see cref="ClientPath"/> to retarget the receiver at a different client node.
+/// A warning is pushed (not an error) if the target client is not found at runtime.
 ///
 /// See <c>docs/runtime-boundaries.md</c> — "RowReceiver — Scene-Tree Row Event Integration" for usage.
 /// </summary>
 [Tool]
 public partial class RowReceiver : Node
 {
+    private static readonly NodePath DefaultClientPath = new("/root/SpacetimeClient");
+
     /// <summary>
     /// The PascalCase name of the table this receiver filters on.
     /// Must match the generated property name on the <c>RemoteTables</c> type
@@ -31,6 +33,19 @@ public partial class RowReceiver : Node
     /// Set this in the Inspector dropdown, which is populated at editor time via reflection.
     /// </summary>
     [Export] public string TableName { get; set; } = "";
+
+    private NodePath _clientPath = DefaultClientPath;
+
+    [Export]
+    public NodePath ClientPath
+    {
+        get => _clientPath;
+        set
+        {
+            _clientPath = value;
+            NotifyPropertyListChanged();
+        }
+    }
 
     /// <summary>Emitted when a row is inserted into the subscribed table.</summary>
     [Signal] public delegate void RowInsertedEventHandler(RowChangedEvent e);
@@ -45,9 +60,9 @@ public partial class RowReceiver : Node
 
     /// <summary>
     /// Returns a property list entry for <see cref="TableName"/> with a <c>PROPERTY_HINT_ENUM</c>
-    /// hint string built from the <c>RemoteTables</c> type discovered at editor time.
-    /// When no <c>RemoteTables</c> type is found in user assemblies, returns an empty array and the
-    /// <c>[Export]</c> plain string fallback is shown in the Inspector.
+    /// hint string built from the selected client's generated <c>RemoteTables</c> type.
+    /// When the target client or generated bindings are unavailable, returns an empty array and the
+    /// <c>[Export]</c> plain string fallback stays visible in the Inspector.
     /// </summary>
     public override Godot.Collections.Array<Godot.Collections.Dictionary> _GetPropertyList()
     {
@@ -70,86 +85,55 @@ public partial class RowReceiver : Node
     }
 
     /// <summary>
-    /// Discovers candidate table names from the first <c>RemoteTables</c> type found in user assemblies.
-    /// Skips assemblies whose <c>FullName</c> begins with <c>System</c>, <c>mscorlib</c>,
-    /// <c>Microsoft</c>, <c>Godot</c>, <c>SpacetimeDB</c>, or <c>GodotSpacetime</c>.
+    /// Discovers candidate table names from the generated namespace associated with the selected client.
     /// Supports both field-backed and property-backed generated table members.
-    /// Returns an empty array when no <c>RemoteTables</c> type is found.
+    /// Returns an empty array when the selected client cannot be resolved or the generated
+    /// bindings are unavailable.
     /// </summary>
-    private static string[] DiscoverTableNames()
+    private string[] DiscoverTableNames()
     {
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            var fullName = assembly.FullName ?? "";
-            if (ShouldSkipAssembly(fullName))
-            {
-                continue;
-            }
+        var generatedBindingsNamespace = ResolveGeneratedBindingsNamespace();
+        if (generatedBindingsNamespace == null)
+            return Array.Empty<string>();
 
-            var remoteTables = FindRemoteTablesType(assembly);
-            if (remoteTables == null)
-                continue;
-
-            return remoteTables
-                .GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                .Select(property => property.Name)
-                .Concat(
-                    remoteTables
-                        .GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                        .Select(field => field.Name))
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToArray();
-        }
-
-        return Array.Empty<string>();
+        return GeneratedBindingTypeResolver.GetRemoteTableNames(generatedBindingsNamespace);
     }
 
-    private static bool ShouldSkipAssembly(string fullName) =>
-        fullName.StartsWith("System", StringComparison.Ordinal)
-        || fullName.StartsWith("mscorlib", StringComparison.Ordinal)
-        || fullName.StartsWith("Microsoft", StringComparison.Ordinal)
-        || fullName.StartsWith("Godot", StringComparison.Ordinal)
-        || fullName.StartsWith("SpacetimeDB", StringComparison.Ordinal)
-        || fullName.StartsWith("GodotSpacetime", StringComparison.Ordinal);
-
-    private static Type? FindRemoteTablesType(Assembly assembly)
+    internal string? GetResolvedRemoteTablesTypeNameForInspection()
     {
-        foreach (var candidate in SafeGetTypes(assembly))
-        {
-            if (candidate.Name == "RemoteTables")
-                return candidate;
-        }
+        var generatedBindingsNamespace = ResolveGeneratedBindingsNamespace();
+        if (generatedBindingsNamespace == null)
+            return null;
 
-        return null;
+        return GeneratedBindingTypeResolver.TryResolveRemoteTablesType(generatedBindingsNamespace)?.FullName;
     }
 
-    private static IEnumerable<Type> SafeGetTypes(Assembly assembly)
+    private string? ResolveGeneratedBindingsNamespace()
     {
-        try
-        {
-            return assembly.GetTypes();
-        }
-        catch (ReflectionTypeLoadException ex)
-        {
-            return ex.Types.Where(type => type != null)!;
-        }
+        var selectedClient = ResolveSelectedClient();
+        if (selectedClient?.Settings != null)
+            return selectedClient.Settings.ResolveGeneratedBindingsNamespace();
+
+        return IsDefaultClientPath(ClientPath)
+            ? SpacetimeSettings.DefaultGeneratedBindingsNamespace
+            : null;
     }
 
     /// <summary>
     /// Wires this node to <see cref="SpacetimeClient.RowChanged"/> at runtime.
     /// No-op when <see cref="Engine.IsEditorHint"/> returns <c>true</c>.
-    /// Pushes a warning (not an error) if the <c>SpacetimeClient</c> autoload is not found.
+    /// Pushes a warning (not an error) if the selected client is not found.
     /// </summary>
     public override void _Ready()
     {
         if (Engine.IsEditorHint()) return;
 
-        var clientNode = GetNodeOrNull<SpacetimeClient>("/root/SpacetimeClient");
+        var clientNode = ResolveSelectedClient();
         if (clientNode == null)
         {
-            GD.PushWarning("RowReceiver: SpacetimeClient autoload not found at /root/SpacetimeClient. " +
-                           "Register SpacetimeClient as an autoload to receive row events.");
+            GD.PushWarning(
+                "RowReceiver: target SpacetimeClient not found at " +
+                $"'{FormatClientPath(ClientPath)}'. Configure ClientPath to receive row events.");
             return;
         }
 
@@ -192,4 +176,31 @@ public partial class RowReceiver : Node
 
         _client = null;
     }
+
+    private SpacetimeClient? ResolveSelectedClient()
+    {
+        var clientPath = FormatClientPath(ClientPath);
+        if (!string.IsNullOrWhiteSpace(clientPath))
+        {
+            var clientFromPath = GetNodeOrNull<SpacetimeClient>(ClientPath);
+            if (clientFromPath != null)
+                return clientFromPath;
+        }
+
+        if (IsDefaultClientPath(ClientPath) &&
+            SpacetimeClient.TryGetClient(SpacetimeClient.DefaultConnectionId, out var defaultClient))
+        {
+            return defaultClient;
+        }
+
+        return null;
+    }
+
+    private static bool IsDefaultClientPath(NodePath nodePath) =>
+        string.Equals(
+            FormatClientPath(nodePath),
+            FormatClientPath(DefaultClientPath),
+            StringComparison.Ordinal);
+
+    private static string FormatClientPath(NodePath nodePath) => nodePath.ToString();
 }

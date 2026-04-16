@@ -74,6 +74,10 @@ Create a `SpacetimeSettings` resource in the Godot editor:
 
 The `SpacetimeSettings` resource exposes `[Export] Host`, `[Export] Database`, `[Export] CompressionMode`, and `[Export] LightMode` fields. `CompressionMode` defaults to `None` and `LightMode` defaults to `false` for backward-compatible behavior unless you opt in. Changing `LightMode` later only applies on the next connection cycle; it does not mutate an already-open session.
 
+For multiple modules, keep this quickstart's single-module setup as-is for the
+default client, then see `docs/codegen.md` for namespace generation guidance and
+`docs/connection.md` for the additive multi-client path.
+
 ### Step 6 — Add SpacetimeClient as Autoload
 
 Register `SpacetimeClient` so it is available everywhere in the project:

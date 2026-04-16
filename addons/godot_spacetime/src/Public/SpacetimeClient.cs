@@ -30,15 +30,20 @@ namespace GodotSpacetime;
 /// </summary>
 public partial class SpacetimeClient : Node
 {
+    public const string DefaultConnectionId = "SpacetimeClient";
+
     private static readonly StringName MessagesSentMonitorId = new("GodotSpacetime/Connection/MessagesSent");
     private static readonly StringName MessagesReceivedMonitorId = new("GodotSpacetime/Connection/MessagesReceived");
     private static readonly StringName BytesSentMonitorId = new("GodotSpacetime/Connection/BytesSent");
     private static readonly StringName BytesReceivedMonitorId = new("GodotSpacetime/Connection/BytesReceived");
     private static readonly StringName UptimeSecondsMonitorId = new("GodotSpacetime/Connection/UptimeSeconds");
     private static readonly StringName LastReducerRoundTripMonitorId = new("GodotSpacetime/Reducers/LastRoundTripMilliseconds");
+    private static readonly object LiveClientsGate = new();
+    private static readonly Dictionary<string, SpacetimeClient> LiveClients = new(StringComparer.Ordinal);
     private readonly SpacetimeConnectionService _connectionService = new();
     private ConnectionStatus _currentStatus = new(ConnectionState.Disconnected, "DISCONNECTED — not connected to SpacetimeDB");
     private GodotSignalAdapter? _signalAdapter;
+    private string? _registeredConnectionId;
 
     [Signal]
     public delegate void ConnectionStateChangedEventHandler(ConnectionStatus status);
@@ -87,6 +92,9 @@ public partial class SpacetimeClient : Node
     [Export]
     public SpacetimeSettings? Settings { get; set; }
 
+    [Export]
+    public string ConnectionId { get; set; } = DefaultConnectionId;
+
     public ConnectionStatus CurrentStatus => _currentStatus;
 
     public ConnectionTelemetryStats CurrentTelemetry => _connectionService.CurrentTelemetry;
@@ -95,10 +103,29 @@ public partial class SpacetimeClient : Node
 
     internal string TelemetryBytesSentSource => _connectionService.TelemetryBytesSentSource;
 
+    public static bool TryGetClient(string connectionId, out SpacetimeClient? client)
+    {
+        var normalizedConnectionId = NormalizeConnectionId(connectionId);
+        lock (LiveClientsGate)
+            return LiveClients.TryGetValue(normalizedConnectionId, out client);
+    }
+
+    public static SpacetimeClient GetClientOrThrow(string connectionId)
+    {
+        if (TryGetClient(connectionId, out var client) && client != null)
+            return client;
+
+        var normalizedConnectionId = NormalizeConnectionId(connectionId);
+        throw new InvalidOperationException(
+            $"No live SpacetimeClient is registered with ConnectionId '{normalizedConnectionId}'.");
+    }
+
     public override void _EnterTree()
     {
+        RegisterLiveClient();
         _signalAdapter ??= new GodotSignalAdapter(this);
-        RegisterPerformanceMonitors();
+        if (OwnsPerformanceMonitors())
+            RegisterPerformanceMonitors();
         _connectionService.OnStateChanged += HandleStateChanged;
         _connectionService.OnConnectionOpened += HandleConnectionOpened;
         _connectionService.OnConnectionClosed += HandleConnectionClosed;
@@ -119,7 +146,9 @@ public partial class SpacetimeClient : Node
         _connectionService.OnRowChanged -= HandleRowChanged;
         _connectionService.OnReducerCallSucceeded -= HandleReducerCallSucceeded;
         _connectionService.OnReducerCallFailed -= HandleReducerCallFailed;
-        RemovePerformanceMonitors();
+        if (OwnsPerformanceMonitors())
+            RemovePerformanceMonitors();
+        UnregisterLiveClient();
     }
 
     public void Connect()
@@ -413,4 +442,47 @@ public partial class SpacetimeClient : Node
 
         _signalAdapter.Dispatch(() => EmitSignal(SignalName.ReducerCallFailed, error));
     }
+
+    private void RegisterLiveClient()
+    {
+        var normalizedConnectionId = NormalizeConnectionId(ConnectionId);
+
+        lock (LiveClientsGate)
+        {
+            if (LiveClients.TryGetValue(normalizedConnectionId, out var existingClient) &&
+                !ReferenceEquals(existingClient, this))
+            {
+                throw new InvalidOperationException(
+                    $"A SpacetimeClient with ConnectionId '{normalizedConnectionId}' is already registered.");
+            }
+
+            LiveClients[normalizedConnectionId] = this;
+        }
+
+        _registeredConnectionId = normalizedConnectionId;
+    }
+
+    private void UnregisterLiveClient()
+    {
+        var normalizedConnectionId = _registeredConnectionId;
+        _registeredConnectionId = null;
+        if (normalizedConnectionId == null)
+            return;
+
+        lock (LiveClientsGate)
+        {
+            if (LiveClients.TryGetValue(normalizedConnectionId, out var existingClient) &&
+                ReferenceEquals(existingClient, this))
+            {
+                LiveClients.Remove(normalizedConnectionId);
+            }
+        }
+    }
+
+    private bool OwnsPerformanceMonitors() =>
+        _registeredConnectionId != null &&
+        string.Equals(_registeredConnectionId, DefaultConnectionId, StringComparison.Ordinal);
+
+    private static string NormalizeConnectionId(string? connectionId) =>
+        string.IsNullOrWhiteSpace(connectionId) ? DefaultConnectionId : connectionId.Trim();
 }

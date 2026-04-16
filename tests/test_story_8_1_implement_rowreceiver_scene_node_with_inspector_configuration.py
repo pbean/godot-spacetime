@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 ROWRECEIVER_PATH = "addons/godot_spacetime/src/Public/Scenes/RowReceiver.cs"
+GENERATED_BINDING_RESOLVER_PATH = "addons/godot_spacetime/src/Internal/Platform/DotNet/GeneratedBindingTypeResolver.cs"
 PLUGIN_PATH = "addons/godot_spacetime/GodotSpacetimePlugin.cs"
 RUNTIME_BOUNDARIES_PATH = "docs/runtime-boundaries.md"
 DEMO_README_PATH = "demo/README.md"
@@ -54,6 +55,16 @@ def test_rowreceiver_has_export_and_tablename_property() -> None:
     )
     assert "TableName" in content, (
         "RowReceiver must define a TableName property (Task 1.3, AC1/AC2)"
+    )
+
+
+def test_rowreceiver_additively_supports_clientpath_while_preserving_default_path() -> None:
+    content = _read(ROWRECEIVER_PATH)
+    assert "ClientPath" in content, (
+        "RowReceiver must expose ClientPath as the additive multi-client selector from Story 10.1."
+    )
+    assert "/root/SpacetimeClient" in content, (
+        "RowReceiver must preserve the default /root/SpacetimeClient path for existing scenes."
     )
 
 
@@ -171,6 +182,13 @@ def test_runtime_boundaries_documents_spacetime_client_autoload_requirement() ->
     )
 
 
+def test_runtime_boundaries_documents_rowreceiver_clientpath_addition() -> None:
+    content = _read(RUNTIME_BOUNDARIES_PATH)
+    assert "ClientPath" in content, (
+        "docs/runtime-boundaries.md must document RowReceiver.ClientPath for the additive Story 10.1 path."
+    )
+
+
 def test_demo_readme_documents_rowreceiver() -> None:
     content = _read(DEMO_README_PATH)
     assert "RowReceiver" in content, (
@@ -267,43 +285,45 @@ def test_rowreceiver_get_property_list_uses_property_hint_enum() -> None:
     )
 
 
-def test_rowreceiver_discover_table_names_uses_app_domain() -> None:
-    content = _read(ROWRECEIVER_PATH)
-    assert "AppDomain.CurrentDomain.GetAssemblies()" in content, (
-        "RowReceiver.DiscoverTableNames() must iterate AppDomain.CurrentDomain.GetAssemblies() "
-        "to locate the RemoteTables type in user assemblies at editor time (Task 1.5, AC2)"
+def test_rowreceiver_discover_table_names_uses_internal_generated_binding_resolver() -> None:
+    row_receiver = _read(ROWRECEIVER_PATH)
+    resolver = _read(GENERATED_BINDING_RESOLVER_PATH)
+    assert "GeneratedBindingTypeResolver" in row_receiver and "GetRemoteTableNames" in row_receiver, (
+        "Story 10.1 must keep RowReceiver table-name discovery routed through the internal generated-binding "
+        "resolver instead of doing first-type-wins assembly scans in the public scene node."
+    )
+    assert "ResolveRemoteTablesType" in resolver, (
+        "GeneratedBindingTypeResolver must provide the namespace-scoped RemoteTables resolution path used by "
+        "RowReceiver inspector discovery."
     )
 
 
-def test_rowreceiver_discover_table_names_skips_known_assembly_prefixes() -> None:
+def test_rowreceiver_no_longer_uses_public_first_type_wins_assembly_scans() -> None:
     content = _read(ROWRECEIVER_PATH)
-    required_skipped_prefixes = [
-        "System", "mscorlib", "Microsoft", "Godot", "SpacetimeDB", "GodotSpacetime",
-    ]
-    for prefix in required_skipped_prefixes:
-        assert f'"{prefix}"' in content, (
-            f"RowReceiver.DiscoverTableNames() must skip assemblies whose FullName begins with "
-            f"{prefix!r} — prevents finding RemoteTables in framework or SDK assemblies "
-            f"(Task 1.5, AC2)"
+    for forbidden in (
+        "AppDomain.CurrentDomain.GetAssemblies()",
+        "ShouldSkipAssembly",
+        "SafeGetTypes",
+    ):
+        assert forbidden not in content, (
+            "Story 10.1 must remove the old first-type-wins assembly scan from RowReceiver and keep generated-type "
+            f"reflection inside Internal/Platform/DotNet/. Found stale token {forbidden!r}."
         )
 
 
 def test_rowreceiver_discover_table_names_scans_for_remote_tables_type_name() -> None:
-    content = _read(ROWRECEIVER_PATH)
-    assert 'candidate.Name == "RemoteTables"' in content, (
-        "RowReceiver.DiscoverTableNames() must scan assembly types by type name, not only by a "
-        'bare assembly.GetType("RemoteTables") lookup, because generated bindings live under '
-        "a namespace such as SpacetimeDB.Types (AC2 regression guard)"
+    resolver = _read(GENERATED_BINDING_RESOLVER_PATH)
+    assert '"RemoteTables"' in resolver, (
+        "GeneratedBindingTypeResolver must still resolve the generated RemoteTables type by name for inspector "
+        "table discovery."
     )
-    assert "SafeGetTypes" in content, (
-        "RowReceiver.DiscoverTableNames() must use a safe assembly type scan helper so editor-time "
-        "reflection still works when a partially loadable assembly throws ReflectionTypeLoadException "
-        "(AC2 regression guard)"
+    assert "generatedBindingsNamespace" in resolver, (
+        "Story 10.1 RowReceiver discovery must be namespace-scoped so multiple generated modules can coexist."
     )
 
 
 def test_rowreceiver_discover_table_names_supports_field_backed_generated_tables() -> None:
-    content = _read(ROWRECEIVER_PATH)
+    content = _read(GENERATED_BINDING_RESOLVER_PATH)
     assert "GetFields" in content, (
         "RowReceiver.DiscoverTableNames() must read public instance fields because the current "
         "SpacetimeDB 2.1.x generated RemoteTables surface exposes table handles as fields, not only "

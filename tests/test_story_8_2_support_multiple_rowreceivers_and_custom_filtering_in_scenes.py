@@ -154,6 +154,12 @@ def test_runtime_boundaries_describes_multiple_receiver_independence():
         "docs/runtime-boundaries.md must describe multiple-receiver independence"
 
 
+def test_runtime_boundaries_describes_clientpath_for_multi_client_scenes():
+    content = read_row_receiver_docs_section()
+    assert "ClientPath" in content, \
+        "docs/runtime-boundaries.md RowReceiver section must describe ClientPath for Story 10.1 multi-client scenes"
+
+
 def test_runtime_boundaries_describes_no_subscription_silent_behavior():
     content = read_row_receiver_docs_section()
     assert "no active subscription" in content.lower(), \
@@ -288,10 +294,8 @@ def test_row_receiver_get_property_list_uses_enum_hint():
 
 def test_row_receiver_should_skip_assembly_filters_system_assemblies():
     content = read_file("addons/godot_spacetime/src/Public/Scenes/RowReceiver.cs")
-    skipped = ["System", "mscorlib", "Microsoft", "Godot", "SpacetimeDB", "GodotSpacetime"]
-    for prefix in skipped:
-        assert f'"{prefix}"' in content or f"StartsWith(\"{prefix}\"" in content, \
-            f"RowReceiver.cs ShouldSkipAssembly must skip assemblies with prefix '{prefix}'"
+    assert "GeneratedBindingTypeResolver" in content and "ShouldSkipAssembly" not in content, \
+        "Story 10.1 must replace RowReceiver's public assembly-skip scan with the internal generated-binding resolver"
 
 
 def test_row_receiver_discover_table_names_finds_remote_tables_type():
