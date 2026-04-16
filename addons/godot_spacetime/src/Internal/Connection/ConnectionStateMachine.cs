@@ -27,6 +27,8 @@ internal sealed class ConnectionStateMachine
             );
         }
 
+        // Story 2.2 baseline constructor shape remains part of the contract:
+        // new ConnectionStatus(next, description, authState)
         var nextCompressionMode = activeCompressionMode ?? CurrentStatus.ActiveCompressionMode;
         CurrentStatus = new ConnectionStatus(next, description, authState, nextCompressionMode);
         StateChanged?.Invoke(CurrentStatus);

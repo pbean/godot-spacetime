@@ -44,6 +44,10 @@ accompanies `ConnectionStatus` and identifies the authentication phase:
 
 Compression is opt-in through `SpacetimeSettings.CompressionMode`, which defaults to `MessageCompressionMode.None`. For the pinned `2.1.x` client stack, a `Brotli` request currently reports effective `ActiveCompressionMode` as `Gzip`.
 
+Light mode is opt-in through `SpacetimeSettings.LightMode`, which defaults to `false`. The setting is read when a connection opens through the existing builder path; changing `LightMode` while connected does not mutate the current session and only applies on the next connection cycle.
+
+Story 9.2 treats observed runtime behavior as authoritative because the current upstream migration guide says `light_mode was removed in 2.0`, while the pinned local `2.1.0` builder in this repo still exposes `WithLightMode(bool)`. Repo docs therefore document the reconnect-only public contract plus the observed runtime behavior captured by the Story 9.2 validation harness instead of copying either assumption blindly.
+
 ### Auth / Identity — `ITokenStore`
 
 Session identity is token-based. The SDK does not dictate how tokens are persisted; instead, you provide an [`ITokenStore`](../addons/godot_spacetime/src/Public/Auth/ITokenStore.cs) implementation:
@@ -220,6 +224,8 @@ After the `SubscriptionApplied` signal fires, the SDK emits a `RowChanged` signa
 | `OldRow` | `object?` | Row before the change; `null` for `Insert` events |
 | `NewRow` | `object?` | Row after the change; `null` for `Delete` events |
 
+`RowChangedEvent` intentionally remains narrow regardless of `LightMode`: it does not surface caller identity, reducer name, energy-consumed, or host-execution-duration fields. Public gameplay code should treat those reducer-metadata details as internal runtime observations, not as part of the public row-change contract.
+
 **Reacting to row changes:**
 ```csharp
 SpacetimeClient.RowChanged += OnRowChanged;
@@ -313,6 +319,8 @@ Reducer results arrive **asynchronously** — the signal fires in a later frame 
 | `FailureCategory` | `ReducerFailureCategory` | Failure category for branching gameplay error handling. |
 | `RecoveryGuidance` | `string` | User-safe retry or feedback guidance derived from the failure category. |
 | `FailedAt` | `DateTimeOffset` | UTC timestamp recorded when the SDK surfaced the failure. |
+
+`LightMode` does not widen these public reducer payloads with synthetic nullable reducer metadata. If the supported runtime shows no observable callback-context difference between `LightMode=false` and `LightMode=true`, that no-op remains the documented outcome for this repo instead of inventing public placeholder fields.
 
 **`ReducerFailureCategory` enum — failure branching guidance:**
 
@@ -430,6 +438,7 @@ See [`docs/codegen.md`](./codegen.md) for the generation workflow.
 | `Host` | `string` | The SpacetimeDB server address |
 | `Database` | `string` | The target database name on the server |
 | `CompressionMode` | `MessageCompressionMode` | Optional wire-message compression preference. Defaults to `None`; current `2.1.x` `Brotli` requests surface as effective `Gzip`. |
+| `LightMode` | `bool` | Optional light-mode preference for server updates. Defaults to `false`; takes effect only when the next connection is opened. Public row/reducer payloads remain free of synthetic reducer metadata regardless of mode. |
 | `Credentials` | `string?` | Optional token for authenticated sessions; passed to `WithToken()`. `null` = anonymous connection. |
 | `TokenStore` | `ITokenStore?` | Optional token persistence provider; `null` by default (tokens not persisted) |
 
