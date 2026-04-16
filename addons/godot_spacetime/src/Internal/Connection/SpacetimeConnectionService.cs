@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using GodotSpacetime.Auth;
@@ -280,6 +282,11 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         var authState = _credentialsProvided ? ConnectionAuthState.TokenRestored : ConnectionAuthState.None;
 
+        // Once the server accepts the token, the "restored from store" distinction is no longer
+        // relevant for failure classification. A subsequent Degraded→Disconnected is a network
+        // issue, not a token-expiry event.
+        _restoredFromStore = false;
+
         if (CurrentStatus.State != ConnectionState.Connected)
         {
             var description = CurrentStatus.State == ConnectionState.Degraded
@@ -322,10 +329,16 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
                 if (_credentialsProvided)
                 {
+                    var authState = IsLikelyAuthError(error)
+                        ? ConnectionAuthState.AuthFailed
+                        : ConnectionAuthState.ConnectFailed;
+                    var label = authState == ConnectionAuthState.AuthFailed
+                        ? "authentication failed"
+                        : "connection failed (credentials were provided but the cause is ambiguous)";
                     _stateMachine.Transition(
                         ConnectionState.Disconnected,
-                        $"DISCONNECTED — authentication failed: {error.Message}",
-                        ConnectionAuthState.AuthFailed
+                        $"DISCONNECTED — {label}: {error.Message}",
+                        authState
                     );
                     return;
                 }
@@ -437,10 +450,15 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
             // NO ConnectionClosed here — session is degraded, not ended
         }
 
+        var disconnectAuthState = ClassifyDisconnectAuthState(error);
         RunConnectionTeardown(() =>
         {
             ResetDisconnectedSessionState();
-            _stateMachine.Transition(ConnectionState.Disconnected, $"DISCONNECTED — connection lost: {error.Message}");
+            _stateMachine.Transition(
+                ConnectionState.Disconnected,
+                $"DISCONNECTED — connection lost: {error.Message}",
+                disconnectAuthState
+            );
         });
         OnConnectionClosed?.Invoke(new ConnectionClosedEvent
         {
@@ -530,6 +548,31 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         {
             _isTearingDownConnection = wasTearingDownConnection;
         }
+    }
+
+    private ConnectionAuthState ClassifyDisconnectAuthState(Exception error)
+    {
+        if (!_credentialsProvided)
+            return ConnectionAuthState.None;
+
+        if (_restoredFromStore)
+            return ConnectionAuthState.TokenExpired;
+
+        return IsLikelyAuthError(error)
+            ? ConnectionAuthState.AuthFailed
+            : ConnectionAuthState.ConnectFailed;
+    }
+
+    private static bool IsLikelyAuthError(Exception error)
+    {
+        for (var ex = error; ex != null; ex = ex.InnerException)
+        {
+            if (ex is HttpRequestException httpEx &&
+                httpEx.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+                return true;
+        }
+
+        return false;
     }
 
     private static void ValidateSettings(SpacetimeSettings settings)

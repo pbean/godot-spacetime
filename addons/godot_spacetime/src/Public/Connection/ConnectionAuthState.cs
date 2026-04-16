@@ -16,6 +16,13 @@ public enum ConnectionAuthState
     AuthFailed,
 
     /// <summary>
+    /// The connection failed while credentials were provided, but the cause could not be confirmed as
+    /// an authentication rejection (e.g., network timeout, server offline). Check
+    /// <see cref="ConnectionStatus.Description"/> for the underlying error detail.
+    /// </summary>
+    ConnectFailed,
+
+    /// <summary>
     /// A previously stored token was rejected by the server.
     /// Clear the token store via <c>Settings.TokenStore?.ClearTokenAsync()</c> and reconnect to establish a new session.
     /// </summary>

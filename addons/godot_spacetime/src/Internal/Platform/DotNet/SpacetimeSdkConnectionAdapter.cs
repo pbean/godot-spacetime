@@ -115,6 +115,19 @@ internal sealed class SpacetimeSdkConnectionAdapter
             ?? throw new InvalidOperationException($"Generated connection builder method '{methodName}' returned null.");
     }
 
+    // SDK UPGRADE GUARD — `OnConnect` delegate shape assumption
+    //
+    // Built against `SpacetimeDB.ClientSDK 2.1.0`, whose generated `OnConnect` callback is
+    // `Action<IDbConnection, Identity, string>` — parameter 0 is the connection, parameter 1 is
+    // the identity struct, and the final parameter is the token string.
+    //
+    // This method hard-codes those positional assumptions (`parameterExpressions[1]` for identity,
+    // `[^1]` for token). If a future SDK release reorders or inserts parameters, the lambda will
+    // either throw at invocation time or silently bind the wrong argument — no build-time signal.
+    //
+    // When upgrading the SDK, re-verify the generated `OnConnect` delegate signature and update
+    // both indices here and the matching test in
+    // `tests/test_story_1_4_adapter_boundary.py` (isolation-boundary contract).
     private static Delegate CreateConnectCallback(object builder, IConnectionEventSink sink)
     {
         var delegateType = GetCallbackType(builder, "OnConnect");
@@ -130,7 +143,7 @@ internal sealed class SpacetimeSdkConnectionAdapter
             ?? typeof(object).GetMethod("ToString", Type.EmptyTypes)!;
         var identityStringExpression = Expression.Call(identityExpression, toStringMethod);
 
-        // param[^1] = string token (last parameter)
+        // param[^1] = string token (last parameter) — see SDK UPGRADE GUARD above
         var tokenExpression = parameterExpressions[^1];
 
         var body = Expression.Call(
