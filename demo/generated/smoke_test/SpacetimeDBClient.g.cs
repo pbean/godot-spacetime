@@ -28,6 +28,7 @@ namespace SpacetimeDB.Types
         public RemoteTables(DbConnection conn)
         {
             AddTable(SmokeTest = new(conn));
+            AddTable(TypedEntity = new(conn));
         }
     }
 
@@ -525,6 +526,7 @@ namespace SpacetimeDB.Types
         internal static string[] AllTablesSqlQueries() => new string[]
         {
             new QueryBuilder().From.SmokeTest().ToSql(),
+            new QueryBuilder().From.TypedEntity().ToSql(),
         }
         ;
     }
@@ -532,6 +534,7 @@ namespace SpacetimeDB.Types
     public sealed class From
     {
         public global::SpacetimeDB.Table<SmokeTest, SmokeTestCols, SmokeTestIxCols> SmokeTest() => new("smoke_test", new SmokeTestCols("smoke_test"), new SmokeTestIxCols("smoke_test"));
+        public global::SpacetimeDB.Table<TypedEntity, TypedEntityCols, TypedEntityIxCols> TypedEntity() => new("typed_entity", new TypedEntityCols("typed_entity"), new TypedEntityIxCols("typed_entity"));
     }
 
     public sealed class TypedSubscriptionBuilder
