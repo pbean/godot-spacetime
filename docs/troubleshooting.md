@@ -19,6 +19,11 @@ The supported baseline is Godot `4.6.2`, `.NET 8.0+`, and SpacetimeDB `2.1+`. Se
 |-------------------|-------------|-----------------|
 | `"Spacetime Codegen"` panel shows `MISSING` | Bindings have not been generated yet | Run `bash scripts/codegen/generate-smoke-test.sh` from the repository root |
 | `"Spacetime Codegen"` panel shows `NOT CONFIGURED` | `spacetime/modules/smoke_test/` does not exist | Confirm the module directory exists, then rerun `bash scripts/codegen/generate-smoke-test.sh` |
+| `"Generate from Server"` shows `FAILED — could not reach server: ...` | Wrong server URL, server offline, or request timeout | Check the URL, confirm the server is running, and retry once the HTTP endpoint is reachable |
+| `"Generate from Server"` shows `FAILED — server requires authentication` | The server rejected anonymous HTTP access with `401` or `403` | Use an anonymously accessible local/dev server; authenticated editor fetch is not supported in this release |
+| `"Generate from Server"` shows `BLOCKED — output directory outside safe boundary` | The requested output directory is not under a generated path | Change the output path to `demo/generated/...`, `tests/fixtures/generated/...`, or another directory with a `generated` path segment |
+| `"Generate from Server"` shows `FAILED — spacetime CLI not found in PATH` | `spacetime` CLI not installed or not exported on `PATH` | Install the SpacetimeDB CLI `2.1+` and restart the editor so `spacetime` is discoverable |
+| `"Generate from Server"` shows `FAILED — generation error (see recovery guidance)` and mentions `python3` | `python3` is not installed or not exported on `PATH` for the Godot editor process | Install `python3`, confirm `python3 --version` works in the same shell/session, then retry generation |
 | `spacetime` CLI command not found | SpacetimeDB CLI not installed | Install the SpacetimeDB CLI `2.1+` |
 
 Running `bash scripts/codegen/generate-smoke-test.sh` clears the previous output before regenerating — no manual cleanup is required. Generated bindings are written to `demo/generated/smoke_test/`.
@@ -228,6 +233,10 @@ These surface via `GD.PushError` in the Godot Output panel and `SpacetimeClient.
 For the expected success and failure output message sequences, see the `## Reducer Interaction` section in `demo/README.md`.
 
 See `docs/runtime-boundaries.md` for the complete reducer error model and `ReducerFailureCategory` reference.
+
+### Scheduled Reducers
+
+If a scheduled reducer is not firing, verify that a row has been inserted into the corresponding scheduled table with a valid `ScheduleAt` value (e.g., `new SpacetimeDB.ScheduleAt.Interval(new SpacetimeDB.TimeDuration(microseconds))`). Scheduled reducers are server-triggered — they do not appear in `RemoteReducers` and cannot be invoked directly with `InvokeReducer()`.
 
 ## See Also
 

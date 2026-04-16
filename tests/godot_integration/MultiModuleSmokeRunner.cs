@@ -144,6 +144,7 @@ public partial class MultiModuleSmokeRunner : Node
             AddChild(_receiverB);
 
             VerifyRowReceiverModuleSelection();
+            if (_finished) return;
             StartStep(Step.ConnectClientA);
             _clientA.Connect();
         }
