@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using GodotSpacetime.Connection;
 using SpacetimeDB;
 
 namespace GodotSpacetime.Runtime.Platform.DotNet;
@@ -69,6 +70,7 @@ internal sealed class SpacetimeSdkConnectionAdapter
 
         builder = InvokeMethod(builder, "WithUri", NormalizeUri(settings.Host));
         builder = InvokeMethod(builder, "WithDatabaseName", settings.Database);
+        builder = InvokeMethod(builder, "WithCompression", MapCompressionMode(settings.CompressionMode));
 
         // Story 2.2: inject credentials token when provided
         if (!string.IsNullOrWhiteSpace(settings.Credentials))
@@ -93,6 +95,16 @@ internal sealed class SpacetimeSdkConnectionAdapter
         connection?.Disconnect();
     }
 
+    internal static MessageCompressionMode GetEffectiveCompressionMode(MessageCompressionMode requestedCompressionMode)
+    {
+        // The pinned 2.1.x client runtime currently canonicalizes Brotli requests to Gzip.
+        return requestedCompressionMode switch
+        {
+            MessageCompressionMode.Brotli => MessageCompressionMode.Gzip,
+            _ => requestedCompressionMode,
+        };
+    }
+
     private static string NormalizeUri(string host)
     {
         var trimmedHost = host.Trim();
@@ -103,6 +115,17 @@ internal sealed class SpacetimeSdkConnectionAdapter
         }
 
         return $"wss://{trimmedHost}";
+    }
+
+    private static SpacetimeDB.Compression MapCompressionMode(MessageCompressionMode compressionMode)
+    {
+        return compressionMode switch
+        {
+            MessageCompressionMode.None => SpacetimeDB.Compression.None,
+            MessageCompressionMode.Gzip => SpacetimeDB.Compression.Gzip,
+            MessageCompressionMode.Brotli => SpacetimeDB.Compression.Brotli,
+            _ => throw new ArgumentOutOfRangeException(nameof(compressionMode), compressionMode, "Unsupported compression mode."),
+        };
     }
 
     private static object InvokeMethod(object target, string methodName, params object[] args)

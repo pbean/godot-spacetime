@@ -47,6 +47,17 @@ The compatibility panel reads the CLI version embedded in generated bindings and
 
 Connection lifecycle state transitions are surfaced through the `SpacetimeClient.ConnectionStateChanged` signal. See `docs/connection.md` for the complete state table and editor panel labels.
 
+## Compression
+
+Compression is opt-in through `SpacetimeSettings.CompressionMode` and defaults to `None`. The effective mode for an active session is exposed through `ConnectionStatus.ActiveCompressionMode` and mirrored in the `"Spacetime Status"` panel's `Compression:` row.
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| `"Spacetime Status"` shows `Compression: None (opt-in default)` while connected | `CompressionMode` was left at the product default | Set `SpacetimeSettings.CompressionMode` to `Gzip` or `Brotli` before calling `Connect()` if you want compressed transport |
+| `"Spacetime Status"` shows `Compression: Gzip` after selecting `Brotli` | The pinned `2.1.x` client runtime currently canonicalizes `Brotli` requests to effective `Gzip` | This is the expected behavior for the supported stack; inspect `ConnectionStatus.ActiveCompressionMode` for the effective mode rather than assuming the raw request stays unchanged |
+
+The current supported runtime did not expose a reproducible unsupported-compression failure path during Story 9.1 validation, so the addon does not add speculative retry-to-`None` fallback logic on top of the upstream SDK.
+
 ## Reconnection Behavior
 
 `SpacetimeClient` owns an internal `ReconnectPolicy` that engages automatically when a previously `Connected` session encounters a transport error. Scene code must **not** implement its own reconnect loop — observe `ConnectionStateChanged` and `ConnectionClosed` instead. See `docs/runtime-boundaries.md` for the ownership contract.

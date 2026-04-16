@@ -21,7 +21,7 @@ The lifecycle of a connection is expressed as a [`ConnectionState`](../addons/go
 | `Connected` | A live session is established and subscriptions may be applied. |
 | `Degraded` | The session is experiencing trouble (e.g., transient network loss) but has not fully disconnected. Recovery is attempted automatically. |
 
-A [`ConnectionStatus`](../addons/godot_spacetime/src/Public/Connection/ConnectionStatus.cs) value pairs a `ConnectionState` with a human-readable description for logging and UI display. [`ConnectionOpenedEvent`](../addons/godot_spacetime/src/Public/Connection/ConnectionOpenedEvent.cs) represents the successful-open boundary rather than every lifecycle transition.
+A [`ConnectionStatus`](../addons/godot_spacetime/src/Public/Connection/ConnectionStatus.cs) value pairs a `ConnectionState` with a human-readable description for logging and UI display. It also carries `ActiveCompressionMode`, the effective compression mode for the current session. [`ConnectionOpenedEvent`](../addons/godot_spacetime/src/Public/Connection/ConnectionOpenedEvent.cs) represents the successful-open boundary rather than every lifecycle transition.
 
 [`ConnectionClosedEvent`](../addons/godot_spacetime/src/Public/Connection/ConnectionClosedEvent.cs) is the symmetric close-boundary event: it fires when a live session ends, after `ConnectionStateChanged` transitions to `Disconnected`. It does **not** fire for failed connect attempts (the session never reached `Connected`); `ConnectionStateChanged` covers those via the `Disconnected` state.
 
@@ -41,6 +41,8 @@ accompanies `ConnectionStatus` and identifies the authentication phase:
 | `AuthFailed` | Provided credentials were confirmed rejected (HTTP 401/403); auth-specific failure. |
 | `ConnectFailed` | Connection failed while credentials were provided, but the cause is ambiguous (e.g., network timeout). Check `ConnectionStatus.Description` for detail. |
 | `TokenExpired` | A previously stored token was rejected; clear the token store and reconnect. |
+
+Compression is opt-in through `SpacetimeSettings.CompressionMode`, which defaults to `MessageCompressionMode.None`. For the pinned `2.1.x` client stack, a `Brotli` request currently reports effective `ActiveCompressionMode` as `Gzip`.
 
 ### Auth / Identity — `ITokenStore`
 
@@ -427,6 +429,7 @@ See [`docs/codegen.md`](./codegen.md) for the generation workflow.
 |----------|------|---------|
 | `Host` | `string` | The SpacetimeDB server address |
 | `Database` | `string` | The target database name on the server |
+| `CompressionMode` | `MessageCompressionMode` | Optional wire-message compression preference. Defaults to `None`; current `2.1.x` `Brotli` requests surface as effective `Gzip`. |
 | `Credentials` | `string?` | Optional token for authenticated sessions; passed to `WithToken()`. `null` = anonymous connection. |
 | `TokenStore` | `ITokenStore?` | Optional token persistence provider; `null` by default (tokens not persisted) |
 

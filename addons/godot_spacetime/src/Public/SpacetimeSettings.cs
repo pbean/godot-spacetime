@@ -1,5 +1,6 @@
 using Godot;
 using GodotSpacetime.Auth;
+using GodotSpacetime.Connection;
 
 namespace GodotSpacetime;
 
@@ -17,6 +18,14 @@ public partial class SpacetimeSettings : Resource
     /// <summary>The target database name on the server.</summary>
     [Export]
     public string Database { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Optional wire-message compression preference.
+    /// Defaults to <see cref="MessageCompressionMode.None"/> so existing projects
+    /// keep their current behavior until compression is explicitly enabled.
+    /// </summary>
+    [Export]
+    public MessageCompressionMode CompressionMode { get; set; } = MessageCompressionMode.None;
 
     /// <summary>
     /// Optional credentials token for authenticated sessions.

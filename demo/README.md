@@ -68,9 +68,10 @@ If either panel shows an error state, rerun Step 4 and confirm that `spacetime/m
 1. Right-click in the Godot FileSystem panel and select `New Resource` → choose `SpacetimeSettings`.
 2. Set the `Host` field (for example, `localhost:3000`).
 3. Set the `Database` field (for example, `my_module`).
-4. Save the resource file.
-5. Go to `Project > Project Settings > Autoload`, click the folder icon, and select `addons/godot_spacetime/src/Public/SpacetimeClient.cs`. Confirm the singleton name is `SpacetimeClient`, then click **Add**.
-6. Select the `SpacetimeClient` autoload entry and assign your saved `SpacetimeSettings` resource to its `Settings` property in the Inspector.
+4. Leave `CompressionMode` at `None` unless you explicitly want compressed transport. On the pinned `2.1.x` stack, a `Brotli` request currently surfaces as effective `Gzip`.
+5. Save the resource file.
+6. Go to `Project > Project Settings > Autoload`, click the folder icon, and select `addons/godot_spacetime/src/Public/SpacetimeClient.cs`. Confirm the singleton name is `SpacetimeClient`, then click **Add**.
+7. Select the `SpacetimeClient` autoload entry and assign your saved `SpacetimeSettings` resource to its `Settings` property in the Inspector.
 
 ### Step 7 — Open `demo/DemoMain.tscn`, run the project, and observe connection
 
@@ -80,9 +81,12 @@ If either panel shows an error state, rerun Step 4 and confirm that `spacetime/m
 
 ```
 CONNECTED — active session established
+Compression: None (opt-in default)
 ```
 
 The Output panel will first print `[Demo] Bootstrap ready — godot-spacetime addon enabled`, then log connection state transitions as `[Demo] Connection state: <state>`.
+
+`ConnectionStatus` now also exposes `ActiveCompressionMode`, and the `"Spacetime Status"` panel mirrors that effective mode instead of inferring it from `SpacetimeSettings.CompressionMode` alone. If you opt into `Gzip`, the panel reports `Compression: Gzip`. If you request `Brotli` on the pinned `2.1.x` stack, `ConnectionStatus.ActiveCompressionMode` currently reports `Gzip`.
 
 ## Auth and Session Resume
 

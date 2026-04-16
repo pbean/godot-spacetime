@@ -68,9 +68,10 @@ Create a `SpacetimeSettings` resource in the Godot editor:
 2. Select `New Resource` → choose `SpacetimeSettings`.
 3. Set the `Host` field (for example, `localhost:3000`).
 4. Set the `Database` field (for example, `my_module`).
-5. Save the resource file.
+5. Leave `CompressionMode` at `None` unless you explicitly want opt-in compression. If you choose `Brotli` on the pinned `2.1.x` stack, the effective mode currently surfaces as `Gzip`.
+6. Save the resource file.
 
-The `SpacetimeSettings` resource exposes `[Export] Host` and `[Export] Database` fields. Both are inspector-assignable.
+The `SpacetimeSettings` resource exposes `[Export] Host`, `[Export] Database`, and `[Export] CompressionMode` fields. `CompressionMode` defaults to `None` for backward-compatible behavior unless you opt in.
 
 ### Step 6 — Add SpacetimeClient as Autoload
 

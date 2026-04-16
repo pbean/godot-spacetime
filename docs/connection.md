@@ -1,6 +1,6 @@
 # Connection
 
-`SpacetimeClient` is the Godot-facing entry point for connection lifecycle management. Assign a `SpacetimeSettings` resource, call `Connect()`, and observe the emitted signals to understand what the SDK is doing.
+`SpacetimeClient` is the Godot-facing entry point for connection lifecycle management. Assign a `SpacetimeSettings` resource, optionally set `CompressionMode`, call `Connect()`, and observe the emitted signals to understand what the SDK is doing.
 
 ## Connection Lifecycle
 
@@ -13,7 +13,9 @@ The lifecycle is represented by `ConnectionState` and surfaced through the `conn
 | `Connected` | The session is open and the runtime can continue advancing work through `FrameTick()`. |
 | `Degraded` | The session hit a recoverable problem and the runtime-owned reconnect policy is handling it. |
 
-Each `connection_state_changed` emission includes a `ConnectionStatus` payload with both the named state and a human-readable description. The descriptions are explicit text, not color-only cues.
+Each `connection_state_changed` emission includes a `ConnectionStatus` payload with the named state, a human-readable description, and `ActiveCompressionMode` for the effective session compression mode. The descriptions are explicit text, not color-only cues.
+
+Compression is opt-in through `SpacetimeSettings.CompressionMode`. The product default is `None`. On the pinned `2.1.x` client stack, a `Brotli` request currently surfaces as effective `Gzip`, and `ConnectionStatus.ActiveCompressionMode` reports that effective mode.
 
 ## Signals
 
@@ -29,6 +31,11 @@ When the plugin is enabled, the `"Spacetime Status"` bottom panel mirrors the cu
 - `CONNECTED — active session established`
 - `DEGRADED — session experiencing issues; reconnecting`
 - `NOT CONFIGURED — assign a SpacetimeSettings resource`
+
+The panel also includes a `Compression:` row sourced from `ConnectionStatus.ActiveCompressionMode` rather than from `SpacetimeSettings` alone. Typical values are:
+
+- `None (opt-in default)`
+- `Gzip`
 
 ## See Also
 
