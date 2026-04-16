@@ -117,6 +117,8 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
                 ("TOKEN EXPIRED", "Stored token was rejected. Call Settings.TokenStore?.ClearTokenAsync() to remove the invalid token, then reconnect."),
             ConnectionAuthState.AuthFailed =>
                 ("AUTH FAILED", "Credentials were rejected. Verify your token or call Settings.TokenStore?.ClearTokenAsync() to reset."),
+            ConnectionAuthState.ConnectFailed =>
+                ("CONNECT FAILED", "Connection failed while credentials were provided. This may be a network issue rather than a credential rejection — check connectivity and retry."),
             _ when connState == ConnectionState.Connected =>
                 ("ANONYMOUS", "Connected without credentials. No persistent identity."),
             _ =>

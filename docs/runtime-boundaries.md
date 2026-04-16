@@ -38,7 +38,8 @@ accompanies `ConnectionStatus` and identifies the authentication phase:
 |------------|---------|
 | `None` | No authentication context. Anonymous session or pre-connection state. |
 | `TokenRestored` | Restored or provided credentials were accepted; session is authenticated. |
-| `AuthFailed` | Provided credentials were rejected; auth-specific failure. |
+| `AuthFailed` | Provided credentials were confirmed rejected (HTTP 401/403); auth-specific failure. |
+| `ConnectFailed` | Connection failed while credentials were provided, but the cause is ambiguous (e.g., network timeout). Check `ConnectionStatus.Description` for detail. |
 | `TokenExpired` | A previously stored token was rejected; clear the token store and reconnect. |
 
 ### Auth / Identity — `ITokenStore`
@@ -85,8 +86,13 @@ resulting status identifies the failure category and the recommended recovery pa
   the invalid token; the next `Connect()` call will fall back to anonymous (or use fresh credentials if
   `Settings.Credentials` is set). This state is only emitted when the session was opened via token
   restoration.
-- `AuthFailed` — Explicit credentials were rejected. Update `Settings.Credentials` with a valid token
-  before reconnecting.
+- `AuthFailed` — Explicit credentials were confirmed rejected by the server (HTTP 401/403). Update
+  `Settings.Credentials` with a valid token before reconnecting.
+- `ConnectFailed` — The connection failed while credentials were provided, but the error could not be
+  confirmed as an authentication rejection. This typically indicates a network issue (timeout, DNS
+  failure, server offline). Check `ConnectionStatus.Description` for the underlying error detail.
+  Retry the connection; if the issue persists, verify network connectivity before assuming a credential
+  problem.
 
 Recoverable auth failures are distinct from unrecoverable programming faults (e.g., missing `Host` or
 `Database`) which throw `ArgumentException` synchronously from `Connect()` before any connection attempt.

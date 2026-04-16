@@ -391,8 +391,8 @@ def test_state_machine_transition_passes_auth_state_to_status_constructor() -> N
 
 def test_connection_service_auth_error_description_text() -> None:
     content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
-    assert "authentication failed:" in content, (
-        "SpacetimeConnectionService.OnConnectError must include 'authentication failed:' in the auth-specific description (AC 3)"
+    assert "authentication failed" in content, (
+        "SpacetimeConnectionService.OnConnectError must include 'authentication failed' in the auth-specific description (AC 3)"
     )
 
 
@@ -449,4 +449,29 @@ def test_auth_status_panel_has_tools_guard() -> None:
     content = _read("addons/godot_spacetime/src/Editor/Status/ConnectionAuthStatusPanel.cs")
     assert "#if TOOLS" in content, (
         "ConnectionAuthStatusPanel.cs must be wrapped in #if TOOLS to prevent it loading in non-editor builds"
+    )
+
+
+# ---------------------------------------------------------------------------
+# ConnectFailed — ambiguous credentialed failure (Epic 2 retro TD2+TD3)
+# ---------------------------------------------------------------------------
+
+def test_connection_auth_state_has_connect_failed_value() -> None:
+    content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs")
+    assert "ConnectFailed" in content, (
+        "ConnectionAuthState.cs must contain a 'ConnectFailed' value for ambiguous credentialed failures"
+    )
+
+
+def test_connection_service_has_connect_failed_state() -> None:
+    content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
+    assert "ConnectionAuthState.ConnectFailed" in content, (
+        "SpacetimeConnectionService.cs must reference ConnectionAuthState.ConnectFailed"
+    )
+
+
+def test_connection_service_has_auth_error_classifier() -> None:
+    content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
+    assert "IsLikelyAuthError" in content, (
+        "SpacetimeConnectionService.cs must have an IsLikelyAuthError classifier for exception-chain inspection"
     )

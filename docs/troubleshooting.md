@@ -83,7 +83,8 @@ Auth failures that prevent a session from reaching `Connected` do not emit `Conn
 | ConnectionAuthState | Meaning | Recovery Action |
 |--------------------|---------|-----------------|
 | `TokenExpired` | A previously stored token was rejected by the server | Call `Settings.TokenStore?.ClearTokenAsync()` to remove the invalid token; the next `Connect()` call falls back to anonymous |
-| `AuthFailed` | Explicit credentials were rejected | Update `Settings.Credentials` with a valid token before reconnecting |
+| `AuthFailed` | Explicit credentials were confirmed rejected (HTTP 401/403) | Update `Settings.Credentials` with a valid token before reconnecting |
+| `ConnectFailed` | Connection failed while credentials were provided, but the cause is ambiguous (e.g., network timeout, server offline) | Check `ConnectionStatus.Description` for the underlying error; retry the connection or verify network connectivity |
 
 If the configured `ITokenStore` throws, `Connect()` falls back to anonymous without corrupting session state. Check the `ITokenStore` implementation for errors.
 

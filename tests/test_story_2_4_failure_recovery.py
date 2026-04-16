@@ -463,3 +463,72 @@ def test_runtime_boundaries_failure_recovery_references_connection_state_changed
         "docs/runtime-boundaries.md must reference SpacetimeClient.ConnectionStateChanged "
         "as how gameplay code observes auth failure events (AC 1)"
     )
+
+
+# ---------------------------------------------------------------------------
+# ConnectFailed — ambiguous credentialed failure (Epic 2 retro TD2+TD3)
+# ---------------------------------------------------------------------------
+
+def test_connection_auth_state_connect_failed_between_auth_failed_and_token_expired() -> None:
+    content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs")
+    pos_auth_failed = content.find("AuthFailed")
+    pos_connect_failed = content.find("ConnectFailed")
+    pos_token_expired = content.find("TokenExpired")
+    assert pos_auth_failed != -1 and pos_connect_failed != -1 and pos_token_expired != -1, (
+        "All three values (AuthFailed, ConnectFailed, TokenExpired) must exist in ConnectionAuthState enum"
+    )
+    assert pos_auth_failed < pos_connect_failed < pos_token_expired, (
+        "Enum order must be: AuthFailed, ConnectFailed, TokenExpired"
+    )
+
+
+def test_auth_status_panel_has_connect_failed_arm() -> None:
+    content = _read("addons/godot_spacetime/src/Editor/Status/ConnectionAuthStatusPanel.cs")
+    assert "ConnectFailed" in content, (
+        "ConnectionAuthStatusPanel.cs must handle ConnectionAuthState.ConnectFailed in the switch"
+    )
+
+
+def test_auth_status_panel_has_connect_failed_label() -> None:
+    content = _read("addons/godot_spacetime/src/Editor/Status/ConnectionAuthStatusPanel.cs")
+    assert "CONNECT FAILED" in content, (
+        "ConnectionAuthStatusPanel.cs must display 'CONNECT FAILED' label for ConnectFailed state"
+    )
+
+
+def test_connection_service_handle_disconnect_surfaces_auth_state() -> None:
+    content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
+    method_pos = content.find("HandleDisconnectError")
+    assert method_pos != -1
+    after_method = content[method_pos:]
+    assert "ClassifyDisconnectAuthState" in after_method or "ConnectFailed" in after_method, (
+        "HandleDisconnectError must surface auth state via classifier when reconnect budget exhausted"
+    )
+
+
+def test_runtime_boundaries_has_connect_failed_in_auth_table() -> None:
+    content = _read("docs/runtime-boundaries.md")
+    assert "ConnectFailed" in content, (
+        "docs/runtime-boundaries.md must include ConnectFailed in the ConnectionAuthState table"
+    )
+
+
+def test_troubleshooting_has_connect_failed() -> None:
+    content = _read("docs/troubleshooting.md")
+    assert "ConnectFailed" in content, (
+        "docs/troubleshooting.md must document ConnectFailed in the auth failure table"
+    )
+
+
+def test_connection_auth_state_still_has_connect_failed() -> None:
+    content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs")
+    assert "ConnectFailed" in content, (
+        "ConnectionAuthState.cs must still contain 'ConnectFailed' value (regression guard)"
+    )
+
+
+def test_auth_status_panel_still_has_connect_failed() -> None:
+    content = _read("addons/godot_spacetime/src/Editor/Status/ConnectionAuthStatusPanel.cs")
+    assert "CONNECT FAILED" in content, (
+        "ConnectionAuthStatusPanel.cs must still contain 'CONNECT FAILED' label (regression guard)"
+    )
