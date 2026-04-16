@@ -196,6 +196,64 @@ def test_troubleshooting_connection_contains_database():
 
 
 # ---------------------------------------------------------------------------
+# 2.6b Reconnection behavior content tests (Epic 6 retro D2)
+# ---------------------------------------------------------------------------
+
+def test_troubleshooting_reconnection_section_present():
+    content = _read("docs/troubleshooting.md")
+    _section(content, "Reconnection Behavior")
+
+
+def test_troubleshooting_reconnection_references_reconnect_policy():
+    content = _read("docs/troubleshooting.md")
+    section = _section(content, "Reconnection Behavior")
+    assert "ReconnectPolicy" in section, \
+        "Reconnection Behavior section must name the internal ReconnectPolicy owner (D2)"
+
+
+def test_troubleshooting_reconnection_states_retry_budget():
+    content = _read("docs/troubleshooting.md")
+    section = _section(content, "Reconnection Behavior")
+    assert "3 attempts" in section, \
+        "Reconnection Behavior section must state the 3-attempt retry budget (D2)"
+
+
+def test_troubleshooting_reconnection_states_backoff_schedule():
+    content = _read("docs/troubleshooting.md")
+    section = _section(content, "Reconnection Behavior")
+    assert "1s, 2s, 4s" in section, \
+        "Reconnection Behavior section must spell out the 1s/2s/4s backoff schedule (D2)"
+
+
+def test_troubleshooting_reconnection_describes_degraded_transition():
+    content = _read("docs/troubleshooting.md")
+    section = _section(content, "Reconnection Behavior")
+    assert "DEGRADED" in section and "CONNECTED" in section and "DISCONNECTED" in section, \
+        "Reconnection Behavior section must cover DEGRADED → CONNECTED recovery and DEGRADED → DISCONNECTED exhaustion paths (D2)"
+
+
+def test_troubleshooting_reconnection_includes_degraded_log_shape():
+    content = _read("docs/troubleshooting.md")
+    section = _section(content, "Reconnection Behavior")
+    assert "reconnecting (attempt N/3, backoff Xs)" in section, \
+        "Reconnection Behavior section must show the canonical DEGRADED log-line shape for observability (D2)"
+
+
+def test_troubleshooting_reconnection_warns_against_scene_retry_loop():
+    content = _read("docs/troubleshooting.md")
+    section = _section(content, "Reconnection Behavior")
+    assert "ConnectionStateChanged" in section and "ConnectionClosed" in section, \
+        "Reconnection Behavior section must redirect scene code to ConnectionStateChanged / ConnectionClosed instead of custom retry loops (D2)"
+
+
+def test_troubleshooting_reconnection_covers_misconfiguration_symptom():
+    content = _read("docs/troubleshooting.md")
+    section = _section(content, "Reconnection Behavior")
+    assert "misconfiguration" in section.lower(), \
+        "Reconnection Behavior section must identify the misconfiguration symptom pattern per retro D2"
+
+
+# ---------------------------------------------------------------------------
 # 2.7 Authentication content tests (AC: 1, 2, AC3 terminology)
 # ---------------------------------------------------------------------------
 
