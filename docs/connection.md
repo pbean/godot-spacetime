@@ -2,6 +2,14 @@
 
 `SpacetimeClient` is the Godot-facing entry point for connection lifecycle management. Assign a `SpacetimeSettings` resource, optionally set `CompressionMode` or `LightMode`, call `Connect()`, and observe the emitted signals to understand what the SDK is doing.
 
+Story 10.1 keeps the existing single-autoload workflow intact with zero changes:
+`ConnectionId` still defaults to `SpacetimeClient`, and
+`GeneratedBindingsNamespace` still defaults to `SpacetimeDB.Types`.
+Multi-module support is additive: create more than one `SpacetimeClient`, give
+each instance a distinct `ConnectionId`, set the matching
+`SpacetimeSettings.GeneratedBindingsNamespace`, then resolve the intended client
+through `SpacetimeClient.TryGetClient(...)` or `GetClientOrThrow(...)`.
+
 ## Connection Lifecycle
 
 The lifecycle is represented by `ConnectionState` and surfaced through the `connection_state_changed` Godot signal.
@@ -18,6 +26,18 @@ Each `connection_state_changed` emission includes a `ConnectionStatus` payload w
 Compression is opt-in through `SpacetimeSettings.CompressionMode`. The product default is `None`. On the pinned `2.1.x` client stack, a `Brotli` request currently surfaces as effective `Gzip`, and `ConnectionStatus.ActiveCompressionMode` reports that effective mode.
 
 Light mode is opt-in through `SpacetimeSettings.LightMode`, and the product default is `false`. The setting is applied when a session is opened; changing `LightMode` on the settings resource while a current session is already connected does not reconfigure that current session and only takes effect on the next connection cycle.
+
+## Multiple Clients
+
+One `SpacetimeClient` still equals one connection owner. Story 10.1 does not
+introduce a shared multiplexer service inside a single client.
+
+For multiple modules:
+
+- Keep the default client at `ConnectionId = "SpacetimeClient"` when you want to preserve the existing `/root/SpacetimeClient` autoload path.
+- Give each additional client its own `ConnectionId` such as `"AnalyticsClient"` or `"ChatClient"`.
+- Set `SpacetimeSettings.GeneratedBindingsNamespace` to the generated namespace for that client's module.
+- Use `SpacetimeClient.TryGetClient("AnalyticsClient", out var client)` instead of crawling arbitrary scene-tree paths manually.
 
 ## Telemetry
 
@@ -69,6 +89,10 @@ The panel also includes a `Compression:` row sourced from `ConnectionStatus.Acti
 
 - `None (opt-in default)`
 - `Gzip`
+
+Story 10.1 keeps this editor panel default-client-only. It follows the default
+`ConnectionId = "SpacetimeClient"` client and does not attempt to present a
+multi-client selector in the panel UI.
 
 ## See Also
 

@@ -229,9 +229,13 @@ After these steps the project is back to a clean, reproducible state. No maintai
 1. In your scene, add a `RowReceiver` node (found under `Add Node → RowReceiver`).
 2. Select the node and open the Inspector.
 3. Set the `TableName` dropdown to the table you want to observe (e.g., `SmokeTest`). The dropdown is populated from the generated `RemoteTables` type at editor time by reflecting its public table members. In the current `SpacetimeDB 2.1.x` generated bindings those members are public fields.
-4. Connect `row_inserted`, `row_updated`, or `row_deleted` in the Node panel or in code.
+4. Leave `ClientPath` at `/root/SpacetimeClient` for the default single-client path, or point it at a different client node when using the additive multi-client Story 10.1 workflow.
+5. Connect `row_inserted`, `row_updated`, or `row_deleted` in the Node panel or in code.
 
 `SpacetimeClient` must be registered as an autoload at `/root/SpacetimeClient` (see Step 6 of the Setup section above).
+That remains the default path. The multi-client path is additive: use
+`ClientPath` to target a different `SpacetimeClient` instance without changing
+existing scenes.
 
 ### Connecting in GDScript
 
@@ -284,6 +288,7 @@ rowReceiver.RowDeleted += e =>
 
 - `RowReceiver` is a passive observer — it does **not** call `Subscribe()`. You still need an active subscription (via `SpacetimeClient.Subscribe()`) for the table's rows to be synchronized.
 - `RowReceiver` only emits events after `SpacetimeClient.RowChanged` fires, which requires an active subscription. A RowReceiver for a table with no active subscription silently emits nothing.
+- In multi-client scenes, set `ClientPath` explicitly so the RowReceiver follows the intended client instead of assuming the default `/root/SpacetimeClient` path.
 - The `row_inserted`, `row_updated`, and `row_deleted` signals each carry a `RowChangedEvent` payload. Cast `e.NewRow` or `e.OldRow` to the generated row type to access typed fields.
 - The lifecycle terms `RowChanged` and `RowChangedEvent` are defined in `docs/runtime-boundaries.md`.
 

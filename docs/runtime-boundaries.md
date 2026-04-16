@@ -298,10 +298,12 @@ Row change dispatch is mediated by `SpacetimeSdkRowCallbackAdapter` (in `Interna
 **How RowReceiver works:**
 
 - RowReceiver subscribes to `SpacetimeClient.RowChanged` and filters by `TableName` — NOT a parallel dispatch path. The existing `GodotSignalAdapter` deferred dispatch already fires `SpacetimeClient.RowChanged` on the main thread; RowReceiver is a downstream consumer of that already-thread-safe signal.
-- The node requires `SpacetimeClient` registered as an autoload at `/root/SpacetimeClient`. A `GD.PushWarning` (not an error) is emitted if the autoload is not found, and the node returns without wiring.
+- `ClientPath` defaults to `/root/SpacetimeClient`, so existing scenes keep working unchanged. Set `ClientPath` to a different client node to bind the receiver to another live connection owner.
+- A `GD.PushWarning` (not an error) is emitted if the selected client is not found, and the node returns without wiring.
 - `Engine.IsEditorHint()` guards `_Ready()`, `OnRowChanged()`, and `_ExitTree()` — no event wiring occurs during scene editing.
 - **Multiple-receiver isolation:** Multiple RowReceivers in the same scene each independently subscribe to `SpacetimeClient.RowChanged` via C# multicast event delegates (`+=`/`-=`). `_Ready()` connects and `_ExitTree()` disconnects only that instance's delegate, so adding or removing one RowReceiver at runtime does not affect other active RowReceivers.
 - **No-active-subscription behavior:** A RowReceiver configured for a table with no active subscription silently emits no events. `SpacetimeClient.RowChanged` only fires for tables covered by an active subscription, so the RowReceiver remains a passive observer and raises no error or warning.
+- **Inspector dropdown scoping:** The `TableName` dropdown is now scoped to the selected client's generated namespace instead of the first `RemoteTables` type discovered in loaded assemblies. This keeps multi-module scenes deterministic while preserving the existing default `/root/SpacetimeClient` path.
 
 **Emitted signals:**
 
@@ -327,7 +329,7 @@ _rowReceiver.RowUpdated += e => { var row = (SmokeTest)e.NewRow!; GD.Print(row.V
 _rowReceiver.RowDeleted += e => { var row = (SmokeTest)e.OldRow!; GD.Print(row.Value); };
 ```
 
-**Inspector dropdown:** The `TableName` property shows a dropdown in the Godot editor populated from the `RemoteTables` type discovered via reflection at editor time. The dropdown lists the public instance table members declared on the first `RemoteTables` type found in user assemblies. SpacetimeDB `2.1.x` codegen exposes those table members as public fields today; older or alternate generated surfaces may expose them as properties. If no `RemoteTables` type is found (e.g., bindings not yet generated), the property falls back to a plain string field.
+**Inspector dropdown:** The `TableName` property shows a dropdown in the Godot editor populated from the selected client's generated `RemoteTables` type. SpacetimeDB `2.1.x` codegen exposes those table members as public fields today; older or alternate generated surfaces may expose them as properties. If the selected client or bindings are unavailable, the property falls back to a plain string field.
 
 ### Reducers — `ReducerCallResult` and `ReducerCallError`
 
@@ -473,6 +475,7 @@ See [`docs/codegen.md`](./codegen.md) for the generation workflow.
 |----------|------|---------|
 | `Host` | `string` | The SpacetimeDB server address |
 | `Database` | `string` | The target database name on the server |
+| `GeneratedBindingsNamespace` | `string` | Additive generated binding selector. Defaults to `SpacetimeDB.Types`; set a distinct namespace when multiple generated modules are compiled into the same C# project. |
 | `CompressionMode` | `MessageCompressionMode` | Optional wire-message compression preference. Defaults to `None`; current `2.1.x` `Brotli` requests surface as effective `Gzip`. |
 | `LightMode` | `bool` | Optional light-mode preference for server updates. Defaults to `false`; takes effect only when the next connection is opened. Public row/reducer payloads remain free of synthetic reducer metadata regardless of mode. |
 | `Credentials` | `string?` | Optional token for authenticated sessions; passed to `WithToken()`. `null` = anonymous connection. |
@@ -493,6 +496,14 @@ SpacetimeClient (autoload, configured with SpacetimeSettings)
 ```
 
 You interact with `SpacetimeClient` through its public API; the underlying runtime handling is not part of the SDK surface.
+
+Story 10.1 keeps the existing single-client path intact, but multi-module
+support is now additive:
+
+- one `SpacetimeClient` instance still equals one connection owner
+- `ConnectionId` defaults to `SpacetimeClient`
+- single-module projects can keep the existing autoload path and default namespace with zero changes
+- gameplay code can use the lookup-by-identifier surface (`TryGetClient` / `GetClientOrThrow`) to retrieve a specific live client without hard-coding scene-tree traversal
 
 `SpacetimeClient` now also owns the Godot `Performance` monitor lifecycle for the telemetry IDs listed above. The
 monitor callables stay thin: they read numeric fields from `CurrentTelemetry`, return zero-or-positive values, and do

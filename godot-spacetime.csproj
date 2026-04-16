@@ -11,6 +11,7 @@
   <ItemGroup>
     <Compile Include="addons/godot_spacetime/**/*.cs" />
     <Compile Include="demo/**/*.cs" />
+    <Compile Include="tests/fixtures/generated/**/*.cs" />
     <Compile Include="tests/godot_integration/**/*.cs" />
   </ItemGroup>
 

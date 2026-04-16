@@ -42,7 +42,7 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
         header.AddThemeFontSizeOverride("font_size", 14);
         AddChild(header);
 
-        AddChild(CreateFocusableLabel("Observed autoload:"));
+        AddChild(CreateFocusableLabel("Observed default client:"));
         _autoloadLabel = CreateFocusableLabel();
         AddChild(_autoloadLabel);
 
@@ -73,7 +73,9 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
 
     private void TryBindClient()
     {
-        var nextClient = GetTree()?.Root.GetNodeOrNull<SpacetimeClient>("SpacetimeClient");
+        var nextClient = SpacetimeClient.TryGetClient(SpacetimeClient.DefaultConnectionId, out var resolvedClient)
+            ? resolvedClient
+            : null;
         if (ReferenceEquals(_client, nextClient))
             return;
 
@@ -93,13 +95,13 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
         if (_client == null)
         {
             _autoloadLabel.Text = "Missing";
-            SetStatus(StatusNotConfigured, "Add SpacetimeClient as an autoload to observe lifecycle state here.");
+            SetStatus(StatusNotConfigured, "Add a default SpacetimeClient autoload to observe lifecycle state here.");
             SetCompressionStatus(MessageCompressionMode.None);
             SetAuthStatus(ConnectionAuthState.None, ConnectionState.Disconnected);
             return;
         }
 
-        _autoloadLabel.Text = "SpacetimeClient";
+        _autoloadLabel.Text = $"{SpacetimeClient.DefaultConnectionId} (default only)";
 
         if (_client.Settings == null
             || string.IsNullOrWhiteSpace(_client.Settings.Host)

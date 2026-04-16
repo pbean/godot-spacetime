@@ -67,7 +67,8 @@ internal sealed class SpacetimeSdkConnectionAdapter
         // The generated bindings expose the concrete DbConnection type and its DbConnection.Builder() entrypoint.
         // Builder() is inherited from DbConnectionBase<>, so FlattenHierarchy must be set on the reflection
         // lookup — without it GetMethod ignores static members declared on the base class.
-        var dbConnectionType = ResolveGeneratedDbConnectionType();
+        var dbConnectionType = GeneratedBindingTypeResolver.ResolveDbConnectionType(
+            settings.ResolveGeneratedBindingsNamespace());
         var builderMethod = dbConnectionType.GetMethod(
                 "Builder",
                 BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
@@ -256,48 +257,6 @@ internal sealed class SpacetimeSdkConnectionAdapter
             expressions[index] = Expression.Parameter(parameters[index].ParameterType, parameters[index].Name);
 
         return expressions;
-    }
-
-    private static Type ResolveGeneratedDbConnectionType()
-    {
-        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            var directType = assembly.GetType("SpacetimeDB.Types.DbConnection", throwOnError: false);
-            if (IsGeneratedDbConnectionType(directType))
-                return directType!;
-
-            foreach (var candidate in SafeGetTypes(assembly))
-            {
-                if (IsGeneratedDbConnectionType(candidate))
-                    return candidate;
-            }
-        }
-
-        throw new InvalidOperationException(
-            "Generated bindings are required before connecting. Compile a module that exposes a DbConnection type with Builder()."
-        );
-    }
-
-    private static bool IsGeneratedDbConnectionType(Type? candidate)
-    {
-        return candidate != null
-            && candidate.Name == "DbConnection"
-            && typeof(IDbConnection).IsAssignableFrom(candidate)
-            && candidate.GetMethod(
-                "Builder",
-                BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy) != null;
-    }
-
-    private static IEnumerable<Type> SafeGetTypes(Assembly assembly)
-    {
-        try
-        {
-            return assembly.GetTypes();
-        }
-        catch (ReflectionTypeLoadException ex)
-        {
-            return ex.Types.Where(type => type != null)!;
-        }
     }
 
     private void AttachTelemetryHooks(IConnectionTelemetrySink telemetrySink)

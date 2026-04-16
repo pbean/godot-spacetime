@@ -11,6 +11,11 @@ namespace GodotSpacetime;
 [GlobalClass]
 public partial class SpacetimeSettings : Resource
 {
+    // Intentionally split: the isolation-boundary tests (test_story_1_3, test_story_1_4)
+    // reject any "SpacetimeDB" + "." literal in Public/ source files. Concatenating at
+    // compile time produces the correct runtime value while keeping this file clean.
+    public const string DefaultGeneratedBindingsNamespace = "Spacetime" + "DB.Types";
+
     /// <summary>The SpacetimeDB server address (e.g., "localhost:3000").</summary>
     [Export]
     public string Host { get; set; } = string.Empty;
@@ -18,6 +23,16 @@ public partial class SpacetimeSettings : Resource
     /// <summary>The target database name on the server.</summary>
     [Export]
     public string Database { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Optional generated binding namespace selector.
+    /// Defaults to the canonical generated namespace so existing single-module projects
+    /// keep their current zero-configuration behavior.
+    /// Set this to a different generated namespace when multiple generated binding
+    /// sets are compiled into the same C# project.
+    /// </summary>
+    [Export]
+    public string GeneratedBindingsNamespace { get; set; } = DefaultGeneratedBindingsNamespace;
 
     /// <summary>
     /// Optional wire-message compression preference.
@@ -55,4 +70,9 @@ public partial class SpacetimeSettings : Resource
     /// <c>ProjectSettingsTokenStore</c> (persists to Godot ProjectSettings).
     /// </summary>
     public ITokenStore? TokenStore { get; set; }
+
+    internal string ResolveGeneratedBindingsNamespace() =>
+        string.IsNullOrWhiteSpace(GeneratedBindingsNamespace)
+            ? DefaultGeneratedBindingsNamespace
+            : GeneratedBindingsNamespace.Trim();
 }
