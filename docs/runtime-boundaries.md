@@ -172,6 +172,39 @@ foreach (var row in SpacetimeClient.GetRows("Player"))
 
 Cache access is mediated by `CacheViewAdapter` (in `Internal/Cache/`) which exposes the generated `RemoteTables` object through direct type checks for `GetDb<TDb>()` and keeps the reflection-based `GetRows()` implementation as the backward-compatible fallback. Gameplay code must not access raw transport-connection objects or other underlying transport state directly.
 
+### One-Off Queries — Remote Round-Trips Without Cache Mutation
+
+`SpacetimeClient.QueryAsync<TRow>()` is the supported public path for issuing a typed one-off query against the server after `ConnectionState.Connected` is reached.
+
+Use it when gameplay needs typed rows from the active session without creating a subscription and without mutating the subscription-backed local cache exposed by `GetDb<TDb>()` / `GetRows()`.
+
+```csharp
+var rows = await client.QueryAsync<SmokeTest>("WHERE value = 'hello'");
+```
+
+Contrast the three read paths explicitly:
+
+- `GetDb<TDb>()` and `GetRows("TableName")` read the already-synchronized local cache only. No network round-trip occurs.
+- `Subscribe(...)` establishes or replaces a live synchronized cache slice and drives `SubscriptionApplied` / `RowChanged`.
+- `QueryAsync<TRow>()` reuses the current connection and authentication boundary for a one-off remote round-trip, returns typed rows, and does **not** populate `GetDb<TDb>()`, `GetRows()`, `SubscriptionApplied`, or `RowChanged`.
+
+`QueryAsync<TRow>()` resolves the target generated table from the requested row type. The public signature stays typed and does not expose raw transport-connection or generated table-handle transport types.
+
+Programming faults remain explicit exceptions:
+
+- blank or whitespace SQL clause → `ArgumentException`
+- disconnected or non-`Connected` state → `InvalidOperationException`
+- unsupported generated row type for the active module → `InvalidOperationException`
+
+Recoverable runtime failures are thrown as [`OneOffQueryError`](../addons/godot_spacetime/src/Public/Queries/OneOffQueryError.cs), which carries the requested row type, target table identity, SQL clause, failure category, recovery guidance, and UTC timestamps.
+
+| `OneOffQueryFailureCategory` | Meaning | Recommended action |
+|-----------------------------|---------|--------------------|
+| `InvalidQuery` | Server rejected the SQL clause or query shape | Fix the clause before retrying |
+| `TimedOut` | The SDK timeout elapsed before the server replied | Retry with a longer timeout only if the query is expected to be slow |
+| `Failed` | The server failed the query for a recoverable runtime reason | Check server logs and capture diagnostics before retrying |
+| `Unknown` | The failure could not be classified safely | Handle defensively and avoid automatic retries |
+
 ### Row Changes — Observing Live Cache Updates
 
 After the `SubscriptionApplied` signal fires, the SDK emits a `RowChanged` signal on `SpacetimeClient` each time a subscribed table row is inserted, updated, or removed by the server. Connect to this signal to drive gameplay reactions without polling `GetRows()` every frame.

@@ -52,6 +52,8 @@ All generated files live under `demo/generated/smoke_test/` and are in the `Spac
 
 `RemoteTables.SmokeTestHandle` in `Tables/SmokeTest.g.cs` — provides access to cached rows, a primary-key index (`IdUniqueIndex`), and row operations. Generated runtime contexts still reach the handle via `conn.Db.SmokeTest`; gameplay code reaches the same handle through `SpacetimeClient.GetDb<TDb>()` and then `db.SmokeTest`.
 
+The generated table handle also inherits the upstream one-off query capability in addition to local cache operations such as `Iter()`, `Count`, `Find(...)`, and `Filter(...)`. The SDK keeps that handle type internal and exposes the supported public path as `SpacetimeClient.QueryAsync<TRow>()`, which resolves the correct generated handle from the requested row type and calls the handle's inherited `RemoteQuery(string)` method without exposing raw transport types publicly.
+
 ### BTree index accessor
 
 Non-unique BTree indexes declared in the Rust module — using `#[index(btree)]` on a column field or `index(btree, ...)` in the `#[table]` macro — generate a `BTreeIndexBase<TKey>` nested class and a corresponding readonly field on the table handle. For example, `#[index(btree)]` on a `value: String` column produces a `ValueIndex : BTreeIndexBase<string>` class and a `Value` field.

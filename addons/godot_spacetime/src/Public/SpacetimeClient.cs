@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Godot;
 using GodotSpacetime.Connection;
+using GodotSpacetime.Queries;
 using GodotSpacetime.Reducers;
 using GodotSpacetime.Runtime.Connection;
 using GodotSpacetime.Runtime.Events;
@@ -23,6 +25,7 @@ namespace GodotSpacetime;
 ///   <item>Call Connect() — watch ConnectionState events for lifecycle transitions</item>
 ///   <item>Apply subscriptions — receive SubscriptionAppliedEvent when cache is ready, or SubscriptionFailedEvent when a request is rejected or later errors</item>
 ///   <item>Read cache via GetDb&lt;TDb&gt;() for direct typed table handles or GetRows() as a compatibility fallback — invoke reducers as needed</item>
+///   <item>Issue one-off remote reads via QueryAsync&lt;TRow&gt;() after Connect() when gameplay needs typed server data without creating or mutating a subscription-backed cache slice</item>
 /// </list>
 /// </summary>
 public partial class SpacetimeClient : Node
@@ -197,6 +200,20 @@ public partial class SpacetimeClient : Node
     /// </summary>
     public IEnumerable<object> GetRows(string tableName) =>
         _connectionService.GetRows(tableName);
+
+    /// <summary>
+    /// Executes a one-off remote query against the active generated table selected by <typeparamref name="TRow"/>.
+    /// Use this after <c>ConnectionState.Connected</c> is reached when gameplay needs typed server data
+    /// without creating a subscription or mutating the local cache returned by <c>GetDb&lt;TDb&gt;()</c> / <c>GetRows()</c>.
+    /// The public signature stays typed by generated row class and does not expose raw
+    /// <c>IDbConnection</c>, <c>DbConnection</c>, or <c>RemoteTableHandleBase&lt;,&gt;</c> types.
+    /// Blank SQL, disconnected state, and unsupported row types remain explicit programming-fault exceptions.
+    /// Recoverable runtime failures surface as <see cref="OneOffQueryError"/>.
+    /// When <paramref name="timeout"/> is omitted, the SDK applies a default timeout so the query cannot await forever.
+    /// </summary>
+    public Task<TRow[]> QueryAsync<TRow>(string sqlClause, TimeSpan? timeout = null)
+        where TRow : class =>
+        _connectionService.QueryAsync<TRow>(sqlClause, timeout);
 
     /// <summary>
     /// Invokes a SpacetimeDB reducer through the supported generated reducer path.
