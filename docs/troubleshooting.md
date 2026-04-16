@@ -47,6 +47,33 @@ The compatibility panel reads the CLI version embedded in generated bindings and
 
 Connection lifecycle state transitions are surfaced through the `SpacetimeClient.ConnectionStateChanged` signal. See `docs/connection.md` for the complete state table and editor panel labels.
 
+## Reconnection Behavior
+
+`SpacetimeClient` owns an internal `ReconnectPolicy` that engages automatically when a previously `Connected` session encounters a transport error. Scene code must **not** implement its own reconnect loop — observe `ConnectionStateChanged` and `ConnectionClosed` instead. See `docs/runtime-boundaries.md` for the ownership contract.
+
+**Defaults for this release:**
+
+- Retry budget: **3 attempts**
+- Backoff schedule: `2^(attempt-1)` seconds → **1s, 2s, 4s**
+- Retries trigger only from the `Connected` state. A failure during `Connecting` transitions straight to `Disconnected` and does not consume the retry budget.
+- The retry budget resets to zero on the next successful `Connected` transition.
+- The retry count and backoff are internal constants in this release and are not exposed through `SpacetimeSettings`.
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| `"Spacetime Status"` panel flickers `DEGRADED` then returns to `CONNECTED` | A transient transport error occurred; the reconnect policy restored the session | No action required — this is the expected recovery path |
+| `"Spacetime Status"` panel stays `DEGRADED` across successive retry messages | The underlying fault is not transient (server down, network partition, DNS failure) | Inspect server availability and transport reachability; resolve the root cause before the retry budget exhausts |
+| `"Spacetime Status"` panel transitions `DEGRADED` → `DISCONNECTED` and `ConnectionClosed` fires with `ConnectionCloseReason.Error` | The retry budget of 3 attempts was exhausted without a successful recovery | Restore the server or transport and call `Connect()` again; the policy resets on the next successful connection |
+| Scene code races the internal policy with its own retry loop | Duplicate reconnect logic layered on top of `SpacetimeClient` | Remove the scene-side loop; observe `ConnectionStateChanged` and `ConnectionClosed` — the policy is owned by `SpacetimeClient` |
+
+During each retry, `ConnectionStateChanged` delivers a `Degraded` status whose description has the form:
+
+```
+DEGRADED — session experiencing issues; reconnecting (attempt N/3, backoff Xs): <error>
+```
+
+Matching this pattern in logs is the canonical way to observe retry progress. A symptom of **misconfiguration** — rather than a transient fault — is the session reaching `DEGRADED` and then `DISCONNECTED` on every `Connect()` attempt with the same root-cause `<error>`; this indicates the retry policy is working as intended but the underlying `Host`, `Database`, or transport configuration is wrong.
+
 ## Authentication
 
 Authentication failures surface through `SpacetimeClient.ConnectionStateChanged` — not as exceptions. The `ConnectionAuthState` value on the resulting `ConnectionStatus` identifies the failure category:
