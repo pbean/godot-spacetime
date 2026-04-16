@@ -22,7 +22,7 @@ public partial class GodotSpacetimePlugin : EditorPlugin
             "RowReceiver",
             "Node",
             GD.Load<Script>("res://addons/godot_spacetime/src/Public/Scenes/RowReceiver.cs"),
-            null   // Story 8.2 will add the custom icon
+            GD.Load<Texture2D>("res://addons/godot_spacetime/assets/row_receiver_icon.svg")
         );
 
         var panelScene = GD.Load<PackedScene>(CodegenPanelScenePath);

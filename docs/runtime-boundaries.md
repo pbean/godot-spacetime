@@ -256,7 +256,8 @@ Row change dispatch is mediated by `SpacetimeSdkRowCallbackAdapter` (in `Interna
 - RowReceiver subscribes to `SpacetimeClient.RowChanged` and filters by `TableName` — NOT a parallel dispatch path. The existing `GodotSignalAdapter` deferred dispatch already fires `SpacetimeClient.RowChanged` on the main thread; RowReceiver is a downstream consumer of that already-thread-safe signal.
 - The node requires `SpacetimeClient` registered as an autoload at `/root/SpacetimeClient`. A `GD.PushWarning` (not an error) is emitted if the autoload is not found, and the node returns without wiring.
 - `Engine.IsEditorHint()` guards `_Ready()`, `OnRowChanged()`, and `_ExitTree()` — no event wiring occurs during scene editing.
-- A RowReceiver for a table with no active subscription silently emits nothing — it filters events from `SpacetimeClient.RowChanged`, and that signal only fires for subscribed tables.
+- **Multiple-receiver isolation:** Multiple RowReceivers in the same scene each independently subscribe to `SpacetimeClient.RowChanged` via C# multicast event delegates (`+=`/`-=`). `_Ready()` connects and `_ExitTree()` disconnects only that instance's delegate, so adding or removing one RowReceiver at runtime does not affect other active RowReceivers.
+- **No-active-subscription behavior:** A RowReceiver configured for a table with no active subscription silently emits no events. `SpacetimeClient.RowChanged` only fires for tables covered by an active subscription, so the RowReceiver remains a passive observer and raises no error or warning.
 
 **Emitted signals:**
 
