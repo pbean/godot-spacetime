@@ -247,6 +247,43 @@ private void OnRowChanged(RowChangedEvent e)
 
 Row change dispatch is mediated by `SpacetimeSdkRowCallbackAdapter` (in `Internal/Platform/DotNet/`) which wires into the generated `RemoteTableHandle` events via reflection. Scene code must not access those events directly — always use the `SpacetimeClient.RowChanged` signal.
 
+### RowReceiver — Scene-Tree Row Event Integration
+
+[`RowReceiver`](../addons/godot_spacetime/src/Public/Scenes/RowReceiver.cs) is a `[Tool]` scene node that subscribes to `SpacetimeClient.RowChanged` and re-emits filtered row events as table-scoped Godot signals. Add it to any scene, configure the `TableName` property in the Inspector, and connect to `row_inserted`, `row_updated`, or `row_deleted` without writing signal connection boilerplate.
+
+**How RowReceiver works:**
+
+- RowReceiver subscribes to `SpacetimeClient.RowChanged` and filters by `TableName` — NOT a parallel dispatch path. The existing `GodotSignalAdapter` deferred dispatch already fires `SpacetimeClient.RowChanged` on the main thread; RowReceiver is a downstream consumer of that already-thread-safe signal.
+- The node requires `SpacetimeClient` registered as an autoload at `/root/SpacetimeClient`. A `GD.PushWarning` (not an error) is emitted if the autoload is not found, and the node returns without wiring.
+- `Engine.IsEditorHint()` guards `_Ready()`, `OnRowChanged()`, and `_ExitTree()` — no event wiring occurs during scene editing.
+- A RowReceiver for a table with no active subscription silently emits nothing — it filters events from `SpacetimeClient.RowChanged`, and that signal only fires for subscribed tables.
+
+**Emitted signals:**
+
+| Signal | When | Payload |
+|--------|------|---------|
+| `row_inserted` | A row was inserted into the configured table | `RowChangedEvent e` |
+| `row_updated` | A row in the configured table was updated | `RowChangedEvent e` |
+| `row_deleted` | A row was removed from the configured table | `RowChangedEvent e` |
+
+Each signal carries the full `RowChangedEvent` payload. Cast `e.NewRow` or `e.OldRow` to the generated row type to access typed fields:
+
+```gdscript
+# GDScript
+$RowReceiver.row_inserted.connect(func(e): var row = e.new_row as SmokeTest; GD.print(row.value))
+$RowReceiver.row_updated.connect(func(e): var row = e.new_row as SmokeTest; GD.print(row.value))
+$RowReceiver.row_deleted.connect(func(e): var row = e.old_row as SmokeTest; GD.print(row.value))
+```
+
+```csharp
+// C#
+_rowReceiver.RowInserted += e => { var row = (SmokeTest)e.NewRow!; GD.Print(row.Value); };
+_rowReceiver.RowUpdated += e => { var row = (SmokeTest)e.NewRow!; GD.Print(row.Value); };
+_rowReceiver.RowDeleted += e => { var row = (SmokeTest)e.OldRow!; GD.Print(row.Value); };
+```
+
+**Inspector dropdown:** The `TableName` property shows a dropdown in the Godot editor populated from the `RemoteTables` type discovered via reflection at editor time. The dropdown lists the public instance table members declared on the first `RemoteTables` type found in user assemblies. SpacetimeDB `2.1.x` codegen exposes those table members as public fields today; older or alternate generated surfaces may expose them as properties. If no `RemoteTables` type is found (e.g., bindings not yet generated), the property falls back to a plain string field.
+
 ### Reducers — `ReducerCallResult` and `ReducerCallError`
 
 A **Reducer** is a server-side callable procedure. You invoke reducers through generated binding types. The SDK surfaces the outcome as a [`ReducerCallResult`](../addons/godot_spacetime/src/Public/Reducers/ReducerCallResult.cs) on success, or a [`ReducerCallError`](../addons/godot_spacetime/src/Public/Reducers/ReducerCallError.cs) when the call fails or is rejected.

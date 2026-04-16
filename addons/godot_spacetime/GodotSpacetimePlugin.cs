@@ -18,6 +18,13 @@ public partial class GodotSpacetimePlugin : EditorPlugin
 
     public override void _EnterTree()
     {
+        AddCustomType(
+            "RowReceiver",
+            "Node",
+            GD.Load<Script>("res://addons/godot_spacetime/src/Public/Scenes/RowReceiver.cs"),
+            null   // Story 8.2 will add the custom icon
+        );
+
         var panelScene = GD.Load<PackedScene>(CodegenPanelScenePath);
         if (panelScene != null)
         {
@@ -115,6 +122,7 @@ public partial class GodotSpacetimePlugin : EditorPlugin
             _codegenPanel.QueueFree();
             _codegenPanel = null;
         }
+        RemoveCustomType("RowReceiver");
         GD.Print("Godot Spacetime plugin disabled.");
     }
 }
