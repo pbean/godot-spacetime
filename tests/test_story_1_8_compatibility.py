@@ -576,6 +576,42 @@ def test_validate_foundation_rejects_stale_bindings(tmp_path: Path) -> None:
     )
 
 
+def test_validate_foundation_accepts_fresh_generated_table_when_registry_is_older(tmp_path: Path) -> None:
+    module = _load_validate_foundation_module()
+    module_root = tmp_path / "spacetime/modules/smoke_test/src"
+    module_root.mkdir(parents=True)
+    cargo = tmp_path / "spacetime/modules/smoke_test/Cargo.toml"
+    cargo.write_text("[package]\nname = \"smoke_test\"\n", encoding="utf-8")
+    source = module_root / "lib.rs"
+    source.write_text("// module\n", encoding="utf-8")
+
+    generated_root = tmp_path / "demo/generated/smoke_test"
+    generated_root.mkdir(parents=True)
+    generated = generated_root / "SpacetimeDBClient.g.cs"
+    generated.write_text(
+        f"{module.CLI_VERSION_PREFIX}2.1.0 (commit deadbeef).\n",
+        encoding="utf-8",
+    )
+
+    table = generated_root / "Tables/SmokeTest.g.cs"
+    table.parent.mkdir(parents=True)
+    table.write_text("// generated table\n", encoding="utf-8")
+
+    oldest = time.time() - 60
+    source_time = time.time() - 10
+    freshest = time.time() - 5
+    os.utime(generated, (oldest, oldest))
+    os.utime(source, (source_time, source_time))
+    os.utime(cargo, (source_time - 1, source_time - 1))
+    os.utime(table, (freshest, freshest))
+
+    errors = module.collect_binding_compatibility_errors(tmp_path, {"spacetimedb": "2.1+"})
+    assert not any("generated bindings are stale because" in error for error in errors), (
+        "validate-foundation.py must treat the newest generated binding artifact as the freshness watermark, "
+        "not only SpacetimeDBClient.g.cs"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Documentation completeness
 # ---------------------------------------------------------------------------

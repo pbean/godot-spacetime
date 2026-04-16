@@ -52,6 +52,32 @@ All generated files live under `demo/generated/smoke_test/` and are in the `Spac
 
 `RemoteTables.SmokeTestHandle` in `Tables/SmokeTest.g.cs` — provides access to cached rows, a primary-key index (`IdUniqueIndex`), and row operations. Generated runtime contexts still reach the handle via `conn.Db.SmokeTest`; gameplay code reaches the same handle through `SpacetimeClient.GetDb<TDb>()` and then `db.SmokeTest`.
 
+### BTree index accessor
+
+Non-unique BTree indexes declared in the Rust module — using `#[index(btree)]` on a column field or `index(btree, ...)` in the `#[table]` macro — generate a `BTreeIndexBase<TKey>` nested class and a corresponding readonly field on the table handle. For example, `#[index(btree)]` on a `value: String` column produces a `ValueIndex : BTreeIndexBase<string>` class and a `Value` field.
+
+The accessor exposes a `Filter(TKey value)` method that returns all cached rows matching the given key value as an `IEnumerable<TRow>`.
+
+The accessor is self-maintaining: the `BTreeIndexBase<,>` base class in `SpacetimeDB.ClientSDK` hooks into the same insert/update/delete event flow as `UniqueIndexBase<,>`. No additional SDK code is required to keep the index current.
+
+Tables without a declared BTree index generate no BTree accessor — only the `UniqueIndexBase`-based primary-key index is present.
+
+**Usage example** (via the typed `GetDb<RemoteTables>()` path from `SpacetimeClient`):
+
+```csharp
+// After SubscriptionApplied (main-thread only):
+var db = client.GetDb<RemoteTables>()
+    ?? throw new InvalidOperationException("Cache not ready.");
+
+// BTree filtered lookup by value:
+foreach (var row in db.SmokeTest.Value.Filter("hello"))
+{
+    GD.Print(row.Id, row.Value);
+}
+```
+
+The same main-thread / post-`SubscriptionApplied` constraint that applies to `GetDb<RemoteTables>()` applies here — see `SpacetimeClient.GetDb<TDb>()` in `docs/runtime-boundaries.md`.
+
 ### Reducer proxy
 
 `RemoteReducers.Ping()` method in `Reducers/Ping.g.cs` — sends the `ping` reducer call to the server. A companion `OnPing` event fires when the server acknowledges the call. The `Reducer.Ping` class implements `IReducerArgs` and identifies the reducer by name.

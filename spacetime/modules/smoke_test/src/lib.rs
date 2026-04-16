@@ -5,6 +5,7 @@ pub struct SmokeTest {
     #[primary_key]
     #[auto_inc]
     pub id: u32,
+    #[index(btree)]
     pub value: String,
 }
 

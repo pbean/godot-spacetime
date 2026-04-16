@@ -56,7 +56,7 @@ The Compatibility panel in the Godot editor reads the CLI version comment embedd
 // This was generated using spacetimedb cli version X.Y.Z (commit ...)
 ```
 
-The panel extracts the version token and checks that it satisfies the declared baseline (e.g. `2.1+` requires CLI `>= 2.1`). The validation workflow also compares the latest relevant module-source file under `spacetime/modules/smoke_test/` against `demo/generated/smoke_test/SpacetimeDBClient.g.cs` so stale bindings fail before runtime use. If either check fails, the tooling reports the exact failed check together with the regeneration command.
+The panel extracts the version token and checks that it satisfies the declared baseline (e.g. `2.1+` requires CLI `>= 2.1`). The validation workflow also compares the latest relevant module-source file under `spacetime/modules/smoke_test/` against the generated binding set under `demo/generated/smoke_test/`, using the newest generated `*.g.cs` artifact as the freshness watermark so schema-only table changes still validate correctly and stale bindings fail before runtime use. If either check fails, the tooling reports the exact failed check together with the regeneration command.
 
 To resolve an INCOMPATIBLE state, run:
 
