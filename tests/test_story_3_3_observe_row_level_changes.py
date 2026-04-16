@@ -912,3 +912,77 @@ def test_runtime_boundaries_documents_null_for_delete_new_row() -> None:
     assert "`null` for `Delete`" in content, (
         "docs/runtime-boundaries.md must document that NewRow is null for Delete events (AC 2)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Explicit teardown — row callback GC-only tech debt resolution (Epic 3 retro D3)
+# ---------------------------------------------------------------------------
+
+
+def test_row_callback_adapter_has_clear_registration_method() -> None:
+    content = _read(
+        "addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkRowCallbackAdapter.cs"
+    )
+    assert "void ClearRegistration()" in content, (
+        "SpacetimeSdkRowCallbackAdapter must have ClearRegistration() for explicit "
+        "teardown instead of GC-only cleanup (Epic 3 retro D3)"
+    )
+
+
+def test_row_callback_adapter_clear_registration_clears_registered_dbs() -> None:
+    content = _read(
+        "addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkRowCallbackAdapter.cs"
+    )
+    lines = content.splitlines()
+    in_method = False
+    found_clear = False
+    brace_depth = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if "void ClearRegistration()" in stripped:
+            in_method = True
+            brace_depth = 0
+            continue
+
+        if in_method:
+            brace_depth += stripped.count("{") - stripped.count("}")
+            if "_registeredDbs.Clear()" in stripped:
+                found_clear = True
+            if brace_depth < 0:
+                break
+
+    assert found_clear, (
+        "ClearRegistration() must call _registeredDbs.Clear() to force fresh "
+        "registration on reconnect (Epic 3 retro D3)"
+    )
+
+
+def test_connection_service_clears_row_callbacks_in_reset_state() -> None:
+    content = _read(
+        "addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs"
+    )
+    lines = content.splitlines()
+    in_method = False
+    found_clear = False
+    brace_depth = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if "ResetDisconnectedSessionState()" in stripped and "private" in stripped:
+            in_method = True
+            brace_depth = 0
+            continue
+
+        if in_method:
+            brace_depth += stripped.count("{") - stripped.count("}")
+            if "_rowCallbackAdapter.ClearRegistration()" in stripped:
+                found_clear = True
+            if brace_depth < 0:
+                break
+
+    assert found_clear, (
+        "_rowCallbackAdapter.ClearRegistration() must appear inside "
+        "ResetDisconnectedSessionState() so all disconnect paths get explicit "
+        "cleanup (Epic 3 retro D3)"
+    )

@@ -32,15 +32,20 @@ internal sealed class SpacetimeSdkRowCallbackAdapter
 
     private sealed class RegistrationMarker;
 
+    internal void ClearRegistration()
+    {
+        _registeredDbs.Clear();
+    }
+
     /// <summary>
     /// Registers insert, update, and delete callbacks on all table handles found in the
     /// generated RemoteTables object. Each callback routes row change events to
     /// <paramref name="sink"/> with the table name and boxed row values.
     ///
     /// Call immediately after <c>OnConnected</c> fires, with the live RemoteTables object
-    /// from <c>SpacetimeSdkConnectionAdapter.GetDb()</c>. No explicit unregistration is
-    /// needed on disconnect — the registered delegates are collected with the closed
-    /// connection's RemoteTables graph once all GC roots to it are cleared.
+    /// from <c>SpacetimeSdkConnectionAdapter.GetDb()</c>. On disconnect, call
+    /// <see cref="ClearRegistration"/> so the next connection gets fresh callbacks
+    /// instead of relying on GC to clear the weak-table entries.
     /// </summary>
     internal void RegisterCallbacks(object db, IRowChangeEventSink sink)
     {
