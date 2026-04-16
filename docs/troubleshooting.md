@@ -58,6 +58,20 @@ Compression is opt-in through `SpacetimeSettings.CompressionMode` and defaults t
 
 The current supported runtime did not expose a reproducible unsupported-compression failure path during Story 9.1 validation, so the addon does not add speculative retry-to-`None` fallback logic on top of the upstream SDK.
 
+## Light Mode
+
+`SpacetimeSettings.LightMode` is opt-in and defaults to `false`. Like the other transport-facing settings, it is read when a connection is opened; changing it while connected only affects the next connection cycle.
+
+Story 9.2 keeps the public `RowChangedEvent`, `ReducerCallResult`, and `ReducerCallError` payloads free of synthetic reducer metadata. That means no synthetic reducer metadata fields such as caller identity or energy consumed appear on the public payloads just because `LightMode` is enabled.
+
+The repo treats observed runtime behavior as the source of truth here because the official upgrade guide says `light_mode` was removed in `2.0`, while the pinned local `2.1.0` builder still exposes `WithLightMode(bool)`. If Story 9.2 validation on your supported stack records no observable difference between `LightMode=false` and `LightMode=true`, that no-op is the correct documented outcome for this repo rather than a missing feature to paper over.
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| Toggling `LightMode` during an active session does not change current row/reducer behavior | `LightMode` is a next-connection setting, not a live mutable session knob | Disconnect and reconnect to apply the changed value |
+| Public row/reducer payloads still omit reducer metadata while `LightMode=true` | This is the intended public boundary; the SDK does not add synthetic reducer metadata fields to public payloads | Inspect the Story 9.2 integration harness for low-level callback-context observations instead of widening gameplay payloads |
+| Local runtime validation shows no observable difference between `LightMode=false` and `LightMode=true` | The supported stack may currently treat `WithLightMode(bool)` as a no-op in practice | Document that observed runtime behavior and keep the public API shape unchanged |
+
 ## Reconnection Behavior
 
 `SpacetimeClient` owns an internal `ReconnectPolicy` that engages automatically when a previously `Connected` session encounters a transport error. Scene code must **not** implement its own reconnect loop — observe `ConnectionStateChanged` and `ConnectionClosed` instead. See `docs/runtime-boundaries.md` for the ownership contract.

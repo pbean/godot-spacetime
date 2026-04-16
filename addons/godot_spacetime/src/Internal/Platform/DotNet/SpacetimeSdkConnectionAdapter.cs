@@ -71,6 +71,7 @@ internal sealed class SpacetimeSdkConnectionAdapter
         builder = InvokeMethod(builder, "WithUri", NormalizeUri(settings.Host));
         builder = InvokeMethod(builder, "WithDatabaseName", settings.Database);
         builder = InvokeMethod(builder, "WithCompression", MapCompressionMode(settings.CompressionMode));
+        builder = InvokeMethod(builder, "WithLightMode", settings.LightMode);
 
         // Story 2.2: inject credentials token when provided
         if (!string.IsNullOrWhiteSpace(settings.Credentials))

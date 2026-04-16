@@ -28,6 +28,16 @@ public partial class SpacetimeSettings : Resource
     public MessageCompressionMode CompressionMode { get; set; } = MessageCompressionMode.None;
 
     /// <summary>
+    /// Optional opt-in light-mode preference for server updates.
+    /// Defaults to <c>false</c> so existing projects keep the full runtime behavior
+    /// unless light mode is explicitly enabled before connecting.
+    /// Changing this setting does not mutate an already-active session; the new
+    /// value only takes effect the next time a connection is opened.
+    /// </summary>
+    [Export]
+    public bool LightMode { get; set; } = false;
+
+    /// <summary>
     /// Optional credentials token for authenticated sessions.
     /// When set, this value is passed to <c>WithToken()</c> on the SpacetimeDB connection builder,
     /// connecting as an identified user rather than an anonymous transport.
