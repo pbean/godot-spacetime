@@ -8,5 +8,6 @@ Current reserved module inputs:
 
 - `spacetime/modules/smoke_test/` for the future local smoke module used by first-connection and quickstart validation
 - `spacetime/modules/compatibility_fixture/` for future schema-drift and compatibility scenarios
+- `spacetime/modules/view_test/` for Story 10.4 database view-definition validation
 
 These module directories are test and validation assets, not shipping addon content.
