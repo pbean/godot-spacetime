@@ -530,3 +530,38 @@ def test_runtime_boundaries_mentions_invalid_reducer_argument_guard() -> None:
         "docs/runtime-boundaries.md must explain that invalid reducer argument objects surface as "
         "validation failures on the Godot-facing boundary"
     )
+
+
+# ---------------------------------------------------------------------------
+# Explicit teardown — reducer registration GC-only tech debt resolution (Epic 3 retro D3)
+# ---------------------------------------------------------------------------
+
+
+def test_reducer_adapter_clear_connection_clears_registered_reducers() -> None:
+    content = _read(
+        "addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkReducerAdapter.cs"
+    )
+    lines = content.splitlines()
+    in_method = False
+    found_clear = False
+    brace_depth = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if "void ClearConnection()" in stripped:
+            in_method = True
+            brace_depth = 0
+            continue
+
+        if in_method:
+            brace_depth += stripped.count("{") - stripped.count("}")
+            if "_registeredReducers.Clear()" in stripped:
+                found_clear = True
+            if brace_depth < 0:
+                break
+
+    assert found_clear, (
+        "ClearConnection() must call _registeredReducers.Clear() to force fresh "
+        "callback registration on reconnect instead of relying on GC-only "
+        "ConditionalWeakTable cleanup (Epic 3 retro D3)"
+    )

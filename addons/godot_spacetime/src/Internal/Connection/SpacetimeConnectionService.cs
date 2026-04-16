@@ -496,6 +496,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         _subscriptionRegistry.Clear();
         _pendingReplacements.Clear();
         ClearCacheView();
+        _rowCallbackAdapter.ClearRegistration();
         _adapter.Close();
         _reducerAdapter.ClearConnection();
         _reconnectPolicy.Reset();

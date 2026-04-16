@@ -240,6 +240,7 @@ internal sealed class SpacetimeSdkReducerAdapter
     internal void ClearConnection()
     {
         _dbConnection = null;
+        _registeredReducers.Clear();
         lock (_pendingInvocationsGate)
             _pendingInvocations.Clear();
     }
