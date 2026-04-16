@@ -76,8 +76,10 @@ The same entrypoint is used by `.github/workflows/validate-foundation.yml` after
 
 - `spacetime/modules/smoke_test/` is reserved for the future local smoke module used by quickstart and first-connection validation.
 - `spacetime/modules/compatibility_fixture/` is reserved for future schema-drift and regeneration scenarios.
+- `spacetime/modules/view_test/` is the Story 10.4 validation module for database view-definition bindings.
 - `tests/fixtures/generated/` is reserved for read-only generated bindings consumed by tests.
 - `tests/fixtures/generated/multi_module_smoke/` is the read-only Story 10.1 fixture that compiles the same module surface under a second namespace for multi-module validation.
+- `tests/fixtures/generated/view_test/` is the read-only Story 10.4 fixture that validates view-definition bindings under a distinct namespace.
 - `tests/fixtures/settings/` is reserved for non-shipping test settings and environment fixtures.
 
 ## Generated Schema Concepts
@@ -221,6 +223,81 @@ This is the intended distinction:
 | Scheduled reducer (`process_job`) | **No** | Server scheduler fires it when `ScheduledAt` is reached |
 
 > **Note:** If a scheduled table row change observation is needed, subscribe to the scheduled table via `QueryBuilder.From.ScheduledJob()`. Row-level events fire as normal through the subscribed table handle.
+
+## Database View Definitions
+
+SpacetimeDB exports database view definitions through the module schema's
+`misc_exports` payload. The `spacetime generate` pipeline reads those view
+definitions alongside tables and reducers, so no addon-specific code path is
+required to make view bindings appear in generated C# output.
+
+The repository-owned Story 10.4 fixture lives at
+`spacetime/modules/view_test/` and is regenerated with:
+
+```bash
+bash scripts/codegen/generate-view-test.sh
+```
+
+That script emits a distinct namespace, `SpacetimeDB.ViewTestTypes`, into
+`tests/fixtures/generated/view_test/`.
+
+### Declaring Views in Rust
+
+Use the `#[view(name = ..., public)]` macro on a top-level function that takes
+`&ViewContext` or `&AnonymousViewContext` and returns either `Option<T>` or
+`Vec<T>`:
+
+```rust
+#[derive(SpacetimeType)]
+pub struct LevelTwoPlayerSummary {
+    pub id: u64,
+    pub name: String,
+    pub level: u64,
+}
+
+#[view(name = players_for_level_two, public)]
+fn players_for_level_two(ctx: &AnonymousViewContext) -> Vec<LevelTwoPlayerSummary> {
+    ctx.db
+        .player()
+        .level()
+        .filter(2_u64)
+        .map(|player| LevelTwoPlayerSummary {
+            id: player.id,
+            name: player.name.clone(),
+            level: player.level,
+        })
+        .collect()
+}
+
+#[view(name = player_one, public)]
+fn player_one(ctx: &AnonymousViewContext) -> Option<Player> {
+    ctx.db.player().id().find(1_u64)
+}
+```
+
+### What Gets Generated
+
+- `Tables/PlayerOne.g.cs` and `Tables/PlayersForLevelTwo.g.cs` generate
+  read-only view handles that inherit `RemoteTableHandle<...>` and are
+  registered in `RemoteTables`.
+- `Types/LevelTwoPlayerSummary.g.cs` generates a typed projection row for the
+  custom view schema. Views that return an existing table row type, such as
+  `player_one`, reuse that table row type (`Types/Player.g.cs`) instead of
+  duplicating it.
+- `QueryBuilder.From.PlayerOne()` and `QueryBuilder.From.PlayersForLevelTwo()`
+  are emitted next to the ordinary table query helpers, and
+  `QueryBuilder.AllTablesSqlQueries()` includes the view names so they can be
+  subscribed to through the same typed and SQL paths as tables.
+
+### Read-Only Distinction
+
+Views intentionally share the generated query/subscription surface with tables,
+but they are still read-only projections. The generated view handles do not
+carry primary-key or BTree index helpers like the backing `PlayerHandle`; they
+exist for subscription and cache-read access only.
+
+Modules that do not export view definitions, such as `smoke_test`, continue to
+generate unchanged table/reducer-only bindings.
 
 ## See Also
 
