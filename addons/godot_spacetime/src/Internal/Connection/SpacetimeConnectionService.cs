@@ -27,6 +27,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private bool _credentialsProvided;
     private bool _restoredFromStore;
     private bool _isTearingDownConnection;
+    private MessageCompressionMode _activeCompressionMode = MessageCompressionMode.None;
     private readonly SpacetimeSdkSubscriptionAdapter _subscriptionAdapter = new();
     private readonly SubscriptionRegistry _subscriptionRegistry = new();
     private readonly CacheViewAdapter _cacheViewAdapter = new();
@@ -100,8 +101,12 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         _credentialsProvided = !string.IsNullOrWhiteSpace(settings.Credentials);
         _restoredFromStore = restoredCredentials;   // ← track source of credentials for failure routing
         _reconnectPolicy.Reset();
+        _activeCompressionMode = SpacetimeSdkConnectionAdapter.GetEffectiveCompressionMode(settings.CompressionMode);
 
-        _stateMachine.Transition(ConnectionState.Connecting, $"CONNECTING — opening a session to {_host}/{_database}");
+        _stateMachine.Transition(
+            ConnectionState.Connecting,
+            $"CONNECTING — opening a session to {_host}/{_database}",
+            activeCompressionMode: _activeCompressionMode);
 
         try
         {
@@ -114,7 +119,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 ResetDisconnectedSessionState();
                 _stateMachine.Transition(
                     ConnectionState.Disconnected,
-                    $"DISCONNECTED — failed to start the connection: {ex.Message}"
+                    $"DISCONNECTED — failed to start the connection: {ex.Message}",
+                    activeCompressionMode: _activeCompressionMode
                 );
             });
             throw;
@@ -317,7 +323,11 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 : _credentialsProvided
                     ? "CONNECTED — authenticated session established"
                     : "CONNECTED — active session established";
-            _stateMachine.Transition(ConnectionState.Connected, description, authState);
+            _stateMachine.Transition(
+                ConnectionState.Connected,
+                description,
+                authState,
+                _activeCompressionMode);
         }
 
         OnConnectionOpened?.Invoke(
@@ -345,7 +355,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                     _stateMachine.Transition(
                         ConnectionState.Disconnected,
                         $"DISCONNECTED — stored token was rejected: {error.Message}",
-                        ConnectionAuthState.TokenExpired
+                        ConnectionAuthState.TokenExpired,
+                        _activeCompressionMode
                     );
                     return;
                 }
@@ -361,14 +372,16 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                     _stateMachine.Transition(
                         ConnectionState.Disconnected,
                         $"DISCONNECTED — {label}: {error.Message}",
-                        authState
+                        authState,
+                        _activeCompressionMode
                     );
                     return;
                 }
 
                 _stateMachine.Transition(
                     ConnectionState.Disconnected,
-                    $"DISCONNECTED — failed to connect: {error.Message}"
+                    $"DISCONNECTED — failed to connect: {error.Message}",
+                    activeCompressionMode: _activeCompressionMode
                 );
             });
             return;
@@ -467,7 +480,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         {
             _stateMachine.Transition(
                 ConnectionState.Degraded,
-                $"DEGRADED — session experiencing issues; reconnecting (attempt {attemptNumber}/{_reconnectPolicy.MaxAttempts}, backoff {delay.TotalSeconds:0.#}s): {error.Message}"
+                $"DEGRADED — session experiencing issues; reconnecting (attempt {attemptNumber}/{_reconnectPolicy.MaxAttempts}, backoff {delay.TotalSeconds:0.#}s): {error.Message}",
+                activeCompressionMode: _activeCompressionMode
             );
             return;
             // NO ConnectionClosed here — session is degraded, not ended
@@ -480,7 +494,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
             _stateMachine.Transition(
                 ConnectionState.Disconnected,
                 $"DISCONNECTED — connection lost: {error.Message}",
-                disconnectAuthState
+                disconnectAuthState,
+                _activeCompressionMode
             );
         });
         OnConnectionClosed?.Invoke(new ConnectionClosedEvent
@@ -498,7 +513,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         {
             ResetDisconnectedSessionState();
             if (CurrentStatus.State != ConnectionState.Disconnected)
-                _stateMachine.Transition(ConnectionState.Disconnected, description);
+                _stateMachine.Transition(ConnectionState.Disconnected, description, activeCompressionMode: _activeCompressionMode);
         });
 
         // Fire ConnectionClosed only for live sessions (Connected or Degraded).
@@ -523,6 +538,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         _adapter.Close();
         _reducerAdapter.ClearConnection();
         _reconnectPolicy.Reset();
+        _activeCompressionMode = MessageCompressionMode.None;
     }
 
     private bool HasPendingReplacementInFlight(Guid handleId)

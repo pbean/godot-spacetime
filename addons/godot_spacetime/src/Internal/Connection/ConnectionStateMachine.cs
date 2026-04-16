@@ -14,7 +14,11 @@ internal sealed class ConnectionStateMachine
 
     public ConnectionStatus CurrentStatus { get; private set; }
 
-    public void Transition(ConnectionState next, string description, ConnectionAuthState authState = ConnectionAuthState.None)
+    public void Transition(
+        ConnectionState next,
+        string description,
+        ConnectionAuthState authState = ConnectionAuthState.None,
+        MessageCompressionMode? activeCompressionMode = null)
     {
         if (!IsValidTransition(CurrentStatus.State, next))
         {
@@ -23,7 +27,8 @@ internal sealed class ConnectionStateMachine
             );
         }
 
-        CurrentStatus = new ConnectionStatus(next, description, authState);
+        var nextCompressionMode = activeCompressionMode ?? CurrentStatus.ActiveCompressionMode;
+        CurrentStatus = new ConnectionStatus(next, description, authState, nextCompressionMode);
         StateChanged?.Invoke(CurrentStatus);
     }
 

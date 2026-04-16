@@ -12,11 +12,16 @@ public partial class ConnectionStatus : RefCounted
     {
     }
 
-    public ConnectionStatus(ConnectionState state, string description, ConnectionAuthState authState = ConnectionAuthState.None)
+    public ConnectionStatus(
+        ConnectionState state,
+        string description,
+        ConnectionAuthState authState = ConnectionAuthState.None,
+        MessageCompressionMode activeCompressionMode = MessageCompressionMode.None)
     {
         State = state;
         Description = description;
         AuthState = authState;
+        ActiveCompressionMode = activeCompressionMode;
     }
 
     public ConnectionState State { get; set; }
@@ -24,4 +29,6 @@ public partial class ConnectionStatus : RefCounted
     public string Description { get; set; } = string.Empty;
 
     public ConnectionAuthState AuthState { get; set; }
+
+    public MessageCompressionMode ActiveCompressionMode { get; set; } = MessageCompressionMode.None;
 }

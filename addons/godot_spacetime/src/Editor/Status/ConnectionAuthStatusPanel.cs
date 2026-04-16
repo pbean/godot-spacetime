@@ -16,6 +16,7 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
     private Label _autoloadLabel = null!;
     private Label _statusLabel = null!;
     private Label _detailLabel = null!;
+    private Label _compressionValueLabel = null!;
     private Label _authStateLabel = null!;
     private Label _authActionLabel = null!;
     private SpacetimeClient? _client;
@@ -56,6 +57,12 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
 
         AddChild(new HSeparator());
 
+        AddChild(CreateFocusableLabel("Compression:"));
+        _compressionValueLabel = CreateFocusableLabel();
+        AddChild(_compressionValueLabel);
+
+        AddChild(new HSeparator());
+
         AddChild(CreateFocusableLabel("Auth state:"));
         _authStateLabel = CreateFocusableLabel();
         AddChild(_authStateLabel);
@@ -87,6 +94,7 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
         {
             _autoloadLabel.Text = "Missing";
             SetStatus(StatusNotConfigured, "Add SpacetimeClient as an autoload to observe lifecycle state here.");
+            SetCompressionStatus(MessageCompressionMode.None);
             SetAuthStatus(ConnectionAuthState.None, ConnectionState.Disconnected);
             return;
         }
@@ -98,12 +106,14 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
             || string.IsNullOrWhiteSpace(_client.Settings.Database))
         {
             SetStatus(StatusNotConfigured, "Assign a SpacetimeSettings resource with Host and Database values.");
+            SetCompressionStatus(MessageCompressionMode.None);
             SetAuthStatus(ConnectionAuthState.None, ConnectionState.Disconnected);
             return;
         }
 
         var status = _client.CurrentStatus;
         SetStatus(MapStatus(status.State), status.Description);
+        SetCompressionStatus(status.ActiveCompressionMode);
         SetAuthStatus(status.AuthState, status.State);
     }
 
@@ -155,6 +165,17 @@ public partial class ConnectionAuthStatusPanel : VBoxContainer
     {
         _statusLabel.Text = statusText;
         _detailLabel.Text = detailText;
+    }
+
+    private void SetCompressionStatus(MessageCompressionMode compressionMode)
+    {
+        _compressionValueLabel.Text = compressionMode switch
+        {
+            MessageCompressionMode.None => "None (opt-in default)",
+            MessageCompressionMode.Gzip => "Gzip",
+            MessageCompressionMode.Brotli => "Brotli",
+            _ => compressionMode.ToString(),
+        };
     }
 
     private void OnConnectionStateChanged(ConnectionStatus status)
