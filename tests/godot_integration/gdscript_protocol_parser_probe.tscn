@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://tests/godot_integration/gdscript_protocol_parser_probe.gd" id="1_runner"]
+
+[node name="GdscriptProtocolParserProbe" type="Node"]
+script = ExtResource("1_runner")

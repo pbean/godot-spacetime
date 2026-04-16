@@ -4,10 +4,16 @@ signal state_changed(status)
 signal connection_opened(event)
 signal connection_closed(event)
 signal protocol_message(message)
+signal subscription_applied(event)
+signal subscription_failed(event)
+signal row_changed(event)
 
 const ConnectionProtocolScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd")
 const FileTokenStoreScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/file_token_store.gd")
 const ReconnectPolicyScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/reconnect_policy.gd")
+const SubscriptionHandleScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_subscription_handle.gd")
+const SubscriptionRegistryScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_subscription_registry.gd")
+const CacheStoreScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_cache_store.gd")
 
 const STATE_DISCONNECTED := "Disconnected"
 const STATE_CONNECTING := "Connecting"
@@ -25,6 +31,8 @@ const CLOSE_REASON_ERROR := "Error"
 
 var _current_status: Dictionary = {}
 var _reconnect_policy = ReconnectPolicyScript.new()
+var _subscription_registry = SubscriptionRegistryScript.new()
+var _cache_store = CacheStoreScript.new()
 var _token_store = null
 var _socket: WebSocketPeer = null
 var _websocket_factory: Callable = Callable()
@@ -43,6 +51,13 @@ var _last_transport_error: String = ""
 var _ever_connected_this_cycle: bool = false
 var _prefer_query_token: bool = false
 var _query_token_key: String = ConnectionProtocolScript.DEFAULT_QUERY_TOKEN_KEY
+var _next_request_id: int = 1
+var _next_handle_id: int = 1
+# request_id -> handle
+var _pending_subscriptions: Dictionary = {}
+# new_handle_id -> old_handle_id
+var _pending_replacements: Dictionary = {}
+var _authoritative_handle_id: int = -1
 
 
 func _init(websocket_factory: Callable = Callable()) -> void:
@@ -60,6 +75,103 @@ func get_current_status() -> Dictionary:
 
 func get_transport_request() -> Dictionary:
 	return _transport_request.duplicate(true)
+
+
+func configure_bindings(binding_metadata: Variant) -> int:
+	return _cache_store.configure_bindings(binding_metadata)
+
+
+func get_remote_tables():
+	return _cache_store.get_remote_tables()
+
+
+func get_rows(table_name: String) -> Array:
+	return _cache_store.get_rows(table_name)
+
+
+func subscribe(query_sqls: Array) -> Object:
+	if String(_current_status.get("state", STATE_DISCONNECTED)) != STATE_CONNECTED:
+		push_error(
+			"Subscribe() requires an active Connected session. " +
+			"Call open_connection() and wait for Connected before applying subscriptions."
+		)
+		return null
+
+	if not _cache_store.has_bindings():
+		push_error("Subscribe() requires binding metadata. Call configure_bindings() before applying subscriptions.")
+		return null
+
+	if _authoritative_handle_id != -1:
+		push_error(
+			"Subscribe() requires no authoritative subscription. " +
+			"Use replace_subscription() to overlap-first replace the live query set."
+		)
+		return null
+
+	var clean_queries := _validate_query_sqls(query_sqls, "Subscribe()")
+	if clean_queries.is_empty():
+		return null
+
+	return _begin_subscription(clean_queries)
+
+
+func unsubscribe(handle: Object) -> void:
+	var subscription_handle = _as_subscription_handle(handle, "Unsubscribe()")
+	if subscription_handle == null:
+		return
+
+	if String(subscription_handle.status) in [
+		SubscriptionHandleScript.STATUS_CLOSED,
+		SubscriptionHandleScript.STATUS_SUPERSEDED,
+	]:
+		return
+
+	_remove_pending_replacement_references(subscription_handle.handle_id)
+	_pending_subscriptions.erase(subscription_handle.query_set_id)
+	_send_unsubscribe_for_query_set(subscription_handle.query_set_id)
+	_subscription_registry.unregister(subscription_handle.handle_id)
+	subscription_handle.close()
+
+	if _authoritative_handle_id == subscription_handle.handle_id:
+		_authoritative_handle_id = -1
+		_cache_store.clear()
+
+
+func replace_subscription(old_handle: Object, new_queries: Array) -> Object:
+	if String(_current_status.get("state", STATE_DISCONNECTED)) != STATE_CONNECTED:
+		push_error("ReplaceSubscription() requires an active Connected session.")
+		return null
+
+	var subscription_handle = _as_subscription_handle(old_handle, "ReplaceSubscription()")
+	if subscription_handle == null:
+		return null
+
+	if String(subscription_handle.status) != SubscriptionHandleScript.STATUS_ACTIVE:
+		push_error(
+			"ReplaceSubscription() requires an Active subscription handle. " +
+			"The provided handle is already terminal."
+		)
+		return null
+
+	if _authoritative_handle_id != subscription_handle.handle_id:
+		push_error(
+			"ReplaceSubscription() requires the currently authoritative Active handle. " +
+			"Use the live handle returned by subscribe() or the last successful replacement."
+		)
+		return null
+
+	if _has_pending_replacement_for(subscription_handle.handle_id):
+		push_error(
+			"ReplaceSubscription() requires a currently authoritative handle without another " +
+			"replacement already in flight."
+		)
+		return null
+
+	var clean_queries := _validate_query_sqls(new_queries, "ReplaceSubscription()")
+	if clean_queries.is_empty():
+		return null
+
+	return _begin_subscription(clean_queries, subscription_handle.handle_id)
 
 
 func open_connection(host: String, database: String, options: Dictionary = {}) -> int:
@@ -193,8 +305,15 @@ func _drain_packets() -> void:
 		var packet := _socket.get_packet()
 		var message := ConnectionProtocolScript.parse_server_message(packet, _active_compression_mode != "None")
 		emit_signal("protocol_message", message.duplicate(true))
-		if String(message.get("kind", "")) == "InitialConnection":
-			_handle_initial_connection(message)
+		match String(message.get("kind", "")):
+			"InitialConnection":
+				_handle_initial_connection(message)
+			"SubscribeApplied":
+				_handle_subscribe_applied(message)
+			"SubscriptionError":
+				_handle_subscription_error(message)
+			"TransactionUpdate":
+				_handle_transaction_update(message)
 
 
 func _handle_initial_connection(message: Dictionary) -> void:
@@ -329,6 +448,7 @@ func _finish_disconnect(
 	_next_retry_at_seconds = -1.0
 	_disconnect_requested = false
 	_transport_request = {}
+	_reset_subscription_runtime()
 	_transition_to(STATE_DISCONNECTED, description, auth_state)
 
 	if emit_close_event:
@@ -418,6 +538,202 @@ func _clear_rejected_restored_token() -> void:
 	if _token_store != null:
 		_token_store.clear_token()
 	_session_token = ""
+
+
+func _handle_subscribe_applied(message: Dictionary) -> void:
+	var request_id := int(message.get("request_id", -1))
+	var handle = _pending_subscriptions.get(request_id)
+	if handle == null:
+		return
+
+	_pending_subscriptions.erase(request_id)
+
+	var snapshot := _cache_store.build_snapshot(message.get("tables", []))
+	var row_events := _cache_store.commit_snapshot(snapshot)
+
+	if _pending_replacements.has(handle.handle_id):
+		var old_handle_id := int(_pending_replacements[handle.handle_id])
+		_pending_replacements.erase(handle.handle_id)
+		var old_handle = _subscription_registry.try_get_handle(old_handle_id)
+		if old_handle != null:
+			_send_unsubscribe_for_query_set(old_handle.query_set_id)
+			old_handle.supersede()
+			_subscription_registry.unregister(old_handle_id)
+
+	_authoritative_handle_id = handle.handle_id
+	emit_signal("subscription_applied", {
+		"handle_id": handle.handle_id,
+		"applied_at_unix_time": Time.get_unix_time_from_system(),
+	})
+	_emit_row_changed_events(row_events)
+
+
+func _handle_subscription_error(message: Dictionary) -> void:
+	var handle = null
+	var request_id = message.get("request_id")
+	if request_id != null:
+		handle = _pending_subscriptions.get(int(request_id))
+		_pending_subscriptions.erase(int(request_id))
+
+	if handle == null:
+		handle = _subscription_registry.find_by_query_set_id(int(message.get("query_set_id", -1)))
+
+	if handle == null:
+		return
+
+	_remove_pending_replacement_references(handle.handle_id)
+	_send_unsubscribe_for_query_set(handle.query_set_id)
+	_subscription_registry.unregister(handle.handle_id)
+	handle.close()
+
+	if _authoritative_handle_id == handle.handle_id:
+		_authoritative_handle_id = -1
+		_cache_store.clear()
+
+	emit_signal("subscription_failed", {
+		"handle_id": handle.handle_id,
+		"error_message": String(message.get("error_message", "")),
+		"failed_at_unix_time": Time.get_unix_time_from_system(),
+	})
+
+
+func _handle_transaction_update(message: Dictionary) -> void:
+	if _authoritative_handle_id == -1:
+		return
+
+	var authoritative_handle = _subscription_registry.try_get_handle(_authoritative_handle_id)
+	if authoritative_handle == null:
+		return
+
+	var relevant_updates: Array = []
+	for query_set_update_variant in message.get("query_sets", []):
+		var query_set_update: Dictionary = query_set_update_variant
+		if int(query_set_update.get("query_set_id", -1)) == int(authoritative_handle.query_set_id):
+			relevant_updates.append(query_set_update)
+
+	if relevant_updates.is_empty():
+		return
+
+	_emit_row_changed_events(_cache_store.apply_transaction_updates(relevant_updates))
+
+
+func _begin_subscription(query_sqls: Array, replaced_handle_id: int = -1) -> Object:
+	var request_id := _reserve_request_id()
+	var handle_id := _next_handle_id
+	_next_handle_id += 1
+
+	var handle = SubscriptionHandleScript.new(handle_id, request_id, query_sqls)
+	_pending_subscriptions[request_id] = handle
+	_subscription_registry.register(handle)
+
+	if replaced_handle_id != -1:
+		_pending_replacements[handle.handle_id] = replaced_handle_id
+
+	var send_result := _send_subscribe_request(handle)
+	if send_result != OK:
+		_pending_subscriptions.erase(request_id)
+		_pending_replacements.erase(handle.handle_id)
+		_subscription_registry.unregister(handle.handle_id)
+		handle.close()
+		push_error("Subscribe() failed to send the wire payload: %s" % error_string(send_result))
+		return null
+
+	return handle
+
+
+func _send_subscribe_request(handle) -> int:
+	return send_protocol_message(
+		ConnectionProtocolScript.CLIENT_MESSAGE_SUBSCRIBE,
+		func(writer) -> void:
+			writer.write_u32(int(handle.query_set_id))
+			writer.write_u32(int(handle.query_set_id))
+			writer.write_array_len(handle.query_sqls.size())
+			for sql_variant in handle.query_sqls:
+				writer.write_string(String(sql_variant))
+	)
+
+
+func _send_unsubscribe_for_query_set(query_set_id: int) -> void:
+	if query_set_id < 0:
+		return
+
+	if String(_current_status.get("state", STATE_DISCONNECTED)) != STATE_CONNECTED:
+		return
+
+	var request_id := _reserve_request_id()
+	send_protocol_message(
+		ConnectionProtocolScript.CLIENT_MESSAGE_UNSUBSCRIBE,
+		func(writer) -> void:
+			writer.write_u32(request_id)
+			writer.write_u32(query_set_id)
+			writer.write_u32(0)
+	)
+
+
+func _validate_query_sqls(query_sqls: Array, caller_name: String) -> Array:
+	if query_sqls == null or query_sqls.is_empty():
+		push_error("%s requires a non-empty query set." % caller_name)
+		return []
+
+	var clean_queries: Array = []
+	for sql_variant in query_sqls:
+		var sql := String(sql_variant).strip_edges()
+		if sql.is_empty():
+			push_error("%s requires every query string to be non-empty." % caller_name)
+			return []
+		clean_queries.append(sql)
+
+	return clean_queries
+
+
+func _reserve_request_id() -> int:
+	var request_id := _next_request_id
+	_next_request_id += 1
+	return request_id
+
+
+func _as_subscription_handle(handle: Object, caller_name: String):
+	if handle == null:
+		push_error("%s requires a valid subscription handle." % caller_name)
+		return null
+
+	for required_method in ["close", "supersede"]:
+		if not handle.has_method(required_method):
+			push_error("%s requires a valid subscription handle." % caller_name)
+			return null
+
+	return handle
+
+
+func _has_pending_replacement_for(old_handle_id: int) -> bool:
+	return _pending_replacements.values().has(old_handle_id)
+
+
+func _remove_pending_replacement_references(handle_id: int) -> void:
+	var to_remove: Array = []
+	for pending_handle_id_variant in _pending_replacements.keys():
+		var pending_handle_id := int(pending_handle_id_variant)
+		var replaced_handle_id := int(_pending_replacements[pending_handle_id_variant])
+		if pending_handle_id == handle_id or replaced_handle_id == handle_id:
+			to_remove.append(pending_handle_id)
+
+	for pending_handle_id in to_remove:
+		_pending_replacements.erase(pending_handle_id)
+
+
+func _emit_row_changed_events(row_events: Array) -> void:
+	for row_event_variant in row_events:
+		emit_signal("row_changed", row_event_variant)
+
+
+func _reset_subscription_runtime() -> void:
+	_pending_subscriptions.clear()
+	_pending_replacements.clear()
+	_authoritative_handle_id = -1
+	_next_request_id = 1
+	_next_handle_id = 1
+	_subscription_registry.clear()
+	_cache_store.clear()
 
 
 func _create_socket() -> WebSocketPeer:
