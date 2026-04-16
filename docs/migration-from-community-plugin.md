@@ -48,12 +48,12 @@ The SpacetimeDB community Godot plugin provided a thin C# wrapper around `Spacet
 
 | Community plugin | This SDK |
 |---|---|
-| `connection.Db.SmokeTest.Iter()` (direct `RemoteTables` access) | `SpacetimeClient.GetRows("SmokeTest")` returns `IEnumerable<object>`; cast each item to the generated row type (e.g., `SmokeTest`) |
+| `connection.Db.SmokeTest.Iter()` (direct `RemoteTables` access) | `var db = SpacetimeClient.GetDb<RemoteTables>()` for typed handle reads such as `db.SmokeTest.Iter()` / `db.SmokeTest.Count`; `SpacetimeClient.GetRows("SmokeTest")` remains available as a compatibility fallback |
 | Row update callbacks on generated table handles | `SpacetimeClient.RowChanged` signal (`RowChangedEvent` argument; `TableName` identifies the table) |
 
-Any `connection.Db.*` cache walk from the community plugin maps to the same public SDK surface: `SpacetimeClient.GetRows("TableName")` against the generated PascalCase table name.
+Any `connection.Db.*` cache walk from the community plugin maps first to `SpacetimeClient.GetDb<RemoteTables>()` for typed table-handle access against the generated bindings for the connected module. `SpacetimeClient.GetRows("TableName")` remains the PascalCase compatibility bridge when code only has a table name.
 
-`GetRows()` is the supported public cache-access path. The underlying `RemoteTables` type is an internal implementation detail and must not be accessed directly from gameplay code. See `docs/runtime-boundaries.md` for the full cache model.
+`GetDb<RemoteTables>()` is the preferred public cache-access path. `GetRows()` remains supported for backward compatibility. Raw `IDbConnection` and other transport details remain internal; see `docs/runtime-boundaries.md` for the full cache model.
 
 ## Migration from Custom Protocol Work
 
@@ -64,7 +64,7 @@ If your existing integration uses raw `SpacetimeDB.ClientSDK` or a direct WebSoc
 3. Assign a `SpacetimeSettings` resource with your `Host`, `Database`, and (optionally) `TokenStore`.
 4. Run code generation via the `"Spacetime Codegen"` panel or `bash scripts/codegen/generate-smoke-test.sh` to get typed bindings.
 5. Replace manual event handling with Godot signal connections on `SpacetimeClient` (`ConnectionStateChanged`, `SubscriptionApplied`, `SubscriptionFailed`, `ReducerCallSucceeded`, `ReducerCallFailed`, `RowChanged`).
-6. Replace manual table reads with `SpacetimeClient.GetRows("TableName")`.
+6. Replace manual table reads with `SpacetimeClient.GetDb<RemoteTables>()` for typed handle access, keeping `SpacetimeClient.GetRows("TableName")` as the compatibility bridge when code only has a table name.
 7. Replace direct reducer calls with `SpacetimeClient.InvokeReducer(new Reducer.X())`.
 
 The complete end-to-end wiring path is demonstrated in `demo/README.md` and `demo/DemoMain.cs`.
@@ -81,7 +81,7 @@ The Godot-facing API wraps SpacetimeDB's connection and event model in Godot-nat
 | `DbConnection.SubscriptionBuilder().Subscribe()` | `SpacetimeClient.Subscribe(string[])` returning `SubscriptionHandle` | `docs/runtime-boundaries.md` — Subscriptions |
 | Subscription applied callback | `SpacetimeClient.SubscriptionApplied` signal (`SubscriptionAppliedEvent`) | `docs/runtime-boundaries.md` — Subscriptions |
 | Subscription error callback | `SpacetimeClient.SubscriptionFailed` signal (`SubscriptionFailedEvent.ErrorMessage`) | `docs/runtime-boundaries.md` — Subscriptions |
-| `DbContext.RemoteTables.*` (table cache access) | `SpacetimeClient.GetRows("TableName")` → `IEnumerable<object>` | `docs/runtime-boundaries.md` — Cache |
+| `DbContext.RemoteTables.*` (table cache access) | `SpacetimeClient.GetDb<RemoteTables>()` for typed table handles, or `SpacetimeClient.GetRows("TableName")` for compatibility | `docs/runtime-boundaries.md` — Cache |
 | Row update callbacks | `SpacetimeClient.RowChanged` signal (`RowChangedEvent`) | `docs/runtime-boundaries.md` — Cache |
 | `connection.Reducers.X()` (generated method) | `SpacetimeClient.InvokeReducer(new Reducer.X())` where `Reducer.X` implements `IReducerArgs` | `docs/runtime-boundaries.md` — Reducer Invocation |
 | Reducer success callback | `SpacetimeClient.ReducerCallSucceeded` signal (`ReducerCallResult`) | `docs/runtime-boundaries.md` — Reducer Error Model |

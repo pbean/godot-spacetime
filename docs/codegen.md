@@ -50,7 +50,7 @@ All generated files live under `demo/generated/smoke_test/` and are in the `Spac
 
 ### Table handle
 
-`RemoteTables.SmokeTestHandle` in `Tables/SmokeTest.g.cs` — provides access to cached rows, a primary-key index (`IdUniqueIndex`), and row operations. Access the handle via `conn.Db.SmokeTest` (where `conn.Db` is the `RemoteTables` instance).
+`RemoteTables.SmokeTestHandle` in `Tables/SmokeTest.g.cs` — provides access to cached rows, a primary-key index (`IdUniqueIndex`), and row operations. Generated runtime contexts still reach the handle via `conn.Db.SmokeTest`; gameplay code reaches the same handle through `SpacetimeClient.GetDb<TDb>()` and then `db.SmokeTest`.
 
 ### Reducer proxy
 

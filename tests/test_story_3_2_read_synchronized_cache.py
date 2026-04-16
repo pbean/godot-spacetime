@@ -261,10 +261,10 @@ def test_spacetime_client_imports_system_collections_generic() -> None:
     )
 
 
-def test_spacetime_client_docs_mention_get_rows_cache_path() -> None:
+def test_spacetime_client_docs_mention_typed_and_legacy_cache_paths() -> None:
     content = _read("addons/godot_spacetime/src/Public/SpacetimeClient.cs")
-    assert "Read cache via GetRows()" in content, (
-        "SpacetimeClient.cs class documentation must mention GetRows() as the public cache-read path (AC 2, 3)"
+    assert "GetDb<TDb>()" in content and "GetRows()" in content, (
+        "SpacetimeClient.cs class documentation must mention both GetDb<TDb>() and GetRows() as public cache-read paths (Story 7.2 compatibility update)"
     )
 
 
@@ -328,10 +328,10 @@ def test_runtime_boundaries_has_empty_sequence_guard_explanation() -> None:
     )
 
 
-def test_runtime_boundaries_spacetime_client_workflow_mentions_get_rows() -> None:
+def test_runtime_boundaries_spacetime_client_workflow_mentions_typed_and_legacy_cache_paths() -> None:
     content = _read("docs/runtime-boundaries.md")
-    assert "SubscriptionAppliedEvent → read cache via GetRows()" in content, (
-        "docs/runtime-boundaries.md must update the SpacetimeClient workflow to show GetRows() as the cache-read path (AC 2, 3)"
+    assert "SubscriptionAppliedEvent → read cache via GetDb<TDb>() / GetRows()" in content, (
+        "docs/runtime-boundaries.md must show the typed GetDb<TDb>() path first while preserving GetRows() as the compatibility path (Story 7.2 compatibility update)"
     )
 
 

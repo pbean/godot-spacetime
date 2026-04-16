@@ -145,8 +145,8 @@ def test_migration_contains_invoke_reducer():
 def test_migration_contains_get_rows():
     content = _read("docs/migration-from-community-plugin.md")
     section = _section(content, "Migration from the Community Plugin")
-    assert "GetRows" in section, \
-        "Community plugin section must show GetRows as the public cache-access path (AC2)"
+    assert "GetDb<RemoteTables>()" in section and "GetRows" in section, \
+        "Community plugin section must show GetDb<RemoteTables>() as the preferred public cache-access path while preserving GetRows as compatibility guidance (Story 7.2 compatibility update)"
 
 
 def test_migration_contains_itoken_store():
@@ -529,8 +529,8 @@ def test_migration_custom_protocol_contains_connection_state_changed():
 def test_migration_custom_protocol_contains_get_rows():
     content = _read("docs/migration-from-community-plugin.md")
     section = _section(content, "Migration from Custom Protocol Work")
-    assert "GetRows" in section, \
-        "Custom protocol section must reference GetRows as the replacement for manual table reads (AC2)"
+    assert "GetDb<RemoteTables>()" in section and "GetRows" in section, \
+        "Custom protocol section must reference GetDb<RemoteTables>() as the primary replacement for manual table reads and GetRows as the compatibility bridge (Story 7.2 compatibility update)"
 
 
 def test_migration_custom_protocol_contains_invoke_reducer():

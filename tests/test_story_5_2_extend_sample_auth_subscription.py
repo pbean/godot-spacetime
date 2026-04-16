@@ -110,10 +110,10 @@ def test_demo_main_cs_handles_row_changed() -> None:
     )
 
 
-def test_demo_main_cs_calls_get_rows() -> None:
+def test_demo_main_cs_uses_typed_remote_tables_path() -> None:
     content = _read("demo/DemoMain.cs")
-    assert 'GetRows("SmokeTest")' in content, (
-        'demo/DemoMain.cs must call \'GetRows("SmokeTest")\' to read the local cache with the generated PascalCase table name (AC: 1)'
+    assert 'GetDb<RemoteTables>()' in content and 'db.SmokeTest.Iter()' in content and 'db.SmokeTest.Count' in content, (
+        'demo/DemoMain.cs must read the local cache through GetDb<RemoteTables>() plus SmokeTest.Iter() and SmokeTest.Count (Story 7.2 compatibility update)'
     )
 
 
@@ -240,10 +240,10 @@ def test_demo_readme_references_runtime_boundaries_md() -> None:
     )
 
 
-def test_demo_readme_documents_pascal_case_cache_read_name() -> None:
+def test_demo_readme_documents_typed_path_and_pascal_case_compatibility_name() -> None:
     content = _read("demo/README.md")
-    assert 'GetRows("SmokeTest")' in content, (
-        'demo/README.md must document that cache reads use the generated PascalCase table name via GetRows("SmokeTest") (AC: 3)'
+    assert 'GetDb<RemoteTables>()' in content and 'GetRows("SmokeTest")' in content, (
+        'demo/README.md must document the typed GetDb<RemoteTables>() path and preserve GetRows("SmokeTest") as the PascalCase compatibility path (Story 7.2 compatibility update)'
     )
 
 
@@ -352,7 +352,7 @@ def test_addons_spacetime_client_cs_still_exists() -> None:
 def test_demo_main_cs_imports_system_linq() -> None:
     content = _read("demo/DemoMain.cs")
     assert "using System.Linq;" in content, (
-        "demo/DemoMain.cs must import 'System.Linq' to support .ToList() on GetRows result (AC: 1)"
+        "demo/DemoMain.cs must import 'System.Linq' to support typed handle iteration materialization in the subscription-applied path (Story 7.2 compatibility update)"
     )
 
 
@@ -401,7 +401,7 @@ def test_demo_main_cs_clears_handle_for_failed_subscription_event() -> None:
 def test_demo_main_cs_materializes_rows_with_to_list() -> None:
     content = _read("demo/DemoMain.cs")
     assert ".ToList()" in content, (
-        "demo/DemoMain.cs must call '.ToList()' to materialize the GetRows IEnumerable for row count (AC: 1)"
+        "demo/DemoMain.cs must call '.ToList()' to materialize the typed table-handle iteration result in the subscription-applied path (Story 7.2 compatibility update)"
     )
 
 

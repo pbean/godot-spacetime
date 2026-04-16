@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using Godot;
 using GodotSpacetime;
@@ -96,8 +97,10 @@ public partial class DemoMain : Node
         if (_subscriptionHandle != e.Handle)
             return;
 
-        var rows = _client!.GetRows("SmokeTest").ToList();
-        GD.Print($"[Demo] Subscription applied — {rows.Count} row(s) in smoke_test");
+        var db = _client!.GetDb<RemoteTables>()
+            ?? throw new InvalidOperationException("Cache not ready yet. Wait for SubscriptionApplied.");
+        _ = db.SmokeTest.Iter().ToList();
+        GD.Print($"[Demo] Subscription applied — {db.SmokeTest.Count} row(s) in smoke_test");
         _client!.InvokeReducer(new Reducer.Ping());
         GD.Print("[Demo] Ping reducer invoked — awaiting server acknowledgement");
     }
