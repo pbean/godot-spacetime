@@ -126,6 +126,24 @@ On the second run (session resumed), the `Connected` line changes to `"[Demo] Co
 
 The lifecycle terms `SubscriptionApplied` and `RowChanged` are defined in `docs/runtime-boundaries.md`.
 
+## One-Off Query Example
+
+One-off queries are a separate path from subscriptions. They reuse the current connection and authentication boundary, fetch typed rows from the server, and do **not** create a subscription or populate the local cache.
+
+```csharp
+var rows = await _client.QueryAsync<SmokeTest>("WHERE value = 'hello'");
+foreach (var row in rows)
+{
+    GD.Print($"[Demo] One-off row: {row.Id} {row.Value}");
+}
+```
+
+Compare the read modes:
+
+- `GetDb<RemoteTables>()` and `GetRows("SmokeTest")` read the subscription-backed local cache.
+- `Subscribe(["SELECT * FROM smoke_test"])` creates the live synchronized cache slice that powers `SubscriptionApplied` and `RowChanged`.
+- `QueryAsync<SmokeTest>(...)` performs a remote one-off query without creating a subscription and without backfilling the cache counts or rows used by the subscription path.
+
 ## Reducer Interaction
 
 After `SubscriptionApplied` fires and the row count is logged, `DemoMain` automatically invokes the `Ping` reducer via `InvokeReducer(new Reducer.Ping())`.

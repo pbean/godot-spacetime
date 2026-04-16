@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GodotSpacetime.Auth;
 using GodotSpacetime.Connection;
+using GodotSpacetime.Queries;
 using GodotSpacetime.Reducers;
 using GodotSpacetime.Runtime.Cache;
 using GodotSpacetime.Runtime.Platform.DotNet;
@@ -31,6 +32,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private readonly CacheViewAdapter _cacheViewAdapter = new();
     private readonly SpacetimeSdkRowCallbackAdapter _rowCallbackAdapter = new();
     private readonly SpacetimeSdkReducerAdapter _reducerAdapter = new();
+    private readonly SpacetimeSdkQueryAdapter _queryAdapter = new();
     private readonly ReducerInvoker _reducerInvoker;
 
     /// <summary>
@@ -237,6 +239,25 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     public TDb? GetDb<TDb>() where TDb : class => _cacheViewAdapter.GetDb<TDb>();
 
     public IEnumerable<object> GetRows(string tableName) => _cacheViewAdapter.GetRows(tableName);
+
+    public Task<TRow[]> QueryAsync<TRow>(string sqlClause, TimeSpan? timeout = null)
+        where TRow : class
+    {
+        if (string.IsNullOrWhiteSpace(sqlClause))
+            throw new ArgumentException("QueryAsync() requires a non-empty SQL clause.", nameof(sqlClause));
+
+        if (CurrentStatus.State != ConnectionState.Connected)
+            throw new InvalidOperationException(
+                "QueryAsync() requires an active Connected session. " +
+                "Call Connect() and wait for ConnectionState.Connected before issuing one-off queries.");
+
+        var remoteTables = _adapter.GetDb()
+            ?? throw new InvalidOperationException(
+                "QueryAsync() requires an active generated RemoteTables session. " +
+                "This is a programming fault — ensure the connection is fully established before querying.");
+
+        return _queryAdapter.QueryAsync<TRow>(remoteTables, sqlClause, timeout);
+    }
 
     public void InvokeReducer(object reducerArgs)
     {

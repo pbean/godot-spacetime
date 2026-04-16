@@ -115,6 +115,27 @@ Inspect `SubscriptionFailedEvent.ErrorMessage` to determine the recovery path:
 
 See `docs/runtime-boundaries.md` for the full `SubscriptionHandle`, `SubscriptionAppliedEvent`, and `SubscriptionFailedEvent` API reference.
 
+## One-Off Queries
+
+`SpacetimeClient.QueryAsync<TRow>()` reuses the active connection and auth boundary for a one-off remote round-trip. It does **not** create a subscription and does **not** populate the local cache returned by `GetDb<TDb>()` / `GetRows()`.
+
+Recoverable runtime failures are thrown as `OneOffQueryError`; branch on `OneOffQueryError.FailureCategory`:
+
+| OneOffQueryFailureCategory | Visible Indicator | Likely Cause | Recovery Action |
+|----------------------------|-------------------|-------------|-----------------|
+| `InvalidQuery` | `QueryAsync<TRow>()` throws `OneOffQueryError` with `FailureCategory=InvalidQuery` | The SQL clause is malformed or uses an unsupported query shape | Fix the clause and retry; one-off queries target the generated table selected by `TRow` |
+| `TimedOut` | `QueryAsync<TRow>()` throws `OneOffQueryError` with `FailureCategory=TimedOut` | The explicit or default timeout elapsed before the server replied | Verify server health and query shape; retry with a longer timeout only if the query is expected to be slow |
+| `Failed` | `QueryAsync<TRow>()` throws `OneOffQueryError` with `FailureCategory=Failed` | Server-side runtime failure unrelated to a client programming fault | Capture diagnostics, check server logs, and retry only after confirming the failure is transient |
+| `Unknown` | `QueryAsync<TRow>()` throws `OneOffQueryError` with `FailureCategory=Unknown` | The upstream failure could not be classified safely | Avoid automatic retries; surface a safe generic error and capture diagnostics |
+
+Programming faults remain explicit exceptions rather than `OneOffQueryError` values:
+
+| Fault | Visible Indicator | Recovery Action |
+|-------|-------------------|-----------------|
+| Blank/whitespace SQL clause | `ArgumentException` from `QueryAsync<TRow>()` | Pass a non-empty clause such as `WHERE value = 'hello'` |
+| Called before `ConnectionState.Connected` | `InvalidOperationException` from `QueryAsync<TRow>()` | Wait for `Connected` before issuing the one-off query |
+| Unsupported generated row type | `InvalidOperationException` from `QueryAsync<TRow>()` | Use a generated row type from the active module bindings |
+
 ## Reducers
 
 Reducer call outcomes fall into two distinct categories that must not be conflated.
