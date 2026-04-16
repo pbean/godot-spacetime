@@ -202,6 +202,73 @@ To reproduce the baseline workflow from scratch without maintainer intervention:
 
 After these steps the project is back to a clean, reproducible state. No maintainer intervention is required.
 
+## RowReceiver — Scene-Tree Row Events Without Boilerplate
+
+`RowReceiver` is a built-in scene node that subscribes to `SpacetimeClient.RowChanged` and re-emits typed row events scoped to a single table. Use it when you want row-change signals wired up in the editor instead of writing connection code.
+
+### Setup in the Editor
+
+1. In your scene, add a `RowReceiver` node (found under `Add Node → RowReceiver`).
+2. Select the node and open the Inspector.
+3. Set the `TableName` dropdown to the table you want to observe (e.g., `SmokeTest`). The dropdown is populated from the generated `RemoteTables` type at editor time by reflecting its public table members. In the current `SpacetimeDB 2.1.x` generated bindings those members are public fields.
+4. Connect `row_inserted`, `row_updated`, or `row_deleted` in the Node panel or in code.
+
+`SpacetimeClient` must be registered as an autoload at `/root/SpacetimeClient` (see Step 6 of the Setup section above).
+
+### Connecting in GDScript
+
+```gdscript
+# In _ready() or from the Node panel's signal connections:
+$RowReceiver.row_inserted.connect(func(e):
+    var row = e.new_row as SmokeTest
+    print("[Demo] Row inserted — value: ", row.value)
+)
+
+$RowReceiver.row_updated.connect(func(e):
+    var old_row = e.old_row as SmokeTest
+    var new_row = e.new_row as SmokeTest
+    print("[Demo] Row updated — ", old_row.value, " → ", new_row.value)
+)
+
+$RowReceiver.row_deleted.connect(func(e):
+    var row = e.old_row as SmokeTest
+    print("[Demo] Row deleted — value: ", row.value)
+)
+```
+
+### Connecting in C#
+
+```csharp
+// In _Ready() or after the node is in the scene tree:
+var rowReceiver = GetNode<RowReceiver>("RowReceiver");
+
+rowReceiver.RowInserted += e =>
+{
+    var row = (SpacetimeDB.Types.SmokeTest)e.NewRow!;
+    GD.Print($"[Demo] Row inserted — value: {row.Value}");
+};
+
+rowReceiver.RowUpdated += e =>
+{
+    var oldRow = (SpacetimeDB.Types.SmokeTest)e.OldRow!;
+    var newRow = (SpacetimeDB.Types.SmokeTest)e.NewRow!;
+    GD.Print($"[Demo] Row updated — {oldRow.Value} → {newRow.Value}");
+};
+
+rowReceiver.RowDeleted += e =>
+{
+    var row = (SpacetimeDB.Types.SmokeTest)e.OldRow!;
+    GD.Print($"[Demo] Row deleted — value: {row.Value}");
+};
+```
+
+### Notes
+
+- `RowReceiver` is a passive observer — it does **not** call `Subscribe()`. You still need an active subscription (via `SpacetimeClient.Subscribe()`) for the table's rows to be synchronized.
+- `RowReceiver` only emits events after `SpacetimeClient.RowChanged` fires, which requires an active subscription. A RowReceiver for a table with no active subscription silently emits nothing.
+- The `row_inserted`, `row_updated`, and `row_deleted` signals each carry a `RowChangedEvent` payload. Cast `e.NewRow` or `e.OldRow` to the generated row type to access typed fields.
+- The lifecycle terms `RowChanged` and `RowChangedEvent` are defined in `docs/runtime-boundaries.md`.
+
 ## See Also
 
 - `docs/quickstart.md` — the canonical step-by-step setup guide for this repository. `demo/README.md` mirrors its steps; if the two diverge, `docs/quickstart.md` is authoritative.
