@@ -30,6 +30,12 @@ namespace GodotSpacetime;
 /// </summary>
 public partial class SpacetimeClient : Node
 {
+    private static readonly StringName MessagesSentMonitorId = new("GodotSpacetime/Connection/MessagesSent");
+    private static readonly StringName MessagesReceivedMonitorId = new("GodotSpacetime/Connection/MessagesReceived");
+    private static readonly StringName BytesSentMonitorId = new("GodotSpacetime/Connection/BytesSent");
+    private static readonly StringName BytesReceivedMonitorId = new("GodotSpacetime/Connection/BytesReceived");
+    private static readonly StringName UptimeSecondsMonitorId = new("GodotSpacetime/Connection/UptimeSeconds");
+    private static readonly StringName LastReducerRoundTripMonitorId = new("GodotSpacetime/Reducers/LastRoundTripMilliseconds");
     private readonly SpacetimeConnectionService _connectionService = new();
     private ConnectionStatus _currentStatus = new(ConnectionState.Disconnected, "DISCONNECTED — not connected to SpacetimeDB");
     private GodotSignalAdapter? _signalAdapter;
@@ -83,9 +89,16 @@ public partial class SpacetimeClient : Node
 
     public ConnectionStatus CurrentStatus => _currentStatus;
 
+    public ConnectionTelemetryStats CurrentTelemetry => _connectionService.CurrentTelemetry;
+
+    internal bool TelemetryBytesSentProven => _connectionService.TelemetryBytesSentProven;
+
+    internal string TelemetryBytesSentSource => _connectionService.TelemetryBytesSentSource;
+
     public override void _EnterTree()
     {
         _signalAdapter ??= new GodotSignalAdapter(this);
+        RegisterPerformanceMonitors();
         _connectionService.OnStateChanged += HandleStateChanged;
         _connectionService.OnConnectionOpened += HandleConnectionOpened;
         _connectionService.OnConnectionClosed += HandleConnectionClosed;
@@ -106,6 +119,7 @@ public partial class SpacetimeClient : Node
         _connectionService.OnRowChanged -= HandleRowChanged;
         _connectionService.OnReducerCallSucceeded -= HandleReducerCallSucceeded;
         _connectionService.OnReducerCallFailed -= HandleReducerCallFailed;
+        RemovePerformanceMonitors();
     }
 
     public void Connect()
@@ -254,6 +268,55 @@ public partial class SpacetimeClient : Node
 
         _connectionService.FrameTick();
     }
+
+    private void RegisterPerformanceMonitors()
+    {
+        EnsurePerformanceMonitor(MessagesSentMonitorId, Callable.From<double>(GetMessagesSentMonitor));
+        EnsurePerformanceMonitor(MessagesReceivedMonitorId, Callable.From<double>(GetMessagesReceivedMonitor));
+        EnsurePerformanceMonitor(BytesSentMonitorId, Callable.From<double>(GetBytesSentMonitor));
+        EnsurePerformanceMonitor(BytesReceivedMonitorId, Callable.From<double>(GetBytesReceivedMonitor));
+        EnsurePerformanceMonitor(UptimeSecondsMonitorId, Callable.From<double>(GetUptimeSecondsMonitor));
+        EnsurePerformanceMonitor(LastReducerRoundTripMonitorId, Callable.From<double>(GetLastReducerRoundTripMonitor));
+    }
+
+    private void RemovePerformanceMonitors()
+    {
+        RemovePerformanceMonitor(MessagesSentMonitorId);
+        RemovePerformanceMonitor(MessagesReceivedMonitorId);
+        RemovePerformanceMonitor(BytesSentMonitorId);
+        RemovePerformanceMonitor(BytesReceivedMonitorId);
+        RemovePerformanceMonitor(UptimeSecondsMonitorId);
+        RemovePerformanceMonitor(LastReducerRoundTripMonitorId);
+    }
+
+    private static void EnsurePerformanceMonitor(StringName monitorId, Callable callable)
+    {
+        if (!Performance.HasCustomMonitor(monitorId))
+            Performance.AddCustomMonitor(monitorId, callable);
+
+        // Probe once to verify the monitor callable is queryable after registration.
+        _ = Performance.GetCustomMonitor(monitorId);
+    }
+
+    private static void RemovePerformanceMonitor(StringName monitorId)
+    {
+        if (!Performance.HasCustomMonitor(monitorId))
+            return;
+
+        Performance.RemoveCustomMonitor(monitorId);
+    }
+
+    private double GetMessagesSentMonitor() => Math.Max(0, CurrentTelemetry.MessagesSent);
+
+    private double GetMessagesReceivedMonitor() => Math.Max(0, CurrentTelemetry.MessagesReceived);
+
+    private double GetBytesSentMonitor() => Math.Max(0, CurrentTelemetry.BytesSent);
+
+    private double GetBytesReceivedMonitor() => Math.Max(0, CurrentTelemetry.BytesReceived);
+
+    private double GetUptimeSecondsMonitor() => Math.Max(0, CurrentTelemetry.ConnectionUptimeSeconds);
+
+    private double GetLastReducerRoundTripMonitor() => Math.Max(0, CurrentTelemetry.LastReducerRoundTripMilliseconds);
 
     private void PublishValidationFailure(string message)
     {

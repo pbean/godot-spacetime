@@ -19,6 +19,37 @@ Compression is opt-in through `SpacetimeSettings.CompressionMode`. The product d
 
 Light mode is opt-in through `SpacetimeSettings.LightMode`, and the product default is `false`. The setting is applied when a session is opened; changing `LightMode` on the settings resource while a current session is already connected does not reconfigure that current session and only takes effect on the next connection cycle.
 
+## Telemetry
+
+`SpacetimeClient.CurrentTelemetry` exposes pull-based connection metrics without widening `ConnectionStatus` into a high-churn counter object.
+
+The typed telemetry properties are:
+
+- `MessagesSent`
+- `MessagesReceived`
+- `BytesSent`
+- `BytesReceived`
+- `ConnectionUptimeSeconds`
+- `LastReducerRoundTripMilliseconds`
+
+Units are explicit: counts for `MessagesSent` / `MessagesReceived`, bytes for `BytesSent` / `BytesReceived`, seconds for uptime, and milliseconds for reducer RTT.
+
+The same values are mirrored into Godot `Performance` custom monitors:
+
+- `GodotSpacetime/Connection/MessagesSent`
+- `GodotSpacetime/Connection/MessagesReceived`
+- `GodotSpacetime/Connection/BytesSent`
+- `GodotSpacetime/Connection/BytesReceived`
+- `GodotSpacetime/Connection/UptimeSeconds`
+- `GodotSpacetime/Reducers/LastRoundTripMilliseconds`
+
+Reset behavior is deliberate:
+
+- `Disconnect()` resets `CurrentTelemetry` to zero immediately.
+- A later reconnect starts a fresh measurement window rather than carrying over the previous session.
+
+On the pinned stack, `BytesSent` is measured from the SDK's serialized outbound payload path rather than from a documented public wire-byte counter. Story 9.3 validation records that observed runtime behavior instead of guessing.
+
 ## Signals
 
 - `connection_state_changed(ConnectionStatus)` fires for lifecycle transitions such as `Disconnected -> Connecting -> Connected`.

@@ -26,6 +26,8 @@ internal interface ISubscriptionEventSink
 /// </summary>
 internal sealed class SpacetimeSdkSubscriptionAdapter
 {
+    private readonly SpacetimeSdkTelemetrySerializer _telemetrySerializer = new();
+
     /// <summary>
     /// Applies a subscription to the given connection for the specified SQL queries.
     /// Wires the SDK subscription applied and error callbacks to <paramref name="sink"/>.
@@ -107,6 +109,12 @@ internal sealed class SpacetimeSdkSubscriptionAdapter
             return false;
         }
     }
+
+    internal long MeasureSubscribePayloadBytes(string[] querySqls) =>
+        _telemetrySerializer.MeasureSubscribePayloadBytes(querySqls);
+
+    internal long MeasureUnsubscribePayloadBytes() =>
+        _telemetrySerializer.MeasureUnsubscribePayloadBytes();
 
     private static object InvokeWithDelegate(object builder, string methodName, Delegate callback)
     {

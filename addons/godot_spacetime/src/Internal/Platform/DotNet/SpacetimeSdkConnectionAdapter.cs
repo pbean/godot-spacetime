@@ -17,6 +17,11 @@ internal interface IConnectionEventSink
     void OnDisconnected(Exception? error);
 }
 
+internal interface IConnectionTelemetrySink
+{
+    void OnInboundMessageReceived(int byteCount);
+}
+
 /// <summary>
 /// Adapter for the SpacetimeDB .NET ClientSDK connection layer.
 ///
@@ -31,6 +36,8 @@ internal interface IConnectionEventSink
 internal sealed class SpacetimeSdkConnectionAdapter
 {
     private IDbConnection? _dbConnection;
+    private object? _telemetryWebSocket;
+    private Delegate? _inboundMessageHandler;
 
     /// <summary>
     /// Provides access to the active <c>IDbConnection</c> for sibling adapters in the
@@ -82,6 +89,9 @@ internal sealed class SpacetimeSdkConnectionAdapter
         builder = InvokeMethod(builder, "OnDisconnect", CreateDisconnectCallback(builder, sink));
         _dbConnection = (IDbConnection?)InvokeMethod(builder, "Build")
             ?? throw new InvalidOperationException("Generated DbConnection.Builder().Build() did not return an IDbConnection.");
+
+        if (sink is IConnectionTelemetrySink telemetrySink)
+            AttachTelemetryHooks(telemetrySink);
     }
 
     public void FrameTick()
@@ -91,9 +101,26 @@ internal sealed class SpacetimeSdkConnectionAdapter
 
     public void Close()
     {
+        DetachTelemetryHooks();
         var connection = _dbConnection;
         _dbConnection = null;
         connection?.Disconnect();
+    }
+
+    internal (long MessagesSent, long MessagesReceived) ReadTrackerCounts()
+    {
+        var stats = TryGetStats();
+        if (stats == null)
+            return (0, 0);
+
+        var outboundMessages =
+            GetTrackedRequestCount(stats.SubscriptionRequestTracker) +
+            GetTrackedRequestCount(stats.ReducerRequestTracker) +
+            GetTrackedRequestCount(stats.OneOffRequestTracker) +
+            GetTrackedRequestCount(stats.ProcedureRequestTracker);
+
+        var inboundMessages = stats.ParseMessageTracker?.GetSampleCount() ?? 0;
+        return (outboundMessages, inboundMessages);
     }
 
     internal static MessageCompressionMode GetEffectiveCompressionMode(MessageCompressionMode requestedCompressionMode)
@@ -271,5 +298,86 @@ internal sealed class SpacetimeSdkConnectionAdapter
         {
             return ex.Types.Where(type => type != null)!;
         }
+    }
+
+    private void AttachTelemetryHooks(IConnectionTelemetrySink telemetrySink)
+    {
+        if (_dbConnection == null)
+            return;
+
+        var webSocketField = _dbConnection.GetType().GetField(
+            "webSocket",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
+        var webSocket = webSocketField?.GetValue(_dbConnection);
+        if (webSocket == null)
+            return;
+
+        var onMessageEvent = webSocket.GetType().GetEvent(
+            "OnMessage",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        var delegateType = onMessageEvent?.EventHandlerType;
+        if (delegateType == null)
+            return;
+
+        var callback = CreateInboundMessageCallback(delegateType, telemetrySink);
+        if (callback == null)
+            return;
+
+        onMessageEvent!.AddEventHandler(webSocket, callback);
+        _telemetryWebSocket = webSocket;
+        _inboundMessageHandler = callback;
+    }
+
+    private void DetachTelemetryHooks()
+    {
+        if (_telemetryWebSocket == null || _inboundMessageHandler == null)
+            return;
+
+        var onMessageEvent = _telemetryWebSocket.GetType().GetEvent(
+            "OnMessage",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        onMessageEvent?.RemoveEventHandler(_telemetryWebSocket, _inboundMessageHandler);
+        _telemetryWebSocket = null;
+        _inboundMessageHandler = null;
+    }
+
+    private static Delegate? CreateInboundMessageCallback(Type delegateType, IConnectionTelemetrySink telemetrySink)
+    {
+        var invoke = delegateType.GetMethod("Invoke");
+        if (invoke == null)
+            return null;
+
+        var parameters = invoke.GetParameters();
+        if (parameters.Length == 0 || parameters[0].ParameterType != typeof(byte[]))
+            return null;
+
+        var parameterExpressions = CreateParameters(parameters);
+        var telemetrySinkExpression = Expression.Constant(telemetrySink);
+        var byteCountExpression = Expression.ArrayLength(parameterExpressions[0]);
+        var body = Expression.Call(
+            telemetrySinkExpression,
+            typeof(IConnectionTelemetrySink).GetMethod(nameof(IConnectionTelemetrySink.OnInboundMessageReceived))!,
+            byteCountExpression);
+
+        return Expression.Lambda(delegateType, body, parameterExpressions).Compile();
+    }
+
+    private Stats? TryGetStats()
+    {
+        if (_dbConnection == null)
+            return null;
+
+        var statsField = _dbConnection.GetType().GetField(
+            "stats",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy);
+        return statsField?.GetValue(_dbConnection) as Stats;
+    }
+
+    private static long GetTrackedRequestCount(NetworkRequestTracker? tracker)
+    {
+        if (tracker == null)
+            return 0;
+
+        return tracker.GetSampleCount() + tracker.GetRequestsAwaitingResponse();
     }
 }

@@ -34,6 +34,7 @@ internal interface IReducerEventSink
 internal sealed class SpacetimeSdkReducerAdapter
 {
     private IDbConnection? _dbConnection;
+    private readonly SpacetimeSdkTelemetrySerializer _telemetrySerializer = new();
     private readonly ConditionalWeakTable<object, RegistrationMarker> _registeredReducers = new();
     private readonly object _pendingInvocationsGate = new();
     private readonly Dictionary<string, List<PendingReducerInvocation>> _pendingInvocations = new(StringComparer.Ordinal);
@@ -83,6 +84,18 @@ internal sealed class SpacetimeSdkReducerAdapter
             RemovePendingInvocation(reducer.ReducerName, pendingInvocation.InvocationId);
             throw;
         }
+    }
+
+    internal long MeasurePayloadBytes(object reducerArgs)
+    {
+        if (reducerArgs is not IReducerArgs reducer)
+        {
+            throw new ArgumentException(
+                $"reducerArgs must implement SpacetimeDB.IReducerArgs, got {reducerArgs?.GetType().FullName ?? "null"}.",
+                nameof(reducerArgs));
+        }
+
+        return _telemetrySerializer.MeasureReducerPayloadBytes(reducerArgs, reducer.ReducerName);
     }
 
     /// <summary>
