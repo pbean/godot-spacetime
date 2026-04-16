@@ -127,6 +127,115 @@ def test_editor_codegen_integration_never_writes_outside_output_dir(
     )
 
 
+def test_editor_codegen_download_helper_accepts_direct_binary_response(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    binary_payload = b"\x00asm\x01\x00\x00\x00"
+
+    def fake_fetch(url: str) -> tuple[bytes, str]:
+        assert url.endswith("/v1/database/story-10-2-binary")
+        return binary_payload, "application/wasm"
+
+    monkeypatch.setattr(
+        "tests.test_story_10_2_editor_codegen_integration._fetch_bytes",
+        fake_fetch,
+    )
+
+    destination = tmp_path / "downloaded-module.wasm"
+    result = _download_module_artifact("127.0.0.1:3000", "story-10-2-binary", destination)
+
+    assert result == destination
+    assert destination.read_bytes() == binary_payload
+
+
+def test_editor_codegen_download_helper_follows_nested_download_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    binary_payload = b"\x00asm\x01\x00\x00\x00"
+
+    def fake_fetch(url: str) -> tuple[bytes, str]:
+        if url.endswith("/v1/database/story-10-2-json"):
+            return (
+                json.dumps({"artifact": {"wasm_download_url": "/artifacts/story-10-2-json.wasm"}}).encode(
+                    "utf-8"
+                ),
+                "application/json",
+            )
+        if url.endswith("/artifacts/story-10-2-json.wasm"):
+            return binary_payload, "application/wasm"
+        raise AssertionError(f"unexpected URL fetched: {url}")
+
+    monkeypatch.setattr(
+        "tests.test_story_10_2_editor_codegen_integration._fetch_bytes",
+        fake_fetch,
+    )
+
+    destination = tmp_path / "downloaded-module.wasm"
+    result = _download_module_artifact("http://127.0.0.1:3000", "story-10-2-json", destination)
+
+    assert result == destination
+    assert destination.read_bytes() == binary_payload
+
+
+def test_editor_codegen_download_helper_skips_when_anonymous_auth_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_fetch(url: str) -> tuple[bytes, str]:
+        raise urllib.error.HTTPError(url, 401, "Unauthorized", hdrs=None, fp=None)
+
+    monkeypatch.setattr(
+        "tests.test_story_10_2_editor_codegen_integration._fetch_bytes",
+        fake_fetch,
+    )
+
+    with pytest.raises(pytest.skip.Exception, match="anonymous schema access rejected"):
+        _download_module_artifact("http://127.0.0.1:3000", "story-10-2-auth", tmp_path / "module.wasm")
+
+
+def test_editor_codegen_download_helper_fails_when_json_has_no_downloadable_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    def fake_fetch(url: str) -> tuple[bytes, str]:
+        if url.endswith("/v1/database/story-10-2-no-artifact"):
+            return json.dumps({"module": {"name": "story-10-2-no-artifact"}}).encode("utf-8"), "application/json"
+        raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
+
+    monkeypatch.setattr(
+        "tests.test_story_10_2_editor_codegen_integration._fetch_bytes",
+        fake_fetch,
+    )
+
+    with pytest.raises(AssertionError, match="Could not fetch a downloadable wasm artifact"):
+        _download_module_artifact(
+            "http://127.0.0.1:3000",
+            "story-10-2-no-artifact",
+            tmp_path / "module.wasm",
+        )
+
+
+def test_editor_codegen_helper_detects_json_by_content_type_or_payload_prefix() -> None:
+    assert _is_json_payload("application/json", b"\x00asm\x01\x00\x00\x00")
+    assert _is_json_payload("application/octet-stream", b'  {"artifact": "/module.wasm"}')
+    assert not _is_json_payload("application/octet-stream", b"\x00asm\x01\x00\x00\x00")
+
+
+def test_editor_codegen_helper_normalizes_server_urls() -> None:
+    assert _normalize_server_url("127.0.0.1:3000") == "http://127.0.0.1:3000/"
+    assert _normalize_server_url("https://example.test/api") == "https://example.test/api/"
+
+
+def test_editor_codegen_integration_helpers_avoid_hardcoded_sleeps() -> None:
+    content = Path(__file__).read_text(encoding="utf-8")
+    disallowed_sleep_call = "time" + ".sleep("
+    assert disallowed_sleep_call not in content
+    assert "timeout=30" in content
+    assert "timeout=240" in content
+
+
 def _publish_module(cli_path: str, server_nickname: str, module_name: str) -> None:
     result = subprocess.run(
         [

@@ -222,11 +222,15 @@ public partial class CodegenValidationPanel : VBoxContainer
 
         try
         {
+            var serverUrl = _serverUrlEdit.Text;
+            var moduleName = _moduleNameEdit.Text;
+            var outputDir = _outputDirEdit.Text;
+            var namespaceName = _namespaceEdit.Text;
             var result = await Task.Run(() => _editorCodegenService.GenerateBindingsAsync(
-                _serverUrlEdit.Text,
-                _moduleNameEdit.Text,
-                _outputDirEdit.Text,
-                _namespaceEdit.Text));
+                serverUrl,
+                moduleName,
+                outputDir,
+                namespaceName));
 
             ApplyGenerateResult(result);
 
