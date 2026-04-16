@@ -103,8 +103,9 @@ def test_dynamic_lifecycle_e2e() -> None:
     - emits one `step` event per lifecycle stage in strict order: connect,
       subscribe, invoke_reducer, observe_row_change
     - emits a final `done` event with status `pass`
-    - observe_row_change step must record BOTH get_rows AND row_changed_event as
-      observation channels (AC 2: public cache surface, not transport)
+    - observe_row_change step must record typed_table_handle, get_rows, and
+      row_changed_event as observation channels (AC 2: public cache surface,
+      not transport)
     - total runtime under 120s
     """
 
@@ -201,9 +202,9 @@ def test_dynamic_lifecycle_e2e() -> None:
 
     observe = step_events["observe_row_change"]
     channels = observe.get("via") or []
-    assert "get_rows" in channels and "row_changed_event" in channels, (
-        "observe_row_change must confirm the inserted row via BOTH GetRows and "
-        f"RowChangedEvent (public cache surface, not transport). got via={channels}"
+    assert "typed_table_handle" in channels and "get_rows" in channels and "row_changed_event" in channels, (
+        "observe_row_change must confirm the inserted row via the typed table-handle path, GetRows, "
+        f"and RowChangedEvent (public cache surface, not transport). got via={channels}"
     )
     assert observe.get("value") == e2e_value, (
         f"observe_row_change saw value={observe.get('value')!r}, expected "

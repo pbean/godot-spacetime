@@ -105,9 +105,9 @@ The Output panel will first print `[Demo] Bootstrap ready — godot-spacetime ad
 After `Connected`, `DemoMain` subscribes to the smoke test table and observes live row changes.
 
 - After the connection reaches `Connected`, `DemoMain` calls `Subscribe(["SELECT * FROM smoke_test"])`. The Output panel shows `"[Demo] Subscribed to smoke_test — awaiting initial sync"`.
-- When the server confirms the subscription, `SubscriptionApplied` fires. `DemoMain` reads the local cache with `GetRows("SmokeTest").ToList()` and prints `"[Demo] Subscription applied — N row(s) in smoke_test"` where N is the current cache count.
+- When the server confirms the subscription, `SubscriptionApplied` fires. `DemoMain` reads the local cache through `var db = _client.GetDb<RemoteTables>()`, then uses `db.SmokeTest.Iter().ToList()` and `db.SmokeTest.Count` to print `"[Demo] Subscription applied — N row(s) in smoke_test"` where N is the current cache count.
 - Any live row mutations emit `"[Demo] Row changed — table: SmokeTest, type: Insert/Update/Delete"` for each change.
-- The SQL subscription query still uses `smoke_test`, but `GetRows()` follows the generated PascalCase table name `SmokeTest` defined in the runtime cache API.
+- The SQL subscription query still uses `smoke_test`, while the typed cache path uses the generated `RemoteTables` handle name `SmokeTest`. `GetRows("SmokeTest")` still exists as the PascalCase compatibility fallback when code only has a table name.
 
 **Output panel expected message sequence:**
 

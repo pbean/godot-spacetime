@@ -9,9 +9,14 @@ namespace GodotSpacetime.Runtime.Cache;
 /// <summary>
 /// Provides read access to the synchronized local client cache through the generated RemoteTables object.
 ///
-/// This adapter wraps the generated <c>Db</c> property of the active <c>IDbConnection</c>
-/// and exposes it through a reflection-based enumeration path. Gameplay code must not access
-/// the underlying transport state directly — use <c>SpacetimeClient.GetRows()</c> instead.
+/// <para>
+/// <c>GetDb&lt;TDb&gt;()</c> is the preferred direct typed-handle path for gameplay code that already
+/// references the generated <c>RemoteTables</c> type for the connected module.
+/// </para>
+/// <para>
+/// <c>GetRows()</c> remains as the backward-compatible reflection fallback for table-name-based reads.
+/// </para>
+/// Gameplay code must not access the underlying transport state directly.
 ///
 /// See <c>docs/runtime-boundaries.md</c> — "Cache — Reading Synchronized Local State" for usage.
 /// </summary>
@@ -27,7 +32,31 @@ internal sealed class CacheViewAdapter
     internal void SetDb(object? db) => _db = db;
 
     /// <summary>
+    /// Returns the active generated <c>RemoteTables</c> object as the requested generated type.
+    /// This is the direct typed path used by <c>SpacetimeClient.GetDb&lt;TDb&gt;()</c>.
+    /// Returns <c>null</c> when no synchronized cache is active yet.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the active generated cache type does not match the requested generated type.
+    /// This usually means gameplay code asked for bindings from a different module or stale generated files.
+    /// </exception>
+    internal TDb? GetDb<TDb>() where TDb : class
+    {
+        if (_db == null)
+            return null;
+
+        if (_db is TDb typedDb)
+            return typedDb;
+
+        throw new InvalidOperationException(
+            $"Active generated cache type '{_db.GetType().FullName ?? _db.GetType().Name}' " +
+            $"is not assignable to requested '{typeof(TDb).FullName ?? typeof(TDb).Name}'. " +
+            "Ensure gameplay code uses the generated RemoteTables type for the currently connected module.");
+    }
+
+    /// <summary>
     /// Returns all rows currently in the local client cache for the specified table name.
+    /// This is the backward-compatible reflection fallback when gameplay code only has a table name.
     /// The table name must match the generated property name on the <c>RemoteTables</c> type
     /// (case-sensitive, PascalCase — e.g., <c>"Player"</c>, <c>"Monster"</c>).
     ///

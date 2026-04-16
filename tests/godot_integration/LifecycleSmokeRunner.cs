@@ -39,6 +39,7 @@ public partial class LifecycleSmokeRunner : Node
     private Step _currentStep = Step.None;
     private double _stepStartedAt;
     private bool _sawGetRows;
+    private bool _sawTypedTableHandle;
     private bool _sawRowChangedEvent;
     private bool _finished;
 
@@ -246,8 +247,9 @@ public partial class LifecycleSmokeRunner : Node
         StartStep(Step.ObserveRowChange);
 
         // The row may already be in cache by the time the success event fires
-        // — poll GetRows right away, then rely on the RowChanged signal for the
-        // row-change event channel.
+        // — poll the typed table-handle path and GetRows right away, then rely
+        // on the RowChanged signal for the row-change event channel.
+        CheckTypedTableHandle();
         CheckGetRows();
         TryFinishObserveRowChange();
     }
@@ -281,8 +283,39 @@ public partial class LifecycleSmokeRunner : Node
         }
 
         _sawRowChangedEvent = true;
+        CheckTypedTableHandle();
         CheckGetRows();
         TryFinishObserveRowChange();
+    }
+
+    private void CheckTypedTableHandle()
+    {
+        if (_sawTypedTableHandle || _client == null)
+        {
+            return;
+        }
+        try
+        {
+            var db = _client.GetDb<RemoteTables>();
+            if (db == null || db.SmokeTest.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var row in db.SmokeTest.Iter())
+            {
+                if (row.Value == _expectedValue)
+                {
+                    _sawTypedTableHandle = true;
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            EmitError("observe_row_change", "typed table handle threw: " + ex.Message);
+            Finish(pass: false);
+        }
     }
 
     private void CheckGetRows()
@@ -317,11 +350,11 @@ public partial class LifecycleSmokeRunner : Node
         {
             return;
         }
-        if (_sawGetRows && _sawRowChangedEvent)
+        if (_sawTypedTableHandle && _sawGetRows && _sawRowChangedEvent)
         {
             EmitStepOk("observe_row_change", new Dictionary<string, object?>
             {
-                ["via"] = new[] { "get_rows", "row_changed_event" },
+                ["via"] = new[] { "typed_table_handle", "get_rows", "row_changed_event" },
                 ["value"] = _expectedValue,
             });
             Finish(pass: true);

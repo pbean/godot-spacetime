@@ -234,6 +234,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         }
     }
 
+    public TDb? GetDb<TDb>() where TDb : class => _cacheViewAdapter.GetDb<TDb>();
+
     public IEnumerable<object> GetRows(string tableName) => _cacheViewAdapter.GetRows(tableName);
 
     public void InvokeReducer(object reducerArgs)

@@ -187,7 +187,7 @@ def test_demo_main_cs_invokes_ping_after_handle_guard_and_row_count() -> None:
         method,
         (
             "if (_subscriptionHandle != e.Handle)",
-            'GD.Print($"[Demo] Subscription applied — {rows.Count} row(s) in smoke_test");',
+            'GD.Print($"[Demo] Subscription applied — {db.SmokeTest.Count} row(s) in smoke_test");',
             "_client!.InvokeReducer(new Reducer.Ping());",
             'GD.Print("[Demo] Ping reducer invoked — awaiting server acknowledgement");',
         ),

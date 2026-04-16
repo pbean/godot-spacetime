@@ -22,7 +22,7 @@ namespace GodotSpacetime;
 ///   <item>Configure <see cref="SpacetimeSettings"/> (Host, Database)</item>
 ///   <item>Call Connect() — watch ConnectionState events for lifecycle transitions</item>
 ///   <item>Apply subscriptions — receive SubscriptionAppliedEvent when cache is ready, or SubscriptionFailedEvent when a request is rejected or later errors</item>
-///   <item>Read cache via GetRows() and cast rows to generated binding types — invoke reducers as needed</item>
+///   <item>Read cache via GetDb&lt;TDb&gt;() for direct typed table handles or GetRows() as a compatibility fallback — invoke reducers as needed</item>
 /// </list>
 /// </summary>
 public partial class SpacetimeClient : Node
@@ -180,7 +180,19 @@ public partial class SpacetimeClient : Node
     }
 
     /// <summary>
+    /// Returns the active generated cache view for direct typed table-handle reads.
+    /// Call after the <c>SubscriptionApplied</c> signal fires and keep reads on the main-thread path
+    /// already used by this SDK's lifecycle signals and <c>_Process()</c> loop.
+    /// Returns <c>null</c> when no synchronized cache is active yet.
+    /// This method does not expose raw <c>IDbConnection</c>; it returns only the generated cache view.
+    /// </summary>
+    public TDb? GetDb<TDb>() where TDb : class =>
+        _connectionService.GetDb<TDb>();
+
+    /// <summary>
     /// Returns the rows currently cached for the specified table.
+    /// Use <c>GetDb&lt;TDb&gt;()</c> when consumer code can reference the generated <c>RemoteTables</c> type directly;
+    /// keep <c>GetRows()</c> for backward-compatible table-name-based reads.
     /// Call after the <c>SubscriptionApplied</c> signal fires, then cast each row to the generated table type.
     /// </summary>
     public IEnumerable<object> GetRows(string tableName) =>
