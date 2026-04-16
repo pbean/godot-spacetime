@@ -112,6 +112,27 @@ def test_codegen_panel_prepopulates_from_spacetimesettings() -> None:
         )
 
 
+def test_codegen_panel_locks_async_generation_and_runtime_guardrails() -> None:
+    content = _read(PANEL_REL)
+    for expected in (
+        "GenerateInProgress",
+        "RuntimeBlockedStatus",
+        "RuntimeBlockedGuidance",
+        "ApplyRuntimeGuardrail",
+        "ApplyGenerateResult",
+        "_generateButton.Disabled = true",
+        "_generateButton.Disabled = !Engine.IsEditorHint();",
+        "_generateStatusLabel.Text = GenerateInProgress;",
+        "Task.Run(() => _editorCodegenService.GenerateBindingsAsync(",
+        "if (result.IsSuccess)",
+        "RefreshStatus();",
+    ):
+        assert expected in content, (
+            "CodegenValidationPanel must surface explicit in-progress/runtime "
+            f"status behavior for Story 10.2. Missing {expected!r}."
+        )
+
+
 def test_editor_codegen_output_safety_guardrails_are_present() -> None:
     content = _read(SERVICE_REL)
     for expected in (
@@ -129,6 +150,26 @@ def test_editor_codegen_output_safety_guardrails_are_present() -> None:
         assert expected in content, (
             "EditorCodegenService must keep codegen writes inside safe generated "
             f"boundaries. Missing {expected!r}."
+        )
+
+
+def test_editor_codegen_service_locks_failure_status_messages() -> None:
+    content = _read(SERVICE_REL)
+    for expected in (
+        "FAILED — could not reach server: missing server URL",
+        "FAILED — generation error (see recovery guidance)",
+        "FAILED — server requires authentication",
+        "FAILED — could not reach server: request timed out",
+        "FAILED — could not reach server: invalid server URL",
+        "FAILED — could not reach server: module endpoint not found",
+        "FAILED — spacetime CLI not found in PATH",
+        "In-editor codegen only supports anonymous schema access.",
+        "Install spacetime CLI 2.1+ and ensure it is in PATH.",
+        "Install python3 and ensure it is in PATH.",
+    ):
+        assert expected in content, (
+            "EditorCodegenService must preserve the explicit user-facing error "
+            f"messages needed by the panel and troubleshooting docs. Missing {expected!r}."
         )
 
 

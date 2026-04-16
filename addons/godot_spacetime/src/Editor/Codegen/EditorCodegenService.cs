@@ -202,8 +202,6 @@ internal sealed class EditorCodegenService
 
         if (lastJsonPayload is not null)
         {
-            var tempJsonPath = WriteArtifactToTempFile(new DownloadedArtifact(lastJsonPayload, ".json"));
-            TryDeleteFile(tempJsonPath);
             throw new EditorCodegenFailureException(
                 "FAILED — generation error (see recovery guidance)",
                 "The server returned JSON metadata or schema but no downloadable wasm artifact. " +
