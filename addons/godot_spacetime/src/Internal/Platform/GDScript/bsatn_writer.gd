@@ -87,6 +87,13 @@ func write_bytes(v: PackedByteArray) -> void:
 	_pos += v.size()
 
 
+func write_fixed_bytes(v: PackedByteArray) -> void:
+	_buf.resize(_pos + v.size())
+	for i in v.size():
+		_buf[_pos + i] = v[i]
+	_pos += v.size()
+
+
 func write_option_some() -> void:
 	write_u8(0x01)
 
@@ -138,18 +145,18 @@ func write_color(v: Color) -> void:
 	write_f32(v.a)
 
 
-func write_vector2i(v: Vector2I) -> void:
+func write_vector2i(v: Vector2i) -> void:
 	write_i32(v.x)
 	write_i32(v.y)
 
 
-func write_vector3i(v: Vector3I) -> void:
+func write_vector3i(v: Vector3i) -> void:
 	write_i32(v.x)
 	write_i32(v.y)
 	write_i32(v.z)
 
 
-func write_vector4i(v: Vector4I) -> void:
+func write_vector4i(v: Vector4i) -> void:
 	write_i32(v.x)
 	write_i32(v.y)
 	write_i32(v.z)

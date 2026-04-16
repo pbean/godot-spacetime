@@ -120,6 +120,13 @@ func read_bytes() -> PackedByteArray:
 	return b
 
 
+func read_fixed_bytes(count: int) -> PackedByteArray:
+	_require_available(count)
+	var b := _buf.slice(_pos, _pos + count)
+	_pos += count
+	return b
+
+
 func read_option_tag() -> bool:
 	_require_available(1)
 	var offset := _pos
@@ -168,13 +175,13 @@ func read_color() -> Color:
 	return Color(read_f32(), read_f32(), read_f32(), read_f32())
 
 
-func read_vector2i() -> Vector2I:
-	return Vector2I(read_i32(), read_i32())
+func read_vector2i() -> Vector2i:
+	return Vector2i(read_i32(), read_i32())
 
 
-func read_vector3i() -> Vector3I:
-	return Vector3I(read_i32(), read_i32(), read_i32())
+func read_vector3i() -> Vector3i:
+	return Vector3i(read_i32(), read_i32(), read_i32())
 
 
-func read_vector4i() -> Vector4I:
-	return Vector4I(read_i32(), read_i32(), read_i32(), read_i32())
+func read_vector4i() -> Vector4i:
+	return Vector4i(read_i32(), read_i32(), read_i32(), read_i32())
