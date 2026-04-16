@@ -16,11 +16,12 @@ using GodotSpacetime.Runtime.Subscriptions;
 
 namespace GodotSpacetime.Runtime.Connection;
 
-internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscriptionEventSink, IRowChangeEventSink, IReducerEventSink
+internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnectionTelemetrySink, ISubscriptionEventSink, IRowChangeEventSink, IReducerEventSink
 {
     private readonly ConnectionStateMachine _stateMachine = new();
     private readonly ReconnectPolicy _reconnectPolicy = new();
     private readonly SpacetimeSdkConnectionAdapter _adapter = new();
+    private readonly ConnectionTelemetryCollector _telemetryCollector = new();
     private string _host = string.Empty;
     private string _database = string.Empty;
     private ITokenStore? _tokenStore;
@@ -66,6 +67,20 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     public event Action<ReducerCallError>? OnReducerCallFailed;
 
     public ConnectionStatus CurrentStatus => _stateMachine.CurrentStatus;
+
+    public ConnectionTelemetryStats CurrentTelemetry
+    {
+        get
+        {
+            var trackerCounts = _adapter.ReadTrackerCounts();
+            _telemetryCollector.UpdateTrackerCounts(trackerCounts.MessagesSent, trackerCounts.MessagesReceived);
+            return _telemetryCollector.CurrentTelemetry;
+        }
+    }
+
+    internal bool TelemetryBytesSentProven => _telemetryCollector.HasProvenOutboundBytes;
+
+    internal string TelemetryBytesSentSource => _telemetryCollector.BytesSentSource;
 
     public void Connect(SpacetimeSettings settings)
     {
@@ -157,6 +172,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         {
             var sdkSub = _subscriptionAdapter.Subscribe(connection, querySqls, this, handle);
             _subscriptionRegistry.UpdateSdkSubscription(handle.HandleId, sdkSub);
+            _telemetryCollector.RecordOutboundMessage(_subscriptionAdapter.MeasureSubscribePayloadBytes(querySqls));
             return handle;
         }
         catch
@@ -184,7 +200,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         if (CurrentStatus.State == ConnectionState.Connected &&
             _subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
         {
-            _subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription);
+            if (_subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription))
+                _telemetryCollector.RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
         }
 
         handle.Close();
@@ -232,6 +249,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         {
             var sdkSub = _subscriptionAdapter.Subscribe(connection, newQueries, this, newHandle);
             _subscriptionRegistry.UpdateSdkSubscription(newHandle.HandleId, sdkSub);
+            _telemetryCollector.RecordOutboundMessage(_subscriptionAdapter.MeasureSubscribePayloadBytes(newQueries));
             return newHandle;
         }
         catch
@@ -262,7 +280,9 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 "QueryAsync() requires an active generated RemoteTables session. " +
                 "This is a programming fault — ensure the connection is fully established before querying.");
 
-        return _queryAdapter.QueryAsync<TRow>(remoteTables, sqlClause, timeout);
+        var queryTask = _queryAdapter.QueryAsync<TRow>(remoteTables, sqlClause, timeout);
+        _telemetryCollector.RecordOutboundMessage(_queryAdapter.MeasureQueryPayloadBytes(sqlClause));
+        return queryTask;
     }
 
     public void InvokeReducer(object reducerArgs)
@@ -272,7 +292,9 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 "InvokeReducer() requires an active Connected session. " +
                 "Call Connect() and wait for ConnectionState.Connected before invoking reducers.");
 
+        var payloadBytes = _reducerAdapter.MeasurePayloadBytes(reducerArgs);
         _reducerInvoker.Invoke(reducerArgs);
+        _telemetryCollector.RecordOutboundMessage(payloadBytes);
     }
 
     public void FrameTick()
@@ -286,6 +308,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     void IConnectionEventSink.OnConnected(string identity, string token)
     {
         _reconnectPolicy.Reset();
+        _telemetryCollector.StartSession();
         _cacheViewAdapter.SetDb(_adapter.GetDb());   // wire cache view on connect
         _reducerAdapter.SetConnection(_adapter.Connection);  // wire reducer adapter on connect
         _reducerAdapter.RegisterCallbacks(this);             // wire reducer result callbacks
@@ -413,7 +436,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
             if (_subscriptionRegistry.TryGetEntry(oldHandleId, out var oldEntry))
             {
-                _subscriptionAdapter.TryUnsubscribe(oldEntry.SdkSubscription);
+                if (_subscriptionAdapter.TryUnsubscribe(oldEntry.SdkSubscription))
+                    _telemetryCollector.RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
                 oldEntry.Handle.Supersede();
                 _subscriptionRegistry.Unregister(oldHandleId);
             }
@@ -452,6 +476,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     void IReducerEventSink.OnReducerCallSucceeded(string reducerName, string invocationId, DateTimeOffset calledAt)
     {
+        _telemetryCollector.RecordReducerRoundTrip(calledAt, DateTimeOffset.UtcNow);
         OnReducerCallSucceeded?.Invoke(new ReducerCallResult(reducerName, invocationId, calledAt));
     }
 
@@ -463,6 +488,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         ReducerFailureCategory failureCategory,
         string recoveryGuidance)
     {
+        _telemetryCollector.RecordReducerRoundTrip(calledAt, DateTimeOffset.UtcNow);
         OnReducerCallFailed?.Invoke(new ReducerCallError(
             reducerName,
             invocationId,
@@ -539,6 +565,12 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         _reducerAdapter.ClearConnection();
         _reconnectPolicy.Reset();
         _activeCompressionMode = MessageCompressionMode.None;
+        _telemetryCollector.Reset();
+    }
+
+    void IConnectionTelemetrySink.OnInboundMessageReceived(int byteCount)
+    {
+        _telemetryCollector.RecordInboundMessage(byteCount);
     }
 
     private bool HasPendingReplacementInFlight(Guid handleId)

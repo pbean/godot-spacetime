@@ -48,6 +48,42 @@ Light mode is opt-in through `SpacetimeSettings.LightMode`, which defaults to `f
 
 Story 9.2 treats observed runtime behavior as authoritative because the current upstream migration guide says `light_mode was removed in 2.0`, while the pinned local `2.1.0` builder in this repo still exposes `WithLightMode(bool)`. Repo docs therefore document the reconnect-only public contract plus the observed runtime behavior captured by the Story 9.2 validation harness instead of copying either assumption blindly.
 
+### Connection Telemetry — `CurrentTelemetry` and Godot `Performance`
+
+Story 9.3 adds a pull-based [`ConnectionTelemetryStats`](../addons/godot_spacetime/src/Public/Connection/ConnectionTelemetryStats.cs)
+surface at [`SpacetimeClient.CurrentTelemetry`](../addons/godot_spacetime/src/Public/SpacetimeClient.cs). The
+same object instance is reused across the autoload lifetime and reset in place on disconnect and reconnect.
+
+| Property | Units | Meaning |
+|----------|-------|---------|
+| `MessagesSent` | count | Outbound request messages observed through the supported runtime path |
+| `MessagesReceived` | count | Inbound runtime messages observed for the active session |
+| `BytesSent` | bytes | Outbound payload bytes measured from the pinned SDK's `ClientMessage` BSATN serializer |
+| `BytesReceived` | bytes | Inbound message bytes observed from the runtime message hook |
+| `ConnectionUptimeSeconds` | seconds | Current session uptime since the active connection opened |
+| `LastReducerRoundTripMilliseconds` | milliseconds | Most recent reducer round-trip duration from `CalledAt` to the surfaced result |
+
+The same metrics are also registered with Godot's `Performance` singleton under stable custom-monitor IDs:
+
+- `GodotSpacetime/Connection/MessagesSent`
+- `GodotSpacetime/Connection/MessagesReceived`
+- `GodotSpacetime/Connection/BytesSent`
+- `GodotSpacetime/Connection/BytesReceived`
+- `GodotSpacetime/Connection/UptimeSeconds`
+- `GodotSpacetime/Reducers/LastRoundTripMilliseconds`
+
+Reset semantics are strict:
+
+- `disconnect` resets counters, uptime, and the last reducer RTT to zero immediately.
+- `reconnect` starts a fresh measurement window on the same `CurrentTelemetry` object instead of carrying over prior totals.
+
+Supported-stack caveat:
+
+- The pinned `2.1.0` client stack exposes request trackers and inbound message hooks directly.
+- It does **not** expose a simple documented outbound wire-byte counter.
+- Repo code therefore measures `BytesSent` from the supported runtime's `ClientMessage` serializer path inside `Internal/Platform/DotNet/`.
+- Story 9.3 validation treats runtime proof as authoritative here and avoids guessing undocumented transport counters.
+
 ### Auth / Identity — `ITokenStore`
 
 Session identity is token-based. The SDK does not dictate how tokens are persisted; instead, you provide an [`ITokenStore`](../addons/godot_spacetime/src/Public/Auth/ITokenStore.cs) implementation:
@@ -457,6 +493,10 @@ SpacetimeClient (autoload, configured with SpacetimeSettings)
 ```
 
 You interact with `SpacetimeClient` through its public API; the underlying runtime handling is not part of the SDK surface.
+
+`SpacetimeClient` now also owns the Godot `Performance` monitor lifecycle for the telemetry IDs listed above. The
+monitor callables stay thin: they read numeric fields from `CurrentTelemetry`, return zero-or-positive values, and do
+not allocate per-frame dictionaries, strings, arrays, or wrapper snapshots.
 
 ---
 

@@ -115,6 +115,12 @@ After `Connect()` succeeds, the `"Spacetime Status"` panel shows:
 CONNECTED — active session established
 ```
 
+At this point you can also inspect the Story 9.3 telemetry surface:
+
+- Read `SpacetimeClient.CurrentTelemetry` from code for `MessagesSent`, `MessagesReceived`, `BytesSent`, `BytesReceived`, `ConnectionUptimeSeconds`, and `LastReducerRoundTripMilliseconds`.
+- Open the Godot `Performance` monitor and look for `GodotSpacetime/Connection/MessagesSent` plus the other `GodotSpacetime/Connection/*` custom monitor IDs.
+- `CurrentTelemetry` resets on disconnect and starts fresh on reconnect.
+
 ## Failure Recovery
 
 Each phase of the quickstart produces a distinct visible failure indicator and a specific recovery action.

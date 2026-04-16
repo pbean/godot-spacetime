@@ -47,6 +47,34 @@ The compatibility panel reads the CLI version embedded in generated bindings and
 
 Connection lifecycle state transitions are surfaced through the `SpacetimeClient.ConnectionStateChanged` signal. See `docs/connection.md` for the complete state table and editor panel labels.
 
+## Telemetry
+
+Story 9.3 adds `SpacetimeClient.CurrentTelemetry` plus Godot `Performance` custom monitor output for the core connection metrics.
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| `CurrentTelemetry.BytesSent` stays `0` after real reducer or subscription traffic | The session has not emitted any client request traffic yet, or the runtime proof path is not active | Drive a real `Subscribe()` or `InvokeReducer()` call, then verify `bytes_sent_proven` in the Story 9.3 harness before trusting the number |
+| `Performance` monitor list does not show `GodotSpacetime/Connection/MessagesSent` | `SpacetimeClient` autoload is not in the scene tree, or the addon has not registered its custom monitor IDs yet | Confirm `SpacetimeClient` is registered as an autoload and has entered the tree before checking the monitor dock |
+| Telemetry looks stale after a disconnect | The previous session ended and the metrics were reset | Re-read `CurrentTelemetry`; reset-to-zero on disconnect is the intended behavior |
+| Reconnect shows a small fresh count instead of the old total | The new session has already observed fresh runtime traffic | This is expected. Story 9.3 guarantees reset semantics and a fresh measurement window, not preservation of the old totals |
+
+The key monitor IDs are:
+
+- `GodotSpacetime/Connection/MessagesSent`
+- `GodotSpacetime/Connection/MessagesReceived`
+- `GodotSpacetime/Connection/BytesSent`
+- `GodotSpacetime/Connection/BytesReceived`
+- `GodotSpacetime/Connection/UptimeSeconds`
+- `GodotSpacetime/Reducers/LastRoundTripMilliseconds`
+
+`ConnectionUptimeSeconds` is reported in seconds, reducer RTT is reported in milliseconds, and disconnect reset semantics are intentional.
+
+Supported-stack caveat:
+
+- The pinned runtime does not expose a straightforward documented outbound wire-byte counter.
+- Story 9.3 therefore uses a runtime proof path based on the SDK's serialized outbound `ClientMessage` payloads.
+- Repo docs treat that observed runtime proof as authoritative and do not invent a placeholder byte metric.
+
 ## Compression
 
 Compression is opt-in through `SpacetimeSettings.CompressionMode` and defaults to `None`. The effective mode for an active session is exposed through `ConnectionStatus.ActiveCompressionMode` and mirrored in the `"Spacetime Status"` panel's `Compression:` row.

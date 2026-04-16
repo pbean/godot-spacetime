@@ -91,6 +91,17 @@ The Output panel will first print `[Demo] Bootstrap ready — godot-spacetime ad
 
 `ConnectionStatus` now also exposes `ActiveCompressionMode`, and the `"Spacetime Status"` panel mirrors that effective mode instead of inferring it from `SpacetimeSettings.CompressionMode` alone. If you opt into `Gzip`, the panel reports `Compression: Gzip`. If you request `Brotli` on the pinned `2.1.x` stack, `ConnectionStatus.ActiveCompressionMode` currently reports `Gzip`.
 
+`SpacetimeClient` also exposes `CurrentTelemetry` for Story 9.3:
+
+- `MessagesSent`
+- `MessagesReceived`
+- `BytesSent`
+- `BytesReceived`
+- `ConnectionUptimeSeconds`
+- `LastReducerRoundTripMilliseconds`
+
+The same metrics appear in Godot `Performance` under monitor IDs such as `GodotSpacetime/Connection/MessagesSent` and `GodotSpacetime/Reducers/LastRoundTripMilliseconds`. The values reset on disconnect and start fresh on reconnect.
+
 ## Auth and Session Resume
 
 `DemoMain` is wired with token persistence so authenticated sessions survive across runs.

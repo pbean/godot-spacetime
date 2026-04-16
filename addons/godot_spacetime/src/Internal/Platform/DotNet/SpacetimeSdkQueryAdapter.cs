@@ -19,6 +19,7 @@ namespace GodotSpacetime.Runtime.Platform.DotNet;
 internal sealed class SpacetimeSdkQueryAdapter
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    private readonly SpacetimeSdkTelemetrySerializer _telemetrySerializer = new();
     // These static lookups are verified against the pinned SpacetimeDB.ClientSDK 2.1.0 package.
     // If the SDK is upgraded and renames these members, class initialization throws
     // TypeInitializationException wrapping the InvalidOperationException below — check the
@@ -75,6 +76,9 @@ internal sealed class SpacetimeSdkQueryAdapter
             requestedAt,
             timeout ?? DefaultTimeout);
     }
+
+    internal long MeasureQueryPayloadBytes(string sqlClause) =>
+        _telemetrySerializer.MeasureOneOffQueryPayloadBytes(sqlClause);
 
     private static async Task<TRow[]> AwaitQueryAsync<TRow>(
         Task<TRow[]> queryTask,
