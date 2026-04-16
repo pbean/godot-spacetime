@@ -26,9 +26,19 @@ namespace SpacetimeDB.Types
 
             public readonly IdUniqueIndex Id;
 
+            public sealed class ValueIndex : BTreeIndexBase<string>
+            {
+                protected override string GetKey(SmokeTest row) => row.Value;
+
+                public ValueIndex(SmokeTestHandle table) : base(table) { }
+            }
+
+            public readonly ValueIndex Value;
+
             internal SmokeTestHandle(DbConnection conn) : base(conn)
             {
                 Id = new(this);
+                Value = new(this);
             }
 
             protected override object GetPrimaryKey(SmokeTest row) => row.Id;
@@ -52,10 +62,12 @@ namespace SpacetimeDB.Types
     public sealed class SmokeTestIxCols
     {
         public global::SpacetimeDB.IxCol<SmokeTest, uint> Id { get; }
+        public global::SpacetimeDB.IxCol<SmokeTest, string> Value { get; }
 
         public SmokeTestIxCols(string tableName)
         {
             Id = new global::SpacetimeDB.IxCol<SmokeTest, uint>(tableName, "id");
+            Value = new global::SpacetimeDB.IxCol<SmokeTest, string>(tableName, "value");
         }
     }
 }

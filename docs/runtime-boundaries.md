@@ -146,7 +146,15 @@ foreach (var row in db.Player.Iter())
 
 var count = db.Player.Count;
 var maybePlayer = db.Player.Id.Find(1);
+
+// BTree index filter (only available on tables with a declared BTree index):
+foreach (var row in db.SmokeTest.Value.Filter("hello"))
+{
+    GD.Print(row.Id, row.Value);
+}
 ```
+
+**BTree index filter:** `db.SmokeTest.Value.Filter("hello")` returns `IEnumerable<SmokeTest>` of all cached rows where `value == "hello"`. Available only on tables with a BTree index declared in the Rust module (`#[index(btree)]` on the column). Inherits the same main-thread, post-`SubscriptionApplied` read constraint as `Iter()`, `Count`, and `Id.Find()`.
 
 **Compatibility cache-access path:** `SpacetimeClient.GetRows(string tableName)` returns an `IEnumerable<object>` of all currently cached rows for the specified table. The table name must match the generated property name on the `RemoteTables` type — PascalCase, case-sensitive (for example, `GetRows("TableName")` or `GetRows("Player")`).
 

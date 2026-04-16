@@ -9,6 +9,7 @@ from pathlib import Path
 CLI_VERSION_PREFIX = "// This was generated using spacetimedb cli version "
 RECOVERY_COMMAND = "bash scripts/codegen/generate-smoke-test.sh"
 RELATIVE_MODULE_SOURCE = Path("spacetime/modules/smoke_test")
+RELATIVE_GENERATED_BINDINGS_ROOT = Path("demo/generated/smoke_test")
 RELATIVE_GENERATED_CLIENT = Path("demo/generated/smoke_test/SpacetimeDBClient.g.cs")
 
 
@@ -200,9 +201,17 @@ def relevant_module_files(module_root: Path) -> list[Path]:
     return files
 
 
+def relevant_generated_binding_files(generated_root: Path) -> list[Path]:
+    if not generated_root.is_dir():
+        return []
+
+    return sorted(path for path in generated_root.rglob("*.g.cs") if path.is_file())
+
+
 def collect_binding_compatibility_errors(root: Path, versions: dict) -> list[str]:
     errors: list[str] = []
     module_root = root / RELATIVE_MODULE_SOURCE
+    generated_root = root / RELATIVE_GENERATED_BINDINGS_ROOT
     generated_client = root / RELATIVE_GENERATED_CLIENT
 
     if not module_root.is_dir():
@@ -235,18 +244,28 @@ def collect_binding_compatibility_errors(root: Path, versions: dict) -> list[str
     if not module_files:
         return errors
 
+    generated_files = relevant_generated_binding_files(generated_root)
+    if not generated_files:
+        return [
+            f"{RELATIVE_GENERATED_BINDINGS_ROOT.as_posix()}: generated bindings are missing; run {RECOVERY_COMMAND}"
+        ]
+
     try:
         source_times = [(path, file_timestamp(root, path)) for path in module_files]
         newest_source, newest_source_time = max(source_times, key=lambda item: item[1])
-        generated_time = file_timestamp(root, generated_client)
+        generated_times = [(path, file_timestamp(root, path)) for path in generated_files]
+        newest_generated, newest_generated_time = max(generated_times, key=lambda item: item[1])
     except OSError as exc:
-        errors.append(f"{RELATIVE_GENERATED_CLIENT.as_posix()}: failed to compare source freshness ({exc})")
+        errors.append(
+            f"{RELATIVE_GENERATED_BINDINGS_ROOT.as_posix()}: failed to compare source freshness ({exc})"
+        )
         return errors
 
-    if newest_source_time > generated_time:
+    if newest_source_time > newest_generated_time:
         errors.append(
-            f"{RELATIVE_GENERATED_CLIENT.as_posix()}: generated bindings are stale because "
-            f"{newest_source.relative_to(root).as_posix()} is newer; run {RECOVERY_COMMAND}"
+            f"{RELATIVE_GENERATED_BINDINGS_ROOT.as_posix()}: generated bindings are stale because "
+            f"{newest_source.relative_to(root).as_posix()} is newer than "
+            f"{newest_generated.relative_to(root).as_posix()}; run {RECOVERY_COMMAND}"
         )
 
     return errors
