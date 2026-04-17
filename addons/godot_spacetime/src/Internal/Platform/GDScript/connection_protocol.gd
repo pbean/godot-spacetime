@@ -54,7 +54,10 @@ static func build_transport_request(
 	if not token.is_empty():
 		var use_query_token := prefer_query_token or not allow_header_auth
 		if use_query_token:
-			url += "?%s=%s" % [query_token_key, token]
+			var normalized_query_token_key := query_token_key.strip_edges()
+			if normalized_query_token_key.is_empty():
+				normalized_query_token_key = DEFAULT_QUERY_TOKEN_KEY
+			url += "?%s=%s" % [normalized_query_token_key.uri_encode(), token.uri_encode()]
 			auth_mode = "query-token"
 		else:
 			headers.append("Authorization: Bearer %s" % token)

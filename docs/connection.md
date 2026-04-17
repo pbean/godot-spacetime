@@ -29,15 +29,15 @@ Light mode is opt-in through `SpacetimeSettings.LightMode`, and the product defa
 
 ## Auth Token Transport
 
-The client sends the auth token over the WebSocket handshake. The transport depends on the platform because browsers cannot set custom WebSocket handshake headers.
+The client presents the auth token while opening the WebSocket connection. The transport depends on the platform because browsers cannot set custom WebSocket handshake headers.
 
-- **.NET runtime (headless and desktop):** when `SpacetimeSettings.Credentials` is non-empty, the adapter calls `builder.WithToken(settings.Credentials)` at `addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkConnectionAdapter.cs:85-87`. The pinned `SpacetimeDB.ClientSDK 2.1.0` owns the wire-level framing; this repo only passes the token through.
-- **GDScript native (desktop):** the rule `allow_header_auth := not OS.has_feature("web")` at `addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd:530` evaluates `true`, so `build_transport_request` at `addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd:42-67` sets `Authorization: Bearer <token>` as a handshake header on `WebSocketPeer`.
-- **GDScript web export (browser):** the same rule evaluates `false`, so `build_transport_request` appends `?<query_token_key>=<token>` to the WebSocket URL instead. The default parameter name is exposed as `DEFAULT_QUERY_TOKEN_KEY` in `connection_protocol.gd`.
+- **.NET runtime (headless and desktop):** when `SpacetimeSettings.Credentials` is non-empty, the adapter calls `builder.WithToken(settings.Credentials)` at `addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkConnectionAdapter.cs:86-87`. The pinned `SpacetimeDB.ClientSDK 2.1.0` owns the wire-level framing; this repo only passes the token through.
+- **GDScript native (desktop):** the rule `allow_header_auth := not OS.has_feature("web")` at `addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd:530` evaluates `true`, so `build_transport_request` at `addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd:42-64` sets `Authorization: Bearer <token>` as a handshake header on `WebSocketPeer`.
+- **GDScript web export (browser):** the same rule evaluates `false`, so `build_transport_request` at `addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd:42-61` appends `?<query_token_key>=<token>` to the WebSocket URL instead. The default parameter name is exposed as `DEFAULT_QUERY_TOKEN_KEY` at `addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd:7`.
 
-Non-web deployments that must force query-string transport — for example, reverse proxies that strip `Authorization` headers — can set `prefer_query_token` to `true` when calling `build_transport_request`, and optionally override the parameter name with `query_token_key`. The override affects only the GDScript path; the .NET path has no equivalent surface today.
+Non-web deployments that must force query-string transport — for example, reverse proxies that strip `Authorization` headers — can set `prefer_query_token` to `true` and optionally override the parameter name with `query_token_key`; those parameters are declared on `build_transport_request` at `addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd:42-48` and threaded through the GDScript runtime options at `addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd:217-218` and `addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd:531-537`.
 
-When Godot C# web export lands in a future release, this section will describe its transport. Until then `docs/compatibility-matrix.md` keeps Godot C# web export listed as Out-of-Scope.
+For current platform support boundaries, including Godot C# web export remaining Out-of-Scope, see `docs/compatibility-matrix.md:17`.
 
 For symptoms such as `auth_mode == "authorization-header"` on a web target, see [troubleshooting.md → Web Export (Native GDScript)](troubleshooting.md#web-export-native-gdscript).
 

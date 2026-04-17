@@ -271,6 +271,21 @@ def test_story_11_2_handshake_headers_guarded_for_web_compat() -> None:
     )
 
 
+def test_story_11_2_query_token_transport_encodes_key_and_value() -> None:
+    content = _protocol_src()
+    for expected in (
+        "var normalized_query_token_key := query_token_key.strip_edges()",
+        "if normalized_query_token_key.is_empty():",
+        "normalized_query_token_key = DEFAULT_QUERY_TOKEN_KEY",
+        'url += "?%s=%s" % [normalized_query_token_key.uri_encode(), token.uri_encode()]',
+    ):
+        assert expected in content, (
+            "connection_protocol.gd must percent-encode the query-token transport inputs and "
+            "fall back to DEFAULT_QUERY_TOKEN_KEY when the override is blank. "
+            f"Missing {expected!r}."
+        )
+
+
 def test_story_11_2_clear_token_deletes_file() -> None:
     content = _token_store_src()
     assert "DirAccess.remove_absolute" in content, (
