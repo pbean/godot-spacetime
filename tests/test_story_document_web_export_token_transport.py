@@ -23,6 +23,26 @@ def _section(content: str, heading: str) -> str:
     return content[start:next_heading].strip()
 
 
+def _line_number(rel: str, needle: str) -> int:
+    for line_number, line in enumerate(_read(rel).splitlines(), start=1):
+        if needle in line:
+            return line_number
+    raise AssertionError(f"Expected to find {needle!r} in {rel}")
+
+
+def _line_range(rel: str, start_needle: str, end_needle: str) -> str:
+    start = _line_number(rel, start_needle)
+    end = _line_number(rel, end_needle)
+    return f"{start}-{end}"
+
+
+def _line_containing(rel: str, needle: str) -> str:
+    for line in _read(rel).splitlines():
+        if needle in line:
+            return line
+    raise AssertionError(f"Expected to find line containing {needle!r} in {rel}")
+
+
 def test_connection_md_has_auth_token_transport_section():
     content = _read("docs/connection.md")
     _section(content, "Auth Token Transport")
@@ -51,6 +71,7 @@ def test_auth_token_transport_section_cites_source_files():
         "gdscript_connection_service.gd",
         "connection_protocol.gd",
         "WithToken",
+        "query_token_key",
     ):
         assert expected in body, (
             f"Auth Token Transport section must cite {expected!r} as the empirical source"
@@ -59,8 +80,75 @@ def test_auth_token_transport_section_cites_source_files():
 
 def test_auth_token_transport_section_documents_prefer_query_token_override():
     body = _section(_read("docs/connection.md"), "Auth Token Transport")
-    assert "prefer_query_token" in body, (
-        "Auth Token Transport section must document the prefer_query_token override"
+    for expected in ("prefer_query_token", "query_token_key"):
+        assert expected in body, (
+            f"Auth Token Transport section must document the {expected!r} override surface"
+        )
+
+
+def test_auth_token_transport_section_cites_exact_source_locations():
+    body = _section(_read("docs/connection.md"), "Auth Token Transport")
+    expected_citations = (
+        "addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkConnectionAdapter.cs:"
+        + _line_range(
+            "addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkConnectionAdapter.cs",
+            'if (!string.IsNullOrWhiteSpace(settings.Credentials))',
+            'builder = InvokeMethod(builder, "WithToken", settings.Credentials);',
+        ),
+        "addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd:"
+        + str(
+            _line_number(
+                "addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd",
+                'var allow_header_auth := not OS.has_feature("web")',
+            )
+        ),
+        "addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd:"
+        + _line_range(
+            "addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd",
+            "static func build_transport_request(",
+            'auth_mode = "authorization-header"',
+        ),
+        "addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd:"
+        + _line_range(
+            "addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd",
+            "static func build_transport_request(",
+            'auth_mode = "query-token"',
+        ),
+        "addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd:"
+        + str(
+            _line_number(
+                "addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd",
+                'const DEFAULT_QUERY_TOKEN_KEY := "token"',
+            )
+        ),
+        "addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd:"
+        + _line_range(
+            "addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd",
+            "static func build_transport_request(",
+            'query_token_key: String = DEFAULT_QUERY_TOKEN_KEY',
+        ),
+        "addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd:"
+        + _line_range(
+            "addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd",
+            '_prefer_query_token = bool(options.get("prefer_query_token", false))',
+            '_query_token_key = String(options.get("query_token_key", ConnectionProtocolScript.DEFAULT_QUERY_TOKEN_KEY))',
+        ),
+        "addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd:"
+        + _line_range(
+            "addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd",
+            "_transport_request = ConnectionProtocolScript.build_transport_request(",
+            "\t\t_query_token_key",
+        ),
+        "docs/compatibility-matrix.md:"
+        + str(_line_number("docs/compatibility-matrix.md", "| Godot C# web export | N/A | Out-of-Scope |")),
+    )
+    for expected in expected_citations:
+        assert expected in body, (
+            "Auth Token Transport section must keep its exact file:line citations in sync with the source tree. "
+            f"Missing {expected!r}."
+        )
+    assert "future release" not in body.lower(), (
+        "Auth Token Transport section must not speculate about future Godot C# web export behavior."
     )
 
 
@@ -87,6 +175,9 @@ def test_cited_source_files_still_contain_cited_symbols():
     assert "DEFAULT_QUERY_TOKEN_KEY" in protocol, (
         "connection_protocol.gd must still expose DEFAULT_QUERY_TOKEN_KEY"
     )
+    assert "query_token_key" in protocol, (
+        "connection_protocol.gd must still expose the query_token_key override"
+    )
 
     dotnet_adapter = _read(
         "addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkConnectionAdapter.cs"
@@ -94,18 +185,13 @@ def test_cited_source_files_still_contain_cited_symbols():
     assert "WithToken" in dotnet_adapter, (
         "SpacetimeSdkConnectionAdapter.cs must still invoke WithToken"
     )
-    assert "prefer_query_token" not in dotnet_adapter, (
-        ".NET adapter must not carry the GDScript-side prefer_query_token surface "
-        "(doc says the override affects only the GDScript path)"
-    )
 
 
 def test_troubleshooting_web_export_row_links_to_auth_token_transport():
-    content = _read("docs/troubleshooting.md")
-    section = _section(content, "Web Export (Native GDScript)")
-    assert "Browser auth mode is reported as `authorization-header`" in section, (
-        "Existing Browser auth mode row must still be present in Web Export section"
+    row = _line_containing(
+        "docs/troubleshooting.md",
+        "| Browser auth mode is reported as `authorization-header` instead of `query-token` |",
     )
-    assert "connection.md#auth-token-transport" in section, (
-        "Browser auth mode recovery action must link to connection.md#auth-token-transport"
+    assert "[connection.md → Auth Token Transport](connection.md#auth-token-transport)" in row, (
+        "The Browser auth mode troubleshooting row itself must link to connection.md#auth-token-transport."
     )
