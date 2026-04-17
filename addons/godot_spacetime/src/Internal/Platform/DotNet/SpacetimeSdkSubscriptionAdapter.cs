@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using GodotSpacetime.Logging;
 using GodotSpacetime.Subscriptions;
 using SpacetimeDB;
 
@@ -106,6 +107,71 @@ internal sealed class SpacetimeSdkSubscriptionAdapter
         {
             // SDK close is best-effort so the caller can still mark the handle terminal
             // and clean up local bookkeeping even when the reflected method fails.
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Attempts to wire a one-shot completion callback to the SDK's
+    /// <c>UnsubscribeThen(Action&lt;T&gt;)</c> method via reflection. The returned
+    /// <see cref="Action"/> is invoked once the SDK surfaces the ended event.
+    /// </summary>
+    /// <param name="sdkSubscription">
+    /// The object returned by <see cref="Subscribe"/>. May be null if the SDK does not
+    /// return a lifecycle object, in which case this method returns <c>false</c>.
+    /// </param>
+    /// <param name="onEnded">
+    /// Callback fired once the SDK confirms the subscription has ended. Must not be null.
+    /// </param>
+    /// <returns>
+    /// <c>true</c> if the SDK's <c>UnsubscribeThen(Action&lt;T&gt;)</c> method was found
+    /// and invoked successfully; <c>false</c> otherwise (null input, missing method, or
+    /// the invocation throws). Callers that receive <c>false</c> should dispatch
+    /// <paramref name="onEnded"/> inline as a graceful fall-back.
+    /// </returns>
+    internal bool TryUnsubscribeThen(object? sdkSubscription, Action onEnded)
+    {
+        if (sdkSubscription == null)
+            return false;
+
+        ArgumentNullException.ThrowIfNull(onEnded);
+
+        var type = sdkSubscription.GetType();
+
+        var method = type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(m =>
+                m.Name == "UnsubscribeThen"
+                && m.GetParameters().Length == 1
+                && m.GetParameters()[0].ParameterType.IsGenericType
+                && m.GetParameters()[0].ParameterType.GetGenericTypeDefinition() == typeof(Action<>));
+
+        if (method == null)
+        {
+            SpacetimeLog.Warning(
+                LogCategory.Subscription,
+                $"TryUnsubscribeThen: {type.FullName} does not expose an UnsubscribeThen(Action<T>) method; " +
+                "callers fall back to the parameterless Unsubscribe path and inline completion dispatch.");
+            return false;
+        }
+
+        var delegateType = method.GetParameters()[0].ParameterType;
+        var ctxType = delegateType.GetGenericArguments()[0];
+        var ctxParam = Expression.Parameter(ctxType, "ctx");
+        var invokeOnEnded = Expression.Invoke(Expression.Constant(onEnded));
+        var sdkDelegate = Expression.Lambda(delegateType, invokeOnEnded, ctxParam).Compile();
+
+        try
+        {
+            method.Invoke(sdkSubscription, new object[] { sdkDelegate });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            SpacetimeLog.Warning(
+                LogCategory.Subscription,
+                $"TryUnsubscribeThen: SDK UnsubscribeThen invocation failed on {type.FullName}; " +
+                "callers fall back to inline completion dispatch.",
+                ex);
             return false;
         }
     }

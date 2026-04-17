@@ -210,6 +210,39 @@ public partial class SpacetimeClient : Node
     }
 
     /// <summary>
+    /// Closes a previously applied subscription scope and invokes <paramref name="onEnded"/>
+    /// exactly once, on the Godot main thread, when the close completes.
+    ///
+    /// Handle-state semantics match <see cref="Unsubscribe"/>: the handle transitions to
+    /// <c>Closed</c> and is unregistered synchronously. If the handle is already
+    /// <c>Closed</c> or <c>Superseded</c>, the call is a no-op and <paramref name="onEnded"/>
+    /// is NOT invoked.
+    ///
+    /// When connected, the callback fires after the SDK confirms the subscription has ended.
+    /// When disconnected, the callback fires inline (no server round-trip is possible).
+    /// In either case, the callback is dispatched via the existing signal-adapter path so
+    /// scene code can safely touch the scene tree from the handler.
+    /// </summary>
+    public void UnsubscribeThen(SubscriptionHandle handle, Action onEnded)
+    {
+        try
+        {
+            if (_signalAdapter == null)
+            {
+                _connectionService.UnsubscribeThen(handle, onEnded);
+                return;
+            }
+
+            var adapter = _signalAdapter;
+            _connectionService.UnsubscribeThen(handle, () => adapter.Dispatch(onEnded));
+        }
+        catch (ArgumentException ex)
+        {
+            PublishValidationFailure(ex.Message);
+        }
+    }
+
+    /// <summary>
     /// Replaces an active subscription with a new query set using overlap-first semantics.
     /// The old subscription remains authoritative until the new subscription is confirmed applied.
     /// If the replacement fails, the SubscriptionFailed signal fires for the new handle while the
