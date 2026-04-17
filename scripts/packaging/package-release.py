@@ -22,6 +22,9 @@ DEFAULT_OUTPUT_DIR = Path("release-candidates")
 # File extensions excluded from the distributable ZIP (Godot project-cache files)
 EXCLUDED_EXTENSIONS = {".uid", ".import"}
 
+# Path prefixes (relative to ADDON_DIR) excluded from the distributable ZIP
+EXCLUDED_ADDON_PREFIXES = ("tests/",)
+
 # Fixed timestamp for all ZIP entries — guarantees reproducibility
 ZIP_ENTRY_TIMESTAMP = (2020, 1, 1, 0, 0, 0)
 ZIP_ENTRY_PERMISSIONS = 0o644 << 16
@@ -46,7 +49,9 @@ def collect_addon_files(root: Path) -> list[Path]:
     addon_root = root / ADDON_DIR
     return sorted(
         f for f in addon_root.rglob("*")
-        if f.is_file() and f.suffix not in EXCLUDED_EXTENSIONS
+        if f.is_file()
+        and f.suffix not in EXCLUDED_EXTENSIONS
+        and not f.relative_to(addon_root).as_posix().startswith(EXCLUDED_ADDON_PREFIXES)
     )
 
 

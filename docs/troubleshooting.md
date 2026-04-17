@@ -255,6 +255,29 @@ Story 11.5 validates native GDScript web delivery through a dedicated pure-GDScr
 
 The Story 11.5 web-export proof path is skip-safe by design. Missing local runtime access, missing browser binaries, missing export templates, or loopback HTTP restrictions should skip the browser lane with explicit prerequisite messages instead of failing the entire static suite.
 
+## Running a Local SpacetimeDB Runtime for Tests
+
+The dynamic lifecycle tests introduced in Story 7.1 — and the release-validation gate they feed — drive a real SpacetimeDB runtime over `127.0.0.1:3000`. Static tests run without it; any suite that exercises a full `Connect()` / `Subscribe()` / `InvokeReducer()` round-trip needs a reachable local daemon. See `docs/compatibility-matrix.md` for the supported SpacetimeDB, Godot, and `.NET` versions — install the CLI at or above that baseline before running the dynamic lanes.
+
+Start the daemon pinned to the loopback interface and wait for the canonical readiness probe before launching the suite:
+
+```
+spacetime start --listen-addr 127.0.0.1:3000 --data-dir /tmp/spacetime-e2e-data &
+spacetime server add local http://127.0.0.1:3000 --yes || spacetime server set-default local
+spacetime server ping local
+```
+
+`spacetime server ping local` is the same probe used by `tests/fixtures/spacetime_runtime.py` and by the `release-validation.yml` workflow. When it returns successfully, the dynamic lifecycle test can publish its ephemeral `smoke-test-e2e-*` module and exercise the full client path.
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| Dynamic lifecycle test skips with "SpacetimeDB runtime not reachable" | No local daemon is listening on `127.0.0.1:3000` | Start the daemon as shown above and confirm `spacetime server ping local` succeeds |
+| `spacetime start` exits silently and the ping loop still fails | Port `3000` is already bound by a leftover daemon on this host | Stop the stale process (`ss -ltn '( sport = :3000 )'` to identify the owner) before restarting |
+| `spacetime publish --yes --anonymous` prompts for identity | First-ever CLI invocation has no stored identity | Let the CLI create an anonymous identity non-interactively, or run `spacetime identity new --no-email` once before the suite |
+| `spacetime` CLI not found when running the suite | CLI not installed or `$HOME/.local/bin` not on `PATH` | Install the SpacetimeDB CLI at the version declared in `docs/compatibility-matrix.md`; re-export `PATH` before rerunning |
+
+The release-validation workflow starts and stops the daemon for each CI run, so local maintainers only need the daemon running when they invoke `validate-release-candidate.py` directly. Running with `--skip-suite` avoids the test lane entirely — but that flag is reserved for script self-testing and must never appear in a release-gate workflow.
+
 ## See Also
 
 - `docs/runtime-boundaries.md` — Complete public API vocabulary, all lifecycle states, signals, and the reducer error model

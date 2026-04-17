@@ -8,7 +8,8 @@ Usage:
 Defaults:
     --version      Read from addons/godot_spacetime/plugin.cfg
     --report       release-candidates/validation-report-v{version}.json (relative to repo root)
-    --skip-suite   Flag: skip pytest suite run (use only for testing this script itself)
+    --skip-suite   Flag: skip pytest suite run — for script self-testing only; must never
+                   appear in a release-gate workflow
 
 Checks performed and written to the JSON report:
     package          - Run scripts/packaging/package-release.py to produce the candidate ZIP
@@ -41,7 +42,14 @@ REQUIRED_ZIP_ENTRIES = [
 ]
 NOTICE_PREFIX = "addons/godot_spacetime/thirdparty/notices/"
 EXCLUDED_EXTENSIONS = {".uid", ".import"}
-EXCLUDED_PREFIXES = ["demo/", "tests/", "spacetime/", "scripts/", "_bmad-output/"]
+EXCLUDED_PREFIXES = [
+    "demo/",
+    "tests/",
+    "spacetime/",
+    "scripts/",
+    "_bmad-output/",
+    "addons/godot_spacetime/tests/",
+]
 EXCLUDED_SUFFIXES = [".csproj", ".sln"]
 REQUIRED_ZIP_PREFIX = "addons/godot_spacetime/"
 
@@ -159,7 +167,10 @@ def main() -> int:
     parser.add_argument(
         "--skip-suite",
         action="store_true",
-        help="Skip pytest suite run (for testing this script only; never use in CI)",
+        help=(
+            "Skip pytest suite run — for script self-testing only; "
+            "must never appear in a release-gate workflow"
+        ),
     )
     args = parser.parse_args()
 
