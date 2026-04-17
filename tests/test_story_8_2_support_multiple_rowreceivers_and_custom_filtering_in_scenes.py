@@ -335,8 +335,13 @@ def test_row_receiver_nulls_client_reference_on_exit():
 
 def test_row_receiver_pushwarning_on_missing_client():
     content = read_file("addons/godot_spacetime/src/Public/Scenes/RowReceiver.cs")
-    assert "GD.PushWarning" in content, \
-        "RowReceiver.cs must call GD.PushWarning (not GD.PushError) when SpacetimeClient autoload is not found"
+    # G6 (spec-g6-pluggable-logger-interface) rerouted the direct GD.PushWarning through the
+    # SpacetimeLog facade. The default GodotConsoleLogSink still lands warning-level messages
+    # on GD.PushWarning, preserving the Story 8.2 graceful-degrade intent.
+    assert "SpacetimeLog.Warning" in content, (
+        "RowReceiver.cs must log via SpacetimeLog.Warning (warning-level — not error-level) "
+        "when SpacetimeClient autoload is not found (post-G6 routing)"
+    )
 
 
 def test_row_receiver_uses_root_autoload_path():

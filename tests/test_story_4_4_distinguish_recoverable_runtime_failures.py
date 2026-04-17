@@ -247,9 +247,13 @@ def test_spacetime_client_invoke_reducer_calls_publish_validation_failure() -> N
 def test_spacetime_client_publish_validation_failure_calls_gd_push_error() -> None:
     content = _read("addons/godot_spacetime/src/Public/SpacetimeClient.cs")
     body = _extract_method_body(content, "private void PublishValidationFailure(string message)")
-    assert "GD.PushError" in body, (
-        "SpacetimeClient.cs PublishValidationFailure must still call GD.PushError for "
-        "fault visibility in the Godot console (regression guard)"
+    # G6 (spec-g6-pluggable-logger-interface) rerouted the direct GD.PushError through the
+    # SpacetimeLog facade. The default GodotConsoleLogSink still lands the message on
+    # GD.PushError for fault visibility — the contract now asserts the routing surface.
+    assert "SpacetimeLog.Error(LogCategory.Connection" in body, (
+        "SpacetimeClient.cs PublishValidationFailure must log via "
+        "SpacetimeLog.Error(LogCategory.Connection, ...); the default sink still forwards "
+        "to GD.PushError for Godot-console fault visibility (regression guard, post-G6)"
     )
 
 

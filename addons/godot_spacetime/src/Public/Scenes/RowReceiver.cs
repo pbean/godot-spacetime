@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using Godot;
+using GodotSpacetime.Logging;
 using GodotSpacetime.Runtime.Platform.DotNet;
 using GodotSpacetime.Subscriptions;
 
@@ -131,7 +132,8 @@ public partial class RowReceiver : Node
         var clientNode = ResolveSelectedClient();
         if (clientNode == null)
         {
-            GD.PushWarning(
+            SpacetimeLog.Warning(
+                LogCategory.Subscription,
                 "RowReceiver: target SpacetimeClient not found at " +
                 $"'{FormatClientPath(ClientPath)}'. Configure ClientPath to receive row events.");
             return;
