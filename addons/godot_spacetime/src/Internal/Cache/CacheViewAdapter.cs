@@ -98,8 +98,14 @@ internal sealed class CacheViewAdapter
         if (tableHandle is null)
             return [];
 
+        // Materialize the cache snapshot eagerly. The SDK may mutate the underlying
+        // collection from a worker thread while gameplay code iterates from
+        // _Process on the main thread, which surfaces as `InvalidOperationException:
+        // Collection was modified` mid-iteration. ToList() trades a one-time copy
+        // for a stable view; the alternative is every caller wrapping GetRows()
+        // in its own ToList().
         if (tableHandle is IEnumerable enumerable)
-            return enumerable.Cast<object>();
+            return enumerable.Cast<object>().ToList();
 
         // SpacetimeDB 2.1 RemoteTableHandleBase<T, U> does not implement IEnumerable
         // directly; the iteration surface is a public Iter() method returning
@@ -111,7 +117,7 @@ internal sealed class CacheViewAdapter
         {
             var iterResult = iterMethod.Invoke(tableHandle, null);
             if (iterResult is IEnumerable iterEnumerable)
-                return iterEnumerable.Cast<object>();
+                return iterEnumerable.Cast<object>().ToList();
         }
 
         throw new InvalidOperationException(

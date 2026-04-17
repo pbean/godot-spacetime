@@ -278,6 +278,22 @@ spacetime server ping local
 
 The release-validation workflow starts and stops the daemon for each CI run, so local maintainers only need the daemon running when they invoke `validate-release-candidate.py` directly. Running with `--skip-suite` avoids the test lane entirely — but that flag is reserved for script self-testing and must never appear in a release-gate workflow.
 
+### Environment-Gated Integration Tests
+
+A subset of the integration suite is **runtime-gated** rather than defective: each test probes for its prerequisite (local SpacetimeDB daemon, `godot-mono` binary, Chromium-family browser, loopback HTTP) and emits an explicit `pytest.skip` with a named reason when the prerequisite is missing. As of the Epic 11 baseline (2026-04-16), 16 tests are environment-gated this way. Seeing 16 skips on `pytest -q` against a developer machine without a local daemon is the **expected** result, not a regression.
+
+Categories of environment-gated tests:
+
+| Category | Prerequisite | Examples |
+|----------|--------------|----------|
+| Dynamic lifecycle round-trip | local SpacetimeDB daemon + `godot-mono` | `test_story_7_1_dynamic_lifecycle_integration.py` |
+| Compression / light mode / telemetry harness | local SpacetimeDB daemon + `godot-mono` | Story 9.1 / 9.2 / 9.3 integration runners |
+| Multi-module isolation | local SpacetimeDB daemon + `godot-mono` | Story 10.1 multi-module smoke runner |
+| GDScript runtime end-to-end | local SpacetimeDB daemon + Godot (any flavor) | Story 11.x GDScript subscribe / reducer / row-event |
+| Web export proof | exported HTML5 build + Chromium-family browser + loopback HTTP | Story 11.5 browser harness |
+
+To unskip the lane locally, satisfy the named prerequisites: start the daemon as shown above, ensure `godot-mono` (or the configured `GODOT_BIN`) is on `PATH`, and — for the Story 11.5 browser lane — install a Chromium-family browser (or set `BROWSER_BIN`) and ensure loopback HTTP binding is permitted. The release-validation GitHub Actions workflow handles the daemon and Godot prerequisites automatically; the browser lane is currently not exercised in CI.
+
 ## See Also
 
 - `docs/runtime-boundaries.md` — Complete public API vocabulary, all lifecycle states, signals, and the reducer error model

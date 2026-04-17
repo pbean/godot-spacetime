@@ -69,6 +69,28 @@ def _publish_module(cli: str, server: str, module_name: str) -> None:
     )
 
 
+def _delete_module(cli: str, server: str, module_name: str) -> None:
+    """Best-effort cleanup of a per-run published module.
+
+    The dynamic lifecycle test publishes `smoke-test-e2e-<uuid>` per run and
+    must not leak databases on long-lived dev boxes (CI runners are hermetic
+    so they're unaffected either way). Deletion is best-effort: if the CLI
+    has no `delete` command, the server already collected the module, or the
+    daemon is already gone, the test result must still be authoritative —
+    swallow any error rather than turning a passing test into a failure.
+    """
+    try:
+        subprocess.run(
+            [cli, "delete", "--server", server, "--yes", module_name],
+            check=False,
+            cwd=ROOT,
+            capture_output=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
 EVENT_PREFIX = "E2E-EVENT "
 
 
@@ -150,19 +172,25 @@ def test_dynamic_lifecycle_e2e() -> None:
     # async _Process iterations complete before teardown. Events are parsed
     # from the runner's stdout rather than a log file because the file writer
     # isn't guaranteed to flush when Godot tears down the .NET process.
-    proc = subprocess.run(
-        [
-            godot_probe.path,
-            "--headless",
-            "--path",
-            str(ROOT),
-            SCENE_PATH,
-        ],
-        env=env,
-        cwd=ROOT,
-        capture_output=True,
-        timeout=TOTAL_TIMEOUT_SECONDS,
-    )
+    try:
+        proc = subprocess.run(
+            [
+                godot_probe.path,
+                "--headless",
+                "--path",
+                str(ROOT),
+                SCENE_PATH,
+            ],
+            env=env,
+            cwd=ROOT,
+            capture_output=True,
+            timeout=TOTAL_TIMEOUT_SECONDS,
+        )
+    finally:
+        # Always tear down the published module so long-lived dev boxes don't
+        # accumulate `smoke-test-e2e-*` databases per run. Runs after both
+        # success and failure of the Godot subprocess.
+        _delete_module(cli_probe.path, runtime_probe.server, module_name)
     elapsed = time.monotonic() - start
 
     events = _parse_events_from_stdout(proc.stdout or b"")

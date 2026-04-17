@@ -71,6 +71,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "${SPACETIME_DATA_DIR}"
+          # Port 3000 preflight. On hosted GitHub runners this is always free;
+          # on self-hosted runners a leftover daemon would cause `spacetime
+          # start` to silently no-op and the readiness loop below would then
+          # fail with a confusing "not reachable" message. Surface the
+          # collision explicitly with the owning process if `ss` is available.
+          if command -v ss >/dev/null 2>&1 && ss -ltn '( sport = :3000 )' | grep -q LISTEN; then
+            echo "ERROR: port 3000 is already in use on this runner"
+            ss -ltnp '( sport = :3000 )' || true
+            exit 1
+          fi
           nohup spacetime start \
             --listen-addr 127.0.0.1:3000 \
             --data-dir "${SPACETIME_DATA_DIR}" \
