@@ -566,4 +566,16 @@ The `Public/` contract is already runtime-neutral. None of the public type names
 | `Reducer` | Reducer call dispatch and result handling |
 | `Codegen` | Generated binding load and schema validation events |
 
-Log filtering by category is configured through `SpacetimeSettings` (added in a later story).
+### Log Destination — `ILogSink` + `SpacetimeLog`
+
+Every SDK runtime log site writes through the static [`SpacetimeLog`](../addons/godot_spacetime/src/Public/Logging/SpacetimeLog.cs) facade. `SpacetimeLog.Sink` holds the active [`ILogSink`](../addons/godot_spacetime/src/Public/Logging/ILogSink.cs), which receives a [`LogLevel`](../addons/godot_spacetime/src/Public/Logging/LogLevel.cs) (`Info` / `Warning` / `Error`), a `LogCategory`, a message, and an optional `System.Exception`.
+
+The default sink [`GodotConsoleLogSink`](../addons/godot_spacetime/src/Public/Logging/GodotConsoleLogSink.cs) forwards to `GD.Print` / `GD.PushWarning` / `GD.PushError` so unconfigured projects keep the pre-existing console behavior byte-for-byte.
+
+Apps swap the destination by assigning a custom `ILogSink` to [`SpacetimeSettings.LogSink`](../addons/godot_spacetime/src/Public/SpacetimeSettings.cs) before `SpacetimeClient` enters the tree — `_EnterTree` installs the setting's sink onto `SpacetimeLog.Sink`. Typical custom sinks forward to Sentry, a file, or a level-filtering middleware that wraps `GodotConsoleLogSink`.
+
+Multi-client note: `SpacetimeLog.Sink` is a single process-wide slot. If two `SpacetimeClient` nodes configure different sinks, the last one to enter the tree wins. Apps that need per-client routing compose a dispatching `ILogSink` that inspects each message and forwards accordingly.
+
+No-teardown contract: `SpacetimeClient._ExitTree` does not restore the previously-active sink. A sink installed by a client that later exits the tree remains the process-wide default until another client replaces it or the app clears `SpacetimeLog.Sink` explicitly. Short-lived clients that install a scene-scoped sink should reset `SpacetimeLog.Sink` to `GodotConsoleLogSink.Instance` in their own teardown code if they need the process default back.
+
+Sink-failure fallback: if a custom `ILogSink.Write` throws, `SpacetimeLog` falls back to `GodotConsoleLogSink.Instance` for that entry and pushes an `Error`-level diagnostic naming the failed sink and the throw. The SDK runtime call site never observes the exception — custom sinks cannot take down the emitting code path.

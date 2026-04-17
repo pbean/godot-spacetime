@@ -384,15 +384,18 @@ def test_rowreceiver_emits_signal_in_on_row_changed() -> None:
 
 def test_rowreceiver_uses_push_warning_not_push_error_for_missing_autoload() -> None:
     content = _read(ROWRECEIVER_PATH)
-    assert "GD.PushWarning" in content, (
-        "RowReceiver._Ready() must call GD.PushWarning (not PushError) when SpacetimeClient "
+    # G6 (spec-g6-pluggable-logger-interface) rerouted the direct GD.PushWarning through
+    # the SpacetimeLog facade. The default GodotConsoleLogSink still lands the message on
+    # GD.PushWarning (warning-level route), preserving the Story 8.1 graceful-degrade intent.
+    assert "SpacetimeLog.Warning" in content, (
+        "RowReceiver._Ready() must log via SpacetimeLog.Warning when SpacetimeClient "
         "autoload is absent — the node must not hard-fail in scenes that don't use SpacetimeDB "
-        "(Task 1.7, Dev Notes)"
+        "(Task 1.7, Dev Notes; post-G6 routing)"
     )
-    assert "GD.PushError" not in content, (
-        "RowReceiver must not call GD.PushError — use GD.PushWarning for the missing-autoload "
-        "case so the node degrades gracefully instead of raising a hard editor error "
-        "(Task 1.7, Dev Notes)"
+    assert "SpacetimeLog.Error" not in content and "GD.PushError" not in content, (
+        "RowReceiver must not route the missing-autoload case through SpacetimeLog.Error "
+        "or GD.PushError — warning-level only, so the node degrades gracefully instead of "
+        "raising a hard editor error (Task 1.7, Dev Notes; post-G6 routing)"
     )
 
 

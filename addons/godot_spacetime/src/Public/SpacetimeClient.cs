@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Godot;
 using GodotSpacetime.Connection;
+using GodotSpacetime.Logging;
 using GodotSpacetime.Queries;
 using GodotSpacetime.Reducers;
 using GodotSpacetime.Runtime.Connection;
@@ -126,6 +127,10 @@ public partial class SpacetimeClient : Node
 
     public override void _EnterTree()
     {
+        // Install the configured sink first so any diagnostic emitted from the
+        // lifecycle setup below (RegisterLiveClient, RegisterPerformanceMonitors,
+        // or a future log site) routes through the app-configured destination.
+        if (Settings?.LogSink != null) SpacetimeLog.Sink = Settings.LogSink;
         RegisterLiveClient();
         _signalAdapter ??= new GodotSignalAdapter(this);
         if (OwnsPerformanceMonitors())
@@ -270,7 +275,7 @@ public partial class SpacetimeClient : Node
     /// the runtime SDK call.
     /// Must be called after <c>ConnectionState.Connected</c> is reached.
     /// Programming faults such as wrong connection state, <c>null</c> args, or a non-<c>IReducerArgs</c>
-    /// object are caught and surfaced via <c>ConnectionStateChanged</c> plus <c>GD.PushError</c>.
+    /// object are caught and surfaced via <c>ConnectionStateChanged</c> plus <c>SpacetimeLog.Error</c>.
     /// These faults do not raise <c>ReducerCallFailed</c>; reserve reducer result handlers for
     /// server-acknowledged outcomes.
     /// </summary>
@@ -370,7 +375,7 @@ public partial class SpacetimeClient : Node
     private void PublishValidationFailure(string message)
     {
         HandleStateChanged(new ConnectionStatus(ConnectionState.Disconnected, message));
-        GD.PushError(message);
+        SpacetimeLog.Error(LogCategory.Connection, message);
     }
 
     private void HandleStateChanged(ConnectionStatus status)

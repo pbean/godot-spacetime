@@ -1,6 +1,7 @@
 using Godot;
 using GodotSpacetime.Auth;
 using GodotSpacetime.Connection;
+using GodotSpacetime.Logging;
 
 namespace GodotSpacetime;
 
@@ -108,6 +109,24 @@ public partial class SpacetimeSettings : Resource
     /// <c>ProjectSettingsTokenStore</c> (persists to Godot ProjectSettings).
     /// </summary>
     public ITokenStore? TokenStore { get; set; }
+
+    /// <summary>
+    /// Optional pluggable log destination for SDK runtime output
+    /// (connection validation failures, subscription-side RowReceiver warnings,
+    /// reducer-wiring errors). When set, <see cref="SpacetimeClient"/> installs
+    /// the value onto <see cref="SpacetimeLog.Sink"/> during <c>_EnterTree</c>.
+    /// When null (the default), SDK output stays on <see cref="GodotConsoleLogSink"/>
+    /// which forwards to <c>GD.Print</c>/<c>GD.PushWarning</c>/<c>GD.PushError</c>
+    /// exactly as before.
+    /// Assign a custom <see cref="ILogSink"/> to route SDK logs to Sentry, a
+    /// file sink, or any other destination; assign before <see cref="SpacetimeClient"/>
+    /// enters the tree for the sink to take effect.
+    /// Note: <see cref="SpacetimeClient"/> does not restore the prior sink on
+    /// <c>_ExitTree</c>; a sink installed by a client that later exits remains
+    /// the process-wide default until another client replaces it or the app
+    /// clears <see cref="SpacetimeLog.Sink"/> explicitly.
+    /// </summary>
+    public ILogSink? LogSink { get; set; }
 
     internal string ResolveGeneratedBindingsNamespace() =>
         string.IsNullOrWhiteSpace(GeneratedBindingsNamespace)

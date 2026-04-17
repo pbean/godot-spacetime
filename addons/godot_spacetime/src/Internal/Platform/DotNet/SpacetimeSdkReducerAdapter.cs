@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using GodotSpacetime.Logging;
 using GodotSpacetime.Reducers;
 using SpacetimeDB;
 
@@ -139,9 +140,11 @@ internal sealed class SpacetimeSdkReducerAdapter
             }
             catch (Exception ex)
             {
-                Godot.GD.PushError(
+                SpacetimeLog.Error(
+                    LogCategory.Reducer,
                     $"SpacetimeSdkReducerAdapter: failed to wire reducer event '{evt.Name}': " +
-                    $"{ex.GetType().Name}: {ex.Message}. Other reducer callbacks will still be wired.");
+                    $"{ex.GetType().Name}: {ex.Message}. Other reducer callbacks will still be wired.",
+                    ex);
             }
         }
     }
