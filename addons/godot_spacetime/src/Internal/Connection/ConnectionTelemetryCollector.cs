@@ -109,6 +109,14 @@ internal sealed class ConnectionTelemetryCollector
         }
     }
 
+    /// <summary>
+    /// Arms the tracker baseline for the currently active session. Must be called at most once per
+    /// session, immediately after <see cref="StartSession"/> while the session is still armed. A
+    /// second call silently overwrites the baseline and will make subsequent
+    /// <see cref="SyncTrackerCounts"/> calls treat prior traffic as new (clamped to zero by the
+    /// Math.Max subtraction). The single-call invariant is structurally enforced by the
+    /// StartSession→InitializeTrackerBaseline ordering in the connection service.
+    /// </summary>
     internal void InitializeTrackerBaseline(long sessionId, long messagesSent, long messagesReceived)
     {
         lock (_gate)

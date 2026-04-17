@@ -17,6 +17,11 @@ public partial class TelemetryCollectorHardeningRunner : Node
     private const long SessionTwoId = 2;
 
     private readonly ConnectionTelemetryCollector _collector = new();
+    // Captures taken at different lifecycle points: pre-session, post-first-StartSession,
+    // and post-second-StartSession (which implicitly Reset). If the collector ever reallocates
+    // its stable stats object across any of these transitions, ReferenceEquals against the
+    // current telemetry will fail for at least one capture and the CaptureSnapshot check breaks.
+    private readonly List<ConnectionTelemetryStats> _capturedStableReferences = new();
     private ConnectionTelemetryStats? _stableTelemetryReference;
     private bool _finished;
 
@@ -30,14 +35,16 @@ public partial class TelemetryCollectorHardeningRunner : Node
         try
         {
             _stableTelemetryReference = _collector.CurrentTelemetry;
+            _capturedStableReferences.Add(_stableTelemetryReference);
 
             _collector.StartSession(SessionOneId);
+            _capturedStableReferences.Add(_collector.CurrentTelemetry);
             _collector.InitializeTrackerBaseline(SessionOneId, 0, 0);
             EmitStepOk("session_1_started", CaptureSnapshot().ToPayload(includeStableTelemetryReference: true));
 
             _collector.RecordOutboundMessage(SessionOneId, 32);
             _collector.RecordInboundMessage(SessionOneId, 64);
-            await DelayAsync(1.1);
+            await DelayAsync(1.25);
 
             var sessionOneRates = CaptureSnapshot();
             if (sessionOneRates.MessagesSent != 1 ||
@@ -58,6 +65,7 @@ public partial class TelemetryCollectorHardeningRunner : Node
             EmitStepOk("session_1_rates", sessionOneRates.ToPayload(includeStableTelemetryReference: true));
 
             _collector.StartSession(SessionTwoId);
+            _capturedStableReferences.Add(_collector.CurrentTelemetry);
             _collector.InitializeTrackerBaseline(SessionTwoId, 100, 200);
             _collector.SyncTrackerCounts(SessionTwoId, 100, 200);
 
@@ -92,7 +100,7 @@ public partial class TelemetryCollectorHardeningRunner : Node
             _collector.RecordInboundMessage(SessionTwoId, 40);
             _collector.SyncTrackerCounts(SessionTwoId, 101, 201);
             _collector.RecordReducerRoundTrip(SessionTwoId, activeCalledAt, activeCalledAt.AddMilliseconds(50));
-            await DelayAsync(1.1);
+            await DelayAsync(1.25);
 
             var sessionTwoTraffic = CaptureSnapshot();
             if (sessionTwoTraffic.MessagesSent != 1 ||
@@ -138,6 +146,20 @@ public partial class TelemetryCollectorHardeningRunner : Node
     private TelemetrySnapshot CaptureSnapshot()
     {
         var telemetry = _collector.CurrentTelemetry;
+        // stableTelemetryInstanceReused is true only when every prior capture (pre-session,
+        // post-first-StartSession, post-second-StartSession as they accumulate) still
+        // ReferenceEquals the current telemetry. This catches a regression that reallocates
+        // _stats on any session transition, not just a regression in Reset.
+        var instanceReused = ReferenceEquals(_stableTelemetryReference, telemetry);
+        foreach (var captured in _capturedStableReferences)
+        {
+            if (!ReferenceEquals(captured, telemetry))
+            {
+                instanceReused = false;
+                break;
+            }
+        }
+
         return new TelemetrySnapshot(
             telemetry.MessagesSent,
             telemetry.MessagesReceived,
@@ -149,7 +171,7 @@ public partial class TelemetryCollectorHardeningRunner : Node
             telemetry.MessagesSentPerSecond,
             telemetry.BytesReceivedPerSecond,
             telemetry.BytesSentPerSecond,
-            ReferenceEquals(_stableTelemetryReference, telemetry));
+            instanceReused);
     }
 
     private void EmitStepOk(string name, Dictionary<string, object?> payload)
@@ -173,8 +195,22 @@ public partial class TelemetryCollectorHardeningRunner : Node
 
     private void Finish(bool pass, Dictionary<string, object?>? extra = null)
     {
+        // A post-pass failure (exception raised after Finish(pass:true) already queued Quit(0))
+        // must override and exit non-zero, otherwise a late crash is silently reported as success.
         if (_finished)
+        {
+            if (!pass)
+            {
+                WriteJsonLine(new Dictionary<string, object?>
+                {
+                    ["event"] = "done",
+                    ["status"] = "fail",
+                    ["reason"] = "post_pass_failure",
+                });
+                System.Environment.Exit(1);
+            }
             return;
+        }
 
         _finished = true;
         var payload = new Dictionary<string, object?>
