@@ -93,6 +93,10 @@ def test_service_and_adapter_keep_telemetry_collection_internal_and_resettable()
         "ConnectionTelemetryCollector",
         "CurrentTelemetry",
         "Reset",
+        "SessionBoundConnectionSink",
+        "SessionBoundReducerEventSink",
+        "InitializeTrackerBaseline",
+        "TryReadTrackerCounts",
     ):
         assert expected in service or expected in collector, (
             "Telemetry lifecycle must be owned by SpacetimeConnectionService and reset on disconnect/reconnect. "

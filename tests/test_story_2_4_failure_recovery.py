@@ -87,16 +87,13 @@ def test_connection_service_token_expired_message_text() -> None:
 
 def test_connection_service_restored_from_store_check_before_credentials_provided() -> None:
     content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
-    pos_restored = content.find("_restoredFromStore")
-    pos_credentials = content.find("_credentialsProvided")
-    # Find within OnConnectError specifically by searching for the if-block pattern
-    on_connect_error_pos = content.find("void IConnectionEventSink.OnConnectError(")
-    assert on_connect_error_pos != -1, (
-        "SpacetimeConnectionService.cs must have OnConnectError method"
+    handle_connect_error = content.split("private void HandleConnectError(long sessionId, Exception error)", 1)
+    assert len(handle_connect_error) == 2, (
+        "SpacetimeConnectionService.cs must have HandleConnectError helper"
     )
-    after_method = content[on_connect_error_pos:]
-    pos_restored_in_method = after_method.find("_restoredFromStore")
-    pos_credentials_in_method = after_method.find("_credentialsProvided")
+    handle_connect_error_body = handle_connect_error[1].split("private void HandleDisconnected", 1)[0]
+    pos_restored_in_method = handle_connect_error_body.find("_restoredFromStore")
+    pos_credentials_in_method = handle_connect_error_body.find("_credentialsProvided")
     assert pos_restored_in_method != -1 and pos_credentials_in_method != -1, (
         "Both _restoredFromStore and _credentialsProvided must appear in OnConnectError (AC 2)"
     )

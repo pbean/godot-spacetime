@@ -392,9 +392,9 @@ def test_connection_service_has_on_reducer_call_failed_event() -> None:
 
 def test_connection_service_has_register_callbacks_wiring() -> None:
     content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
-    assert "RegisterCallbacks(this)" in content, (
-        "SpacetimeConnectionService must call _reducerAdapter.RegisterCallbacks(this) "
-        "in the connect path (AC 1)"
+    assert "RegisterCallbacks(" in content and "SessionBoundReducerEventSink" in content, (
+        "SpacetimeConnectionService must wire reducer callbacks in the connect path, and runtime hardening now "
+        "requires a session-bound reducer sink instead of passing `this` directly (AC 1)."
     )
 
 
@@ -578,33 +578,19 @@ def test_runtime_boundaries_documents_async_result_delivery() -> None:
 def test_register_callbacks_inside_on_connected() -> None:
     """
     Dynamic lifecycle test (Epic 3 Retro P2):
-    Verifies that RegisterCallbacks(this) appears inside the OnConnected method body
-    in SpacetimeConnectionService — not just anywhere in the file.
+    Verifies that the reducer callback wiring still happens inside the OnConnected
+    method body in SpacetimeConnectionService — not just anywhere in the file.
     """
-    lines = _lines("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
+    content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
+    handle_connected = content.split("private void HandleConnected(", 1)
+    assert len(handle_connected) == 2, (
+        "SpacetimeConnectionService must keep a dedicated HandleConnected(...) connect-path helper."
+    )
+    handle_connected_body = handle_connected[1].split("private void HandleConnectError", 1)[0]
 
-    in_method = False
-    found_register = False
-    brace_depth = 0
-
-    for line in lines:
-        if "IConnectionEventSink.OnConnected(" in line or \
-           ("void OnConnected(" in line and "IConnectionEventSink" not in line):
-            # Allow detection of both explicit and implicit interface methods
-            in_method = True
-            brace_depth = 0
-            continue
-
-        if in_method:
-            brace_depth += line.count("{") - line.count("}")
-            if "RegisterCallbacks(this)" in line:
-                found_register = True
-            if brace_depth < 0:
-                break
-
-    assert found_register, (
-        "RegisterCallbacks(this) must appear inside OnConnected() — this is the only correct injection "
-        "window; connection is live at this point (Epic 3 Retro P2, AC 1)"
+    assert "RegisterCallbacks(new SessionBoundReducerEventSink(this, sessionId))" in handle_connected_body, (
+        "Reducer callback wiring must appear inside OnConnected() — runtime hardening still requires the live "
+        "connection injection window, but now through a session-bound sink (Epic 3 Retro P2, AC 1)."
     )
 
 

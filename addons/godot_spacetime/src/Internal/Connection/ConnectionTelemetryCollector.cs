@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using GodotSpacetime.Connection;
 
 namespace GodotSpacetime.Runtime.Connection;
@@ -7,46 +8,165 @@ internal sealed class ConnectionTelemetryCollector
 {
     internal const string SdkClientMessageBsatnSource = "sdk_client_message_bsatn";
 
+    private readonly object _gate = new();
     private readonly ConnectionTelemetryStats _stats = new();
-    private DateTimeOffset? _connectedAtUtc;
-    private DateTimeOffset? _rateBaselineUtc;
+    private long _activeSessionId;
+    private long? _connectedAtTimestamp;
+    private long? _rateBaselineTimestamp;
     private long _rateBaselineMessagesReceived;
     private long _rateBaselineMessagesSent;
     private long _rateBaselineBytesReceived;
     private long _rateBaselineBytesSent;
+    private long _trackerBaselineMessagesSent;
+    private long _trackerBaselineMessagesReceived;
+    private bool _trackerBaselineArmed;
+    private string _bytesSentSource = string.Empty;
 
     internal ConnectionTelemetryStats CurrentTelemetry
     {
         get
         {
-            RefreshUptime();
-            RefreshRates();
-            return _stats;
+            lock (_gate)
+            {
+                var now = Stopwatch.GetTimestamp();
+                RefreshUptime(now);
+                RefreshRates(now);
+                return _stats;
+            }
         }
     }
 
-    internal string BytesSentSource { get; private set; } = string.Empty;
-
-    internal bool HasProvenOutboundBytes =>
-        string.Equals(BytesSentSource, SdkClientMessageBsatnSource, StringComparison.Ordinal);
-
-    internal void StartSession()
+    internal string BytesSentSource
     {
-        Reset();
-        _connectedAtUtc = DateTimeOffset.UtcNow;
-        _rateBaselineUtc = _connectedAtUtc;
-        RefreshUptime();
+        get
+        {
+            lock (_gate)
+                return _bytesSentSource;
+        }
+    }
+
+    internal bool HasProvenOutboundBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return string.Equals(_bytesSentSource, SdkClientMessageBsatnSource, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    internal void StartSession(long sessionId)
+    {
+        if (sessionId <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sessionId), "Telemetry session ids must be positive.");
+
+        lock (_gate)
+        {
+            ResetNoLock();
+            var now = Stopwatch.GetTimestamp();
+            _activeSessionId = sessionId;
+            _connectedAtTimestamp = now;
+            _rateBaselineTimestamp = now;
+            RefreshUptime(now);
+        }
     }
 
     internal void Reset()
     {
-        _connectedAtUtc = null;
-        _rateBaselineUtc = null;
+        lock (_gate)
+            ResetNoLock();
+    }
+
+    internal void RecordInboundMessage(long sessionId, int byteCount)
+    {
+        if (byteCount < 0)
+            return;
+
+        lock (_gate)
+        {
+            if (!IsActiveSession(sessionId))
+                return;
+
+            _stats.MessagesReceived += 1;
+            _stats.BytesReceived += byteCount;
+        }
+    }
+
+    internal void RecordOutboundMessage(long sessionId, long byteCount)
+    {
+        if (byteCount < 0)
+            return;
+
+        lock (_gate)
+        {
+            if (!IsActiveSession(sessionId))
+                return;
+
+            _stats.MessagesSent += 1;
+            _stats.BytesSent += byteCount;
+            _bytesSentSource = SdkClientMessageBsatnSource;
+        }
+    }
+
+    internal void InitializeTrackerBaseline(long sessionId, long messagesSent, long messagesReceived)
+    {
+        lock (_gate)
+        {
+            if (!IsActiveSession(sessionId))
+                return;
+
+            _trackerBaselineMessagesSent = Math.Max(0, messagesSent);
+            _trackerBaselineMessagesReceived = Math.Max(0, messagesReceived);
+            _trackerBaselineArmed = true;
+        }
+    }
+
+    internal void SyncTrackerCounts(long sessionId, long messagesSent, long messagesReceived)
+    {
+        lock (_gate)
+        {
+            if (!IsActiveSession(sessionId) || !_trackerBaselineArmed)
+                return;
+
+            var sessionMessagesSent = Math.Max(0L, messagesSent - _trackerBaselineMessagesSent);
+            var sessionMessagesReceived = Math.Max(0L, messagesReceived - _trackerBaselineMessagesReceived);
+
+            if (sessionMessagesSent > _stats.MessagesSent)
+                _stats.MessagesSent = sessionMessagesSent;
+
+            if (sessionMessagesReceived > _stats.MessagesReceived)
+                _stats.MessagesReceived = sessionMessagesReceived;
+        }
+    }
+
+    internal void RecordReducerRoundTrip(long sessionId, DateTimeOffset calledAt, DateTimeOffset finishedAt)
+    {
+        lock (_gate)
+        {
+            if (!IsActiveSession(sessionId))
+                return;
+
+            var elapsed = finishedAt - calledAt;
+            _stats.LastReducerRoundTripMilliseconds = elapsed.TotalMilliseconds < 0
+                ? 0
+                : elapsed.TotalMilliseconds;
+        }
+    }
+
+    private void ResetNoLock()
+    {
+        _activeSessionId = 0;
+        _connectedAtTimestamp = null;
+        _rateBaselineTimestamp = null;
         _rateBaselineMessagesReceived = 0;
         _rateBaselineMessagesSent = 0;
         _rateBaselineBytesReceived = 0;
         _rateBaselineBytesSent = 0;
-        BytesSentSource = string.Empty;
+        _trackerBaselineMessagesSent = 0;
+        _trackerBaselineMessagesReceived = 0;
+        _trackerBaselineArmed = false;
+        _bytesSentSource = string.Empty;
         _stats.MessagesSent = 0;
         _stats.MessagesReceived = 0;
         _stats.BytesSent = 0;
@@ -59,55 +179,19 @@ internal sealed class ConnectionTelemetryCollector
         _stats.BytesSentPerSecond = 0;
     }
 
-    internal void RecordInboundMessage(int byteCount)
+    private void RefreshUptime(long now)
     {
-        if (byteCount < 0)
-            return;
-
-        _stats.MessagesReceived += 1;
-        _stats.BytesReceived += byteCount;
-    }
-
-    internal void RecordOutboundMessage(long byteCount)
-    {
-        if (byteCount < 0)
-            return;
-
-        _stats.MessagesSent += 1;
-        _stats.BytesSent += byteCount;
-        BytesSentSource = SdkClientMessageBsatnSource;
-    }
-
-    internal void UpdateTrackerCounts(long messagesSent, long messagesReceived)
-    {
-        if (messagesSent > _stats.MessagesSent)
-            _stats.MessagesSent = messagesSent;
-
-        if (messagesReceived > _stats.MessagesReceived)
-            _stats.MessagesReceived = messagesReceived;
-    }
-
-    internal void RecordReducerRoundTrip(DateTimeOffset calledAt, DateTimeOffset finishedAt)
-    {
-        var elapsed = finishedAt - calledAt;
-        _stats.LastReducerRoundTripMilliseconds = elapsed.TotalMilliseconds < 0
-            ? 0
-            : elapsed.TotalMilliseconds;
-    }
-
-    private void RefreshUptime()
-    {
-        _stats.ConnectionUptimeSeconds = _connectedAtUtc.HasValue
-            ? Math.Max(0, (DateTimeOffset.UtcNow - _connectedAtUtc.Value).TotalSeconds)
+        _stats.ConnectionUptimeSeconds = _connectedAtTimestamp.HasValue
+            ? GetElapsedSeconds(_connectedAtTimestamp.Value, now)
             : 0;
     }
 
-    private void RefreshRates()
+    private void RefreshRates(long now)
     {
-        if (!_rateBaselineUtc.HasValue)
+        if (!_rateBaselineTimestamp.HasValue)
             return;
 
-        var elapsedSeconds = (DateTimeOffset.UtcNow - _rateBaselineUtc.Value).TotalSeconds;
+        var elapsedSeconds = GetElapsedSeconds(_rateBaselineTimestamp.Value, now);
         if (elapsedSeconds < 1.0)
             return;
 
@@ -120,10 +204,18 @@ internal sealed class ConnectionTelemetryCollector
         _stats.BytesSentPerSecond = Math.Max(0,
             (_stats.BytesSent - _rateBaselineBytesSent) / elapsedSeconds);
 
-        _rateBaselineUtc = DateTimeOffset.UtcNow;
+        _rateBaselineTimestamp = now;
         _rateBaselineMessagesReceived = _stats.MessagesReceived;
         _rateBaselineMessagesSent = _stats.MessagesSent;
         _rateBaselineBytesReceived = _stats.BytesReceived;
         _rateBaselineBytesSent = _stats.BytesSent;
+    }
+
+    private bool IsActiveSession(long sessionId) =>
+        sessionId > 0 && sessionId == _activeSessionId;
+
+    private static double GetElapsedSeconds(long startTimestamp, long endTimestamp)
+    {
+        return Math.Max(0, (endTimestamp - startTimestamp) / (double)Stopwatch.Frequency);
     }
 }

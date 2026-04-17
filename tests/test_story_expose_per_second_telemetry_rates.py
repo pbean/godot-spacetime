@@ -90,10 +90,11 @@ def test_collector_refreshes_rates_inside_current_telemetry_getter() -> None:
 # AC4 — Reset() clears baseline timestamp, counters, and rate stats.
 def test_collector_reset_clears_rate_baselines_and_rate_stats() -> None:
     content = _read(COLLECTOR_REL)
-    # Baseline timestamp field must be present and nullable.
-    assert "_rateBaselineUtc" in content, (
-        f"{COLLECTOR_REL} must declare a `_rateBaselineUtc` field (DateTimeOffset?) "
-        "to anchor the 1-second sliding window."
+    assert "using System.Diagnostics;" in content and "Stopwatch.GetTimestamp()" in content, (
+        f"{COLLECTOR_REL} must use Stopwatch-based elapsed timing for uptime/rate refresh."
+    )
+    assert "_rateBaselineTimestamp" in content, (
+        f"{COLLECTOR_REL} must declare a `_rateBaselineTimestamp` field to anchor the 1-second sliding window."
     )
     for baseline_field in (
         "_rateBaselineMessagesReceived",
@@ -104,18 +105,31 @@ def test_collector_reset_clears_rate_baselines_and_rate_stats() -> None:
         assert baseline_field in content, (
             f"{COLLECTOR_REL} must declare `{baseline_field}` to snapshot the last-baseline counter value."
         )
+    assert "DateTimeOffset.UtcNow" not in content, (
+        f"{COLLECTOR_REL} must not compute uptime/rate deltas from DateTimeOffset.UtcNow."
+    )
 
-    # Reset() body must zero out rate stats AND clear the baseline timestamp.
-    reset_marker = "internal void Reset()"
-    assert reset_marker in content, "Reset() signature must remain intact."
-    reset_body = content.split(reset_marker, 1)[1].split("}", 1)[0]
-    assert "_rateBaselineUtc = null" in reset_body, (
-        "Reset() must null out `_rateBaselineUtc` so the next session re-arms the baseline fresh."
+    reset_helper = content.split("private void ResetNoLock()", 1)
+    assert len(reset_helper) == 2, "ResetNoLock() must exist to centralize collector resets."
+    reset_body = reset_helper[1].split("private void RefreshUptime", 1)[0]
+    assert "_rateBaselineTimestamp = null" in reset_body, (
+        "ResetNoLock() must null out `_rateBaselineTimestamp` so the next session re-arms the baseline fresh."
     )
     for prop in NEW_RATE_PROPERTIES:
         assert f"_stats.{prop} = 0" in reset_body, (
-            f"Reset() must zero `_stats.{prop}` so a pre-reconnect read returns 0.0 immediately."
+            f"ResetNoLock() must zero `_stats.{prop}` so a pre-reconnect read returns 0.0 immediately."
         )
+
+
+def test_collector_keeps_tracker_baseline_initialization_separate_from_read_time_sync() -> None:
+    content = _read(COLLECTOR_REL)
+    assert "InitializeTrackerBaseline" in content, (
+        f"{COLLECTOR_REL} must expose a dedicated tracker-baseline initialization step at session start."
+    )
+    sync_body = content.split("internal void SyncTrackerCounts", 1)[1].split("internal void RecordReducerRoundTrip", 1)[0]
+    assert "_trackerBaselineArmed" in sync_body and "_trackerBaselineArmed = true" not in sync_body, (
+        "SyncTrackerCounts() must not arm the tracker baseline lazily on first telemetry read."
+    )
 
 
 # AC2 — all ten monitor IDs live on SpacetimeClient, registered and removed symmetrically.

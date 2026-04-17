@@ -217,8 +217,8 @@ def test_connection_service_get_rows_delegates_to_cache_adapter() -> None:
 def test_connection_service_clears_cache_view_on_connect_error() -> None:
     section = _section(
         "addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs",
-        "void IConnectionEventSink.OnConnectError(Exception error)",
-        "\n\n    void IConnectionEventSink.OnDisconnected(Exception? error)"
+        "private void HandleConnectError(long sessionId, Exception error)",
+        "\n\n    private void HandleDisconnected(long sessionId, Exception? error)"
     )
     assert "ClearCacheView();" in section, (
         "SpacetimeConnectionService.OnConnectError must clear the cache view so GetRows() cannot expose stale rows after a failed connect"

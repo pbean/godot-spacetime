@@ -117,6 +117,10 @@ def test_telemetry_runner_contract_strings_present() -> None:
         '"bytes_received"',
         '"connection_uptime_seconds"',
         '"last_reducer_round_trip_milliseconds"',
+        '"messages_received_per_second"',
+        '"messages_sent_per_second"',
+        '"bytes_received_per_second"',
+        '"bytes_sent_per_second"',
         '"performance_monitors"',
         '"monitor_matches_public_surface"',
         '"bytes_sent_proven"',
@@ -249,6 +253,10 @@ def test_connection_telemetry_e2e() -> None:
         "bytes_received",
         "connection_uptime_seconds",
         "last_reducer_round_trip_milliseconds",
+        "messages_received_per_second",
+        "messages_sent_per_second",
+        "bytes_received_per_second",
+        "bytes_sent_per_second",
         "performance_monitors",
         "monitor_matches_public_surface",
         "bytes_sent_proven",
@@ -268,6 +276,10 @@ def test_connection_telemetry_e2e() -> None:
     assert telemetry_step["bytes_received"] >= 1
     assert telemetry_step["connection_uptime_seconds"] >= 0
     assert telemetry_step["last_reducer_round_trip_milliseconds"] > 0
+    assert telemetry_step["messages_received_per_second"] >= 0
+    assert telemetry_step["messages_sent_per_second"] >= 0
+    assert telemetry_step["bytes_received_per_second"] >= 0
+    assert telemetry_step["bytes_sent_per_second"] >= 0
     assert telemetry_step["bytes_sent_source"] == "sdk_client_message_bsatn", (
         "Story 9.3 anchors outbound-byte proof to the pinned SDK ClientMessage.BSATN serializer path."
     )
@@ -283,6 +295,10 @@ def test_connection_telemetry_e2e() -> None:
     assert disconnect_step["bytes_received"] == 0
     assert disconnect_step["connection_uptime_seconds"] == 0
     assert disconnect_step["last_reducer_round_trip_milliseconds"] == 0
+    assert disconnect_step["messages_received_per_second"] == 0
+    assert disconnect_step["messages_sent_per_second"] == 0
+    assert disconnect_step["bytes_received_per_second"] == 0
+    assert disconnect_step["bytes_sent_per_second"] == 0
     assert disconnect_step["monitor_matches_public_surface"] is True
 
     assert reconnect_connect_step["stable_telemetry_instance_reused"] is True, (
@@ -296,6 +312,10 @@ def test_connection_telemetry_e2e() -> None:
     assert reconnect_step["bytes_received"] == 0
     assert reconnect_step["connection_uptime_seconds"] >= 0
     assert reconnect_step["last_reducer_round_trip_milliseconds"] == 0
+    assert reconnect_step["messages_received_per_second"] == 0
+    assert reconnect_step["messages_sent_per_second"] == 0
+    assert reconnect_step["bytes_received_per_second"] == 0
+    assert reconnect_step["bytes_sent_per_second"] == 0
     assert reconnect_step["monitor_matches_public_surface"] is True
     assert reconnect_step["bytes_sent_source"] == ""
     assert sorted(reconnect_step["performance_monitors"]) == sorted(EXPECTED_MONITOR_IDS)
