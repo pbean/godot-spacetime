@@ -8,6 +8,7 @@ const DEFAULT_QUERY_TOKEN_KEY := "token"
 
 const CLIENT_MESSAGE_SUBSCRIBE := 0
 const CLIENT_MESSAGE_UNSUBSCRIBE := 1
+const CLIENT_MESSAGE_CALL_REDUCER := 2
 
 const SERVER_MESSAGE_INITIAL_CONNECTION := 0
 const SERVER_MESSAGE_SUBSCRIBE_APPLIED := 1
@@ -104,7 +105,7 @@ static func parse_server_message(packet: PackedByteArray, is_compressed: bool = 
 		SERVER_MESSAGE_ONE_OFF_QUERY_RESULT:
 			return _raw_message("OneOffQueryResult", tag, payload)
 		SERVER_MESSAGE_REDUCER_RESULT:
-			return _raw_message("ReducerResult", tag, payload)
+			return _parse_reducer_result(tag, payload, reader)
 		SERVER_MESSAGE_PROCEDURE_RESULT:
 			return _raw_message("ProcedureResult", tag, payload)
 		_:
@@ -290,6 +291,34 @@ static func _split_bsatn_rows(rows_data: PackedByteArray, size_hint: Dictionary)
 			push_error("Unsupported BSATN row size hint kind %s." % String(size_hint.get("kind", "")))
 
 	return row_payloads
+
+
+static func _parse_reducer_result(tag: int, payload: PackedByteArray, reader) -> Dictionary:
+	var request_id: int = reader.read_u32()
+	var _unused: int = reader.read_u64()
+	var reducer_name: String = reader.read_string()
+	var status_tag: int = reader.read_u8()
+	var status: String
+	var error_message: String = ""
+	match status_tag:
+		0:
+			status = "Committed"
+		1:
+			status = "Failed"
+			error_message = reader.read_string()
+		2:
+			status = "OutOfEnergy"
+		_:
+			status = "Unknown"
+	return {
+		"kind": "ReducerResult",
+		"tag": tag,
+		"request_id": request_id,
+		"reducer_name": reducer_name,
+		"status": status,
+		"error_message": error_message,
+		"raw_payload": payload.slice(1, payload.size()),
+	}
 
 
 static func _raw_message(kind: String, tag: int, payload: PackedByteArray) -> Dictionary:
