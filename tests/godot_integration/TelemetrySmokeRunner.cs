@@ -36,6 +36,10 @@ public partial class TelemetrySmokeRunner : Node
     private static readonly StringName BytesReceivedMonitorId = new("GodotSpacetime/Connection/BytesReceived");
     private static readonly StringName UptimeSecondsMonitorId = new("GodotSpacetime/Connection/UptimeSeconds");
     private static readonly StringName LastReducerRoundTripMonitorId = new("GodotSpacetime/Reducers/LastRoundTripMilliseconds");
+    private static readonly StringName MessagesReceivedPerSecondMonitorId = new("GodotSpacetime/Connection/MessagesReceivedPerSecond");
+    private static readonly StringName MessagesSentPerSecondMonitorId = new("GodotSpacetime/Connection/MessagesSentPerSecond");
+    private static readonly StringName BytesReceivedPerSecondMonitorId = new("GodotSpacetime/Connection/BytesReceivedPerSecond");
+    private static readonly StringName BytesSentPerSecondMonitorId = new("GodotSpacetime/Connection/BytesSentPerSecond");
 
     private string _host = "";
     private string _moduleName = "";
@@ -490,6 +494,10 @@ public partial class TelemetrySmokeRunner : Node
             ["GodotSpacetime/Connection/BytesReceived"] = ReadMonitor(BytesReceivedMonitorId),
             ["GodotSpacetime/Connection/UptimeSeconds"] = ReadMonitor(UptimeSecondsMonitorId),
             ["GodotSpacetime/Reducers/LastRoundTripMilliseconds"] = ReadMonitor(LastReducerRoundTripMonitorId),
+            ["GodotSpacetime/Connection/MessagesReceivedPerSecond"] = ReadMonitor(MessagesReceivedPerSecondMonitorId),
+            ["GodotSpacetime/Connection/MessagesSentPerSecond"] = ReadMonitor(MessagesSentPerSecondMonitorId),
+            ["GodotSpacetime/Connection/BytesReceivedPerSecond"] = ReadMonitor(BytesReceivedPerSecondMonitorId),
+            ["GodotSpacetime/Connection/BytesSentPerSecond"] = ReadMonitor(BytesSentPerSecondMonitorId),
         };
 
         return new TelemetrySnapshot(

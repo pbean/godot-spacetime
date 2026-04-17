@@ -62,6 +62,12 @@ same object instance is reused across the autoload lifetime and reset in place o
 | `BytesReceived` | bytes | Inbound message bytes observed from the runtime message hook |
 | `ConnectionUptimeSeconds` | seconds | Current session uptime since the active connection opened |
 | `LastReducerRoundTripMilliseconds` | milliseconds | Most recent reducer round-trip duration from `CalledAt` to the surfaced result |
+| `MessagesReceivedPerSecond` | count/s | Rolling 1-second rate derived from `MessagesReceived`; refreshed on-read |
+| `MessagesSentPerSecond` | count/s | Rolling 1-second rate derived from `MessagesSent`; refreshed on-read |
+| `BytesReceivedPerSecond` | bytes/s | Rolling 1-second rate derived from `BytesReceived`; refreshed on-read |
+| `BytesSentPerSecond` | bytes/s | Rolling 1-second rate derived from `BytesSent`; refreshed on-read |
+
+The four `*PerSecond` properties use a 1-second minimum sliding baseline: two reads inside the same 1-second bucket return the same value, and a fresh session reads `0.0` until the first full second of uptime elapses. No per-frame timer, no push signal — the refresh happens inline with the `CurrentTelemetry` getter next to `RefreshUptime()`.
 
 The same metrics are also registered with Godot's `Performance` singleton under stable custom-monitor IDs:
 
@@ -71,10 +77,14 @@ The same metrics are also registered with Godot's `Performance` singleton under 
 - `GodotSpacetime/Connection/BytesReceived`
 - `GodotSpacetime/Connection/UptimeSeconds`
 - `GodotSpacetime/Reducers/LastRoundTripMilliseconds`
+- `GodotSpacetime/Connection/MessagesReceivedPerSecond`
+- `GodotSpacetime/Connection/MessagesSentPerSecond`
+- `GodotSpacetime/Connection/BytesReceivedPerSecond`
+- `GodotSpacetime/Connection/BytesSentPerSecond`
 
 Reset semantics are strict:
 
-- `disconnect` resets counters, uptime, and the last reducer RTT to zero immediately.
+- `disconnect` resets counters, uptime, the last reducer RTT, and the four `*PerSecond` rates to zero immediately.
 - `reconnect` starts a fresh measurement window on the same `CurrentTelemetry` object instead of carrying over prior totals.
 
 Supported-stack caveat:
