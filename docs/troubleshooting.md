@@ -147,6 +147,21 @@ DEGRADED — session experiencing issues; reconnecting (attempt N/3, backoff Xs)
 
 Matching this pattern in logs is the canonical way to observe retry progress. A symptom of **misconfiguration** — rather than a transient fault — is the session reaching `DEGRADED` and then `DISCONNECTED` on every `Connect()` attempt with the same root-cause `<error>`; this indicates the retry policy is working as intended but the underlying `Host`, `Database`, or transport configuration is wrong.
 
+### Tuning
+
+The retry budget and initial backoff are opt-in tunables on `SpacetimeSettings`. Changing either field does not mutate an already-active session; new values only take effect the next time `Connect()` is called.
+
+| Setting | Default | Effect |
+|---------|---------|--------|
+| `SpacetimeSettings.MaxReconnectAttempts` | `3` | Maximum retry attempts before transitioning from `DEGRADED` to `DISCONNECTED`. Must be at least `1`. |
+| `SpacetimeSettings.InitialBackoffSeconds` | `1.0` | First-attempt backoff; subsequent attempts double the wait (fixed 2× growth factor). Must be greater than zero. |
+
+Leaving both fields at their defaults reproduces the baseline schedule described above (`3 attempts`, `1s, 2s, 4s`). A value of `MaxReconnectAttempts=5` with `InitialBackoffSeconds=0.5` produces the schedule `0.5s, 1s, 2s, 4s, 8s` with attempt labels `1/5 … 5/5`.
+
+When `MaxReconnectAttempts` is tuned away from its default, the denominator in the `reconnecting (attempt N/M, backoff Xs)` log line reflects the configured value — so log-parsers matching the literal `N/3` should match `N/M` instead when non-default budgets are in use.
+
+Invalid values (`MaxReconnectAttempts < 1` or `InitialBackoffSeconds <= 0`) surface through the same validation-failure path used for missing `Host`/`Database`: `ConnectionStateChanged` fires with `Disconnected` and a descriptive message — no unhandled exception escapes `SpacetimeClient.Connect()`.
+
 ## Authentication
 
 Authentication failures surface through `SpacetimeClient.ConnectionStateChanged` — not as exceptions. The `ConnectionAuthState` value on the resulting `ConnectionStatus` identifies the failure category:

@@ -19,7 +19,7 @@ namespace GodotSpacetime.Runtime.Connection;
 internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnectionTelemetrySink, ISubscriptionEventSink, IRowChangeEventSink, IReducerEventSink
 {
     private readonly ConnectionStateMachine _stateMachine = new();
-    private readonly ReconnectPolicy _reconnectPolicy = new();
+    private ReconnectPolicy _reconnectPolicy = new();
     private readonly SpacetimeSdkConnectionAdapter _adapter = new();
     private readonly ConnectionTelemetryCollector _telemetryCollector = new();
     private string _host = string.Empty;
@@ -115,6 +115,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
         _credentialsProvided = !string.IsNullOrWhiteSpace(settings.Credentials);
         _restoredFromStore = restoredCredentials;   // ← track source of credentials for failure routing
+        _reconnectPolicy = new ReconnectPolicy(settings.MaxReconnectAttempts, settings.InitialBackoffSeconds);
         _reconnectPolicy.Reset();
         _activeCompressionMode = SpacetimeSdkConnectionAdapter.GetEffectiveCompressionMode(settings.CompressionMode);
 

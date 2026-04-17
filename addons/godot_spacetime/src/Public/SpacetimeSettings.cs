@@ -53,6 +53,44 @@ public partial class SpacetimeSettings : Resource
     public bool LightMode { get; set; } = false;
 
     /// <summary>
+    /// Optional opt-in preference for server-confirmed reads.
+    /// Defaults to <c>false</c> so existing projects keep the current read semantics
+    /// unless confirmed reads are explicitly enabled before connecting.
+    /// The adapter always forwards the current value to the pinned ClientSDK's
+    /// <c>WithConfirmedReads(bool)</c> during connection setup — explicit <c>false</c> is passed
+    /// when the field is left at its default, matching the SDK's explicit-configuration contract.
+    /// Changing this setting does not mutate an already-active session; the new
+    /// value only takes effect the next time a connection is opened.
+    /// </summary>
+    [Export]
+    public bool ConfirmedReads { get; set; } = false;
+
+    /// <summary>
+    /// Maximum number of reconnect attempts the internal <c>ReconnectPolicy</c> will make
+    /// after a previously <c>Connected</c> session encounters a transport error.
+    /// Defaults to <c>3</c> so existing projects keep the current retry budget.
+    /// Must be at least <c>1</c>; values less than <c>1</c> surface through the existing
+    /// validation-failure path as a <c>Disconnected</c> transition with a descriptive message.
+    /// Changing this setting does not mutate an already-active session; the new
+    /// value only takes effect the next time <c>Connect()</c> is called.
+    /// </summary>
+    [Export]
+    public int MaxReconnectAttempts { get; set; } = 3;
+
+    /// <summary>
+    /// Initial backoff (in seconds) used by the internal <c>ReconnectPolicy</c> for the first
+    /// retry attempt; subsequent attempts double the wait (fixed 2× growth factor).
+    /// Defaults to <c>1.0</c> so existing projects keep the current <c>1s/2s/4s</c> schedule.
+    /// Must be a positive finite number; values less than or equal to zero, as well as
+    /// <c>double.NaN</c>, <c>double.PositiveInfinity</c>, and <c>double.NegativeInfinity</c>, surface through
+    /// the existing validation-failure path as a <c>Disconnected</c> transition with a descriptive message.
+    /// Changing this setting does not mutate an already-active session; the new
+    /// value only takes effect the next time <c>Connect()</c> is called.
+    /// </summary>
+    [Export]
+    public double InitialBackoffSeconds { get; set; } = 1.0;
+
+    /// <summary>
     /// Optional credentials token for authenticated sessions.
     /// When set, this value is passed to <c>WithToken()</c> on the SpacetimeDB connection builder,
     /// connecting as an identified user rather than an anonymous transport.
