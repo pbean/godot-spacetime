@@ -32,6 +32,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private MessageCompressionMode _activeCompressionMode = MessageCompressionMode.None;
     private readonly SpacetimeSdkSubscriptionAdapter _subscriptionAdapter = new();
     private readonly SubscriptionRegistry _subscriptionRegistry = new();
+    private readonly Dictionary<Guid, Action> _pendingUnsubscribeThenCallbacks = new();
+    private readonly object _pendingUnsubscribeThenCallbacksGate = new();
     private readonly CacheViewAdapter _cacheViewAdapter = new();
     private readonly SpacetimeSdkRowCallbackAdapter _rowCallbackAdapter = new();
     private readonly SpacetimeSdkReducerAdapter _reducerAdapter = new();
@@ -279,8 +281,10 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     /// </summary>
     public void UnsubscribeThen(SubscriptionHandle handle, Action onEnded)
     {
-        ArgumentNullException.ThrowIfNull(handle);
-        ArgumentNullException.ThrowIfNull(onEnded);
+        if (handle == null)
+            throw new ArgumentException("handle must not be null");
+        if (onEnded == null)
+            throw new ArgumentException("onEnded must not be null");
 
         if (handle.Status == SubscriptionStatus.Closed ||
             handle.Status == SubscriptionStatus.Superseded)
@@ -288,43 +292,35 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         RemovePendingReplacementReferences(handle.HandleId);
 
-        bool sdkCallbackWired = false;
+        object? sdkSubscription = null;
         if (CurrentStatus.State == ConnectionState.Connected &&
             _subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
+            sdkSubscription = entry.SdkSubscription;
+
+        var forwardedOnEnded = RegisterPendingUnsubscribeThenCallback(handle.HandleId, onEnded);
+
+        // Preserve Unsubscribe() symmetry before any completion callback can fire:
+        // callers observe the handle as terminal immediately after return, and a
+        // synchronously-invoked SDK callback cannot see the handle as still Active.
+        handle.Close();
+        _subscriptionRegistry.Unregister(handle.HandleId);
+
+        bool sdkCallbackWired = false;
+        if (CurrentStatus.State == ConnectionState.Connected)
         {
-            if (_subscriptionAdapter.TryUnsubscribeThen(entry.SdkSubscription, onEnded))
+            if (_subscriptionAdapter.TryUnsubscribeThen(sdkSubscription, forwardedOnEnded))
             {
                 RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
                 sdkCallbackWired = true;
             }
-            else if (_subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription))
+            else if (_subscriptionAdapter.TryUnsubscribe(sdkSubscription))
             {
                 RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
             }
         }
 
-        handle.Close();
-        _subscriptionRegistry.Unregister(handle.HandleId);
-
         if (!sdkCallbackWired)
-        {
-            // disconnected or adapter fallback — fire inline.
-            // A user-supplied onEnded throwing must not escape the public Unsubscribe path,
-            // so absorb any exception and surface it via SpacetimeLog rather than unwinding
-            // back into SpacetimeClient.UnsubscribeThen.
-            try
-            {
-                onEnded();
-            }
-            catch (Exception ex)
-            {
-                SpacetimeLog.Error(
-                    LogCategory.Subscription,
-                    "UnsubscribeThen completion callback threw on the inline dispatch path; the exception " +
-                    "was absorbed to preserve the public Unsubscribe no-throw contract.",
-                    ex);
-            }
-        }
+            forwardedOnEnded();
     }
 
     /// <summary>
@@ -571,6 +567,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         Volatile.Write(ref _currentTransportSessionId, 0);
         Volatile.Write(ref _activeTelemetrySessionId, 0);
         _subscriptionRegistry.Clear();
+        CancelPendingUnsubscribeThenCallbacks();
         _pendingReplacements.Clear();
         ClearCacheView();
         _rowCallbackAdapter.ClearRegistration();
@@ -838,6 +835,46 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         foreach (var pendingHandleId in pendingHandlesToRemove)
             _pendingReplacements.Remove(pendingHandleId);
+    }
+
+    private Action RegisterPendingUnsubscribeThenCallback(Guid handleId, Action onEnded)
+    {
+        lock (_pendingUnsubscribeThenCallbacksGate)
+            _pendingUnsubscribeThenCallbacks[handleId] = onEnded;
+
+        return () => DispatchPendingUnsubscribeThenCallback(handleId);
+    }
+
+    private void DispatchPendingUnsubscribeThenCallback(Guid handleId)
+    {
+        Action? callback = null;
+        lock (_pendingUnsubscribeThenCallbacksGate)
+        {
+            if (_pendingUnsubscribeThenCallbacks.TryGetValue(handleId, out callback))
+                _pendingUnsubscribeThenCallbacks.Remove(handleId);
+        }
+
+        if (callback == null)
+            return;
+
+        try
+        {
+            callback();
+        }
+        catch (Exception ex)
+        {
+            SpacetimeLog.Error(
+                LogCategory.Subscription,
+                "UnsubscribeThen completion callback threw; the exception was absorbed to preserve " +
+                "the public Unsubscribe no-throw contract.",
+                ex);
+        }
+    }
+
+    private void CancelPendingUnsubscribeThenCallbacks()
+    {
+        lock (_pendingUnsubscribeThenCallbacksGate)
+            _pendingUnsubscribeThenCallbacks.Clear();
     }
 
     private void RunConnectionTeardown(Action teardown)

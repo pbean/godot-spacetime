@@ -220,6 +220,9 @@ public partial class SpacetimeClient : Node
     ///
     /// When connected, the callback fires after the SDK confirms the subscription has ended.
     /// When disconnected, the callback fires inline (no server round-trip is possible).
+    /// If the session disconnects after the unsubscribe request is issued but before the SDK
+    /// surfaces its ended callback, <paramref name="onEnded"/> is cancelled rather than
+    /// synthesized locally, matching the official SpacetimeDB C#/Unity SDK behavior.
     /// In either case, the callback is dispatched via the existing signal-adapter path so
     /// scene code can safely touch the scene tree from the handler.
     /// </summary>
@@ -227,13 +230,12 @@ public partial class SpacetimeClient : Node
     {
         try
         {
-            if (_signalAdapter == null)
-            {
-                _connectionService.UnsubscribeThen(handle, onEnded);
-                return;
-            }
+            if (handle == null)
+                throw new ArgumentException("handle must not be null");
+            if (onEnded == null)
+                throw new ArgumentException("onEnded must not be null");
 
-            var adapter = _signalAdapter;
+            var adapter = _signalAdapter ??= new GodotSignalAdapter(this);
             _connectionService.UnsubscribeThen(handle, () => adapter.Dispatch(onEnded));
         }
         catch (ArgumentException ex)
