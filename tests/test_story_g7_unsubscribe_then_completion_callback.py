@@ -7,8 +7,9 @@ Structural contract tests covering:
 - SpacetimeConnectionService.UnsubscribeThen sibling to Unsubscribe: idempotent on
   Closed/Superseded, removes pending-replacement references, routes connected
   branch through TryUnsubscribeThen, falls back to inline GodotSignalAdapter.Dispatch
-  when disconnected or when the adapter returns false; closes handle and unregisters
-  (AC 1, 2, 3, 5).
+  when disconnected or when the adapter returns false; closes handle and unregisters;
+  pending completion callbacks are canceled on disconnect to match the official
+  C#/Unity SDK (AC 1, 2, 3, 5).
 - SpacetimeSdkSubscriptionAdapter.TryUnsubscribeThen(object?, Action): reflects
   UnsubscribeThen(Action<T>) via Expression.Lambda, warns + returns false on null
   input, missing method, or invocation failure (AC 1, 5).
@@ -108,10 +109,10 @@ def test_connection_service_declares_unsubscribe_then() -> None:
 def test_connection_service_unsubscribe_then_validates_null_args() -> None:
     content = _read(SERVICE_CS)
     body = _method_body(content, "public void UnsubscribeThen(")
-    assert "ArgumentNullException.ThrowIfNull(handle)" in body, (
+    assert '"handle must not be null"' in body, (
         "UnsubscribeThen must reject null handle (AC 4)"
     )
-    assert "ArgumentNullException.ThrowIfNull(onEnded)" in body, (
+    assert '"onEnded must not be null"' in body, (
         "UnsubscribeThen must reject null onEnded callback (AC 4)"
     )
 
@@ -157,7 +158,7 @@ def test_connection_service_unsubscribe_then_inline_dispatch_fallback() -> None:
     how other SDK events reach the main thread."""
     content = _read(SERVICE_CS)
     body = _method_body(content, "public void UnsubscribeThen(")
-    assert "onEnded()" in body, (
+    assert "forwardedOnEnded()" in body, (
         "UnsubscribeThen must invoke the forwarded onEnded callback in the "
         "disconnected and adapter-fallback branches (AC 2, 5)"
     )
@@ -169,9 +170,16 @@ def test_spacetime_client_unsubscribe_then_dispatches_on_main_thread() -> None:
     UnsubscribeThen fires from the receive thread or an inline service path."""
     content = _read(CLIENT_CS)
     body = _method_body(content, "public void UnsubscribeThen(")
-    assert "_signalAdapter" in body and "Dispatch" in body, (
+    assert "_signalAdapter ??= new GodotSignalAdapter(this)" in body, (
+        "SpacetimeClient.UnsubscribeThen must ensure a GodotSignalAdapter exists even before _EnterTree "
+        "so the callback is always main-thread dispatched"
+    )
+    assert "Dispatch" in body, (
         "SpacetimeClient.UnsubscribeThen must wrap onEnded with _signalAdapter.Dispatch "
         "to guarantee main-thread delivery (AC 1, 2, 5)"
+    )
+    assert "_connectionService.UnsubscribeThen(handle, onEnded);" not in body, (
+        "SpacetimeClient.UnsubscribeThen must not forward the raw callback and bypass main-thread dispatch"
     )
 
 
@@ -181,7 +189,7 @@ def test_connection_service_unsubscribe_then_falls_back_to_try_unsubscribe() -> 
     I/O matrix's 'SDK lacks reflectable UnsubscribeThen' row."""
     content = _read(SERVICE_CS)
     body = _method_body(content, "public void UnsubscribeThen(")
-    assert "TryUnsubscribe(entry.SdkSubscription)" in body, (
+    assert "TryUnsubscribe(sdkSubscription)" in body, (
         "UnsubscribeThen must fall back to TryUnsubscribe when TryUnsubscribeThen returns false (AC 5)"
     )
 
@@ -194,6 +202,20 @@ def test_connection_service_unsubscribe_then_closes_handle_and_unregisters() -> 
     )
     assert "_subscriptionRegistry.Unregister(handle.HandleId)" in body, (
         "UnsubscribeThen must unregister the handle like Unsubscribe (AC 1, 2)"
+    )
+
+
+def test_connection_service_unsubscribe_then_marks_terminal_before_wiring_sdk_callback() -> None:
+    """If the SDK invokes UnsubscribeThen synchronously, the callback must already
+    observe a terminal handle state and a clean registry."""
+    content = _read(SERVICE_CS)
+    body = _method_body(content, "public void UnsubscribeThen(")
+    close_pos = body.find("handle.Close()")
+    wire_pos = body.find("TryUnsubscribeThen(")
+    assert close_pos != -1 and wire_pos != -1, "UnsubscribeThen must both close the handle and try SDK UnsubscribeThen"
+    assert close_pos < wire_pos, (
+        "UnsubscribeThen must mark the handle terminal before wiring the SDK callback so a synchronous "
+        "ended callback cannot observe stale Active state"
     )
 
 
@@ -271,14 +293,14 @@ def test_adapter_try_unsubscribe_then_warns_on_failure_and_returns_false() -> No
 def test_connection_service_unsubscribe_then_absorbs_user_callback_exceptions() -> None:
     """A user-supplied onEnded that throws on the inline dispatch path must not escape
     the public Unsubscribe no-throw contract — absorb and surface via SpacetimeLog.Error."""
-    content = _read(SERVICE_CS)
-    body = _method_body(content, "public void UnsubscribeThen(")
-    assert "try" in body and "catch (Exception" in body, (
-        "UnsubscribeThen inline invocation must wrap onEnded() in try/catch so user-thrown "
-        "exceptions do not escape the public API (matches Unsubscribe's no-throw contract)"
+    content = _strip(SERVICE_CS)
+    assert "private void DispatchPendingUnsubscribeThenCallback( Guid handleId )" in content \
+        or "private void DispatchPendingUnsubscribeThenCallback(Guid handleId)" in content, (
+        "UnsubscribeThen must route completion dispatch through a helper that can absorb user exceptions "
+        "and enforce exactly-once behavior"
     )
-    assert "SpacetimeLog.Error" in body, (
-        "UnsubscribeThen must surface user-callback exceptions via SpacetimeLog.Error"
+    assert "SpacetimeLog.Error" in content, (
+        "UnsubscribeThen completion dispatch must surface user-callback exceptions via SpacetimeLog.Error"
     )
 
 
@@ -333,4 +355,38 @@ def test_connection_service_unsubscribe_then_does_not_reference_spacetimedb_sdk(
     body = _method_body(content, "public void UnsubscribeThen(")
     assert "SpacetimeDB." not in body, (
         "SpacetimeConnectionService.UnsubscribeThen must not reference SpacetimeDB.* types (Always rule)"
+    )
+
+
+def test_spacetime_client_unsubscribe_then_validates_before_wrapping() -> None:
+    content = _read(CLIENT_CS)
+    body = _method_body(content, "public void UnsubscribeThen(")
+    assert '"handle must not be null"' in body, (
+        "SpacetimeClient.UnsubscribeThen must preserve the public handle-validation message before wrapping"
+    )
+    assert '"onEnded must not be null"' in body, (
+        "SpacetimeClient.UnsubscribeThen must validate the raw user callback before wrapping so null remains observable"
+    )
+
+
+def test_connection_service_tracks_pending_unsubscribe_then_callbacks_for_exactly_once_dispatch() -> None:
+    content = _read(SERVICE_CS)
+    assert "_pendingUnsubscribeThenCallbacks" in content, (
+        "SpacetimeConnectionService must track pending UnsubscribeThen callbacks so sdk and fallback paths "
+        "can share exactly-once dispatch"
+    )
+    assert "RegisterPendingUnsubscribeThenCallback(" in content, (
+        "UnsubscribeThen must register a pending callback before wiring the sdk/fallback paths"
+    )
+    assert "DispatchPendingUnsubscribeThenCallback(" in content, (
+        "UnsubscribeThen must dispatch through a shared helper to avoid duplicate callback delivery"
+    )
+
+
+def test_connection_service_disconnect_cancels_pending_unsubscribe_then_callbacks() -> None:
+    content = _read(SERVICE_CS)
+    body = _method_body(content, "private void ResetDisconnectedSessionState()")
+    assert "CancelPendingUnsubscribeThenCallbacks()" in body or "_pendingUnsubscribeThenCallbacks.Clear()" in body, (
+        "Disconnect teardown must cancel pending UnsubscribeThen completion callbacks to match the official "
+        "C#/Unity SDK semantics when disconnect wins before UnsubscribeApplied"
     )
