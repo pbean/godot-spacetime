@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import socket
 import subprocess
 from dataclasses import dataclass
 
@@ -22,6 +23,15 @@ DEFAULT_SPACETIME_SERVER = "local"
 # Binary name preference order. godot-mono is the test's required harness,
 # but plain `godot` is accepted when it was built with mono support.
 GODOT_BINARY_CANDIDATES = ("godot-mono", "godot4-mono", "godot", "godot4")
+BROWSER_BINARY_CANDIDATES = (
+    "chromium",
+    "chromium-browser",
+    "google-chrome",
+    "google-chrome-stable",
+    "chrome",
+    "microsoft-edge",
+    "microsoft-edge-stable",
+)
 
 
 @dataclass(frozen=True)
@@ -128,6 +138,92 @@ def probe_godot_binary() -> ProbeResult:
             reason=f"{resolved} --version exited with {result.returncode}",
         )
     return ProbeResult(available=True, path=resolved)
+
+
+def probe_browser_binary() -> ProbeResult:
+    """Return whether a Chromium-family browser is discoverable and runnable.
+
+    The optional `BROWSER_BIN` environment variable takes precedence. The
+    browser is validated via `--version` because Story 11.5's browser/export
+    lane must skip cleanly instead of assuming a GUI browser is installed.
+    """
+    override = os.environ.get("BROWSER_BIN")
+    candidates: tuple[str, ...]
+    if override:
+        candidates = (override,)
+    else:
+        candidates = BROWSER_BINARY_CANDIDATES
+
+    resolved: str | None = None
+    for candidate in candidates:
+        found = shutil.which(candidate) if os.path.basename(candidate) == candidate else (
+            candidate if os.path.isfile(candidate) and os.access(candidate, os.X_OK) else None
+        )
+        if found:
+            resolved = found
+            break
+
+    if resolved is None:
+        return ProbeResult(
+            available=False,
+            reason=f"no Chromium-family browser found on PATH (tried {', '.join(candidates)})",
+        )
+
+    try:
+        result = subprocess.run(
+            [resolved, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        return ProbeResult(
+            available=False,
+            reason=f"browser binary at {resolved} disappeared before exec",
+        )
+    except subprocess.TimeoutExpired:
+        return ProbeResult(
+            available=False,
+            reason="browser --version timed out after 15s",
+        )
+    if result.returncode != 0:
+        return ProbeResult(
+            available=False,
+            reason=f"{resolved} --version exited with {result.returncode}",
+        )
+    return ProbeResult(available=True, path=resolved)
+
+
+def probe_loopback_http() -> ProbeResult:
+    """Return whether the current environment can bind a local HTTP server.
+
+    Story 11.5's browser lane must serve exported files over HTTP rather than
+    `file://`. This probe stays discovery-only: it binds an ephemeral socket,
+    captures the assigned port, and then closes immediately without serving.
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    except OSError as exc:
+        return ProbeResult(
+            available=False,
+            reason=f"loopback HTTP socket creation failed: {exc}",
+        )
+
+    try:
+        sock.bind(("127.0.0.1", 0))
+        host, port = sock.getsockname()
+    except OSError as exc:
+        return ProbeResult(
+            available=False,
+            reason=f"loopback HTTP bind failed on 127.0.0.1: {exc}",
+        )
+    finally:
+        sock.close()
+
+    return ProbeResult(
+        available=True,
+        host=f"http://{host}:{port}",
+    )
 
 
 def probe_local_runtime(spacetime_cli_path: str) -> ProbeResult:

@@ -31,6 +31,11 @@ GDSCRIPT_DIR = (
 SERVICE_PATH = GDSCRIPT_DIR / "gdscript_connection_service.gd"
 PROTOCOL_PATH = GDSCRIPT_DIR / "connection_protocol.gd"
 WRITER_PATH = GDSCRIPT_DIR / "bsatn_writer.gd"
+FIXTURE_DIR = ROOT / "tests" / "fixtures" / "gdscript_generated" / "smoke_test"
+FIXTURE_README = FIXTURE_DIR / "README.md"
+FIXTURE_REMOTE_REDUCERS = FIXTURE_DIR / "remote_reducers.gd"
+FIXTURE_CLIENT = FIXTURE_DIR / "spacetimedb_client.gd"
+FIXTURE_TABLES_DIR = FIXTURE_DIR / "Tables"
 
 REDUCER_PARSER_PROBE_PATH = ROOT / "tests" / "godot_integration" / "gdscript_reducer_parser_probe.gd"
 REDUCER_PARSER_PROBE_SCENE_PATH = "res://tests/godot_integration/gdscript_reducer_parser_probe.tscn"
@@ -243,6 +248,24 @@ def test_story_11_4_smoke_harness_files_exist() -> None:
     smoke_tscn = ROOT / "tests" / "godot_integration" / "gdscript_reducer_smoke.tscn"
     assert smoke_gd.exists(), "gdscript_reducer_smoke.gd missing under tests/godot_integration/"
     assert smoke_tscn.exists(), "gdscript_reducer_smoke.tscn missing under tests/godot_integration/"
+
+
+def test_story_11_4_generated_fixture_surface_exists() -> None:
+    required = [
+        FIXTURE_README,
+        FIXTURE_REMOTE_REDUCERS,
+        FIXTURE_CLIENT,
+        FIXTURE_TABLES_DIR,
+    ]
+    missing = [str(path.relative_to(ROOT)) for path in required if not path.exists()]
+    assert not missing, (
+        "Story 11.4 regression coverage must keep validating the Story 11.5 generated fixture surface. "
+        f"Missing {missing}"
+    )
+    for path in (FIXTURE_REMOTE_REDUCERS, FIXTURE_CLIENT):
+        content = _read(path)
+        assert "AUTOMATICALLY GENERATED" in content
+        assert "WILL NOT BE SAVED" in content
 
 
 def test_story_11_4_reducer_parser_probe_exists() -> None:

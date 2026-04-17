@@ -251,12 +251,12 @@ func _first_value_for(expected_value: String) -> String:
 		return ""
 
 	for row in remote_tables.SmokeTest.iter():
-		if String(row.get("value", "")) == expected_value:
-			return String(row.get("value", ""))
+		if String(_row_value(row, "value")) == expected_value:
+			return String(_row_value(row, "value"))
 
 	for row in _service.get_rows("SmokeTest"):
-		if String(row.get("value", "")) == expected_value:
-			return String(row.get("value", ""))
+		if String(_row_value(row, "value")) == expected_value:
+			return String(_row_value(row, "value"))
 
 	return ""
 
@@ -293,7 +293,7 @@ func _emit_event(event_name: String, fields: Dictionary = {}) -> void:
 		"event": event_name,
 	}
 	for key in fields.keys():
-		payload[key] = fields[key]
+		payload[key] = _normalize_for_json(fields[key])
 	print("%s%s" % [EVENT_PREFIX, JSON.stringify(payload)])
 
 
@@ -318,6 +318,33 @@ func _finish(passed: bool) -> void:
 		"status": "ok" if passed else "error",
 	})])
 	get_tree().quit(0 if passed else 1)
+
+
+func _row_value(row, field_name: String):
+	if row == null:
+		return null
+	if row is Dictionary:
+		return row.get(field_name, null)
+	if row.has_method("to_dictionary"):
+		var as_dict = row.to_dictionary()
+		return as_dict.get(field_name, null)
+	return null
+
+
+func _normalize_for_json(value):
+	if value is Dictionary:
+		var normalized := {}
+		for key in value.keys():
+			normalized[key] = _normalize_for_json(value[key])
+		return normalized
+	if value is Array:
+		var normalized_array: Array = []
+		for item in value:
+			normalized_array.append(_normalize_for_json(item))
+		return normalized_array
+	if value != null and value.has_method("to_dictionary"):
+		return _normalize_for_json(value.to_dictionary())
+	return value
 
 
 func _now_seconds() -> float:

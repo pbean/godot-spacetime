@@ -25,8 +25,11 @@ The supported baseline is Godot `4.6.2`, `.NET 8.0+`, and SpacetimeDB `2.1+`. Se
 | `"Generate from Server"` shows `FAILED — spacetime CLI not found in PATH` | `spacetime` CLI not installed or not exported on `PATH` | Install the SpacetimeDB CLI `2.1+` and restart the editor so `spacetime` is discoverable |
 | `"Generate from Server"` shows `FAILED — generation error (see recovery guidance)` and mentions `python3` | `python3` is not installed or not exported on `PATH` for the Godot editor process | Install `python3`, confirm `python3 --version` works in the same shell/session, then retry generation |
 | `spacetime` CLI command not found | SpacetimeDB CLI not installed | Install the SpacetimeDB CLI `2.1+` |
+| Native GDScript fixture bindings are missing under `tests/fixtures/gdscript_generated/smoke_test/` | Story 11.5's repo-owned emitter has not been run yet | Run `bash scripts/codegen/generate-gdscript-smoke-test.sh` from the repository root |
+| Attempting `spacetime generate --lang gdscript` fails | The pinned upstream CLI has no native GDScript target | Use `bash scripts/codegen/generate-gdscript-smoke-test.sh`; it runs the supported C# frontend first and then `generate-gdscript-bindings.py` |
 
 Running `bash scripts/codegen/generate-smoke-test.sh` clears the previous output before regenerating — no manual cleanup is required. Generated bindings are written to `demo/generated/smoke_test/`.
+Running `bash scripts/codegen/generate-gdscript-smoke-test.sh` clears and regenerates the read-only GDScript fixture at `tests/fixtures/gdscript_generated/smoke_test/`.
 
 See `docs/codegen.md` for the full generation workflow and module locations.
 
@@ -237,6 +240,20 @@ See `docs/runtime-boundaries.md` for the complete reducer error model and `Reduc
 ### Scheduled Reducers
 
 If a scheduled reducer is not firing, verify that a row has been inserted into the corresponding scheduled table with a valid `ScheduleAt` value (e.g., `new SpacetimeDB.ScheduleAt.Interval(new SpacetimeDB.TimeDuration(microseconds))`). Scheduled reducers are server-triggered — they do not appear in `RemoteReducers` and cannot be invoked directly with `InvokeReducer()`.
+
+## Web Export (Native GDScript)
+
+Story 11.5 validates native GDScript web delivery through a dedicated pure-GDScript export fixture. It does **not** export the repo root C# / Forward Plus project.
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| Browser proof path fails before export and mentions `Compatibility` | The staged project is using the wrong renderer or the repo root C# project shape instead of the dedicated pure-GDScript fixture | Export the dedicated Story 11.5 fixture only; the project must omit the `C#` feature and use the Compatibility renderer |
+| Browser load hangs or the exported page shows a blank startup | The export was opened via `file://` instead of being served over HTTP | Serve the exported directory over local HTTP and load `index.html` from `http://127.0.0.1:...`; do not use `file://` |
+| Web export fails with a missing template message | Godot web export templates are not installed for the local Godot binary | Install the matching web export template set for the current Godot binary, then rerun the Story 11.5 browser lane |
+| Browser validation skips because no browser binary is available | Chromium/Chrome-family browser prerequisite missing | Install a supported browser binary or set `BROWSER_BIN=/path/to/browser` before rerunning the Story 11.5 web-export test |
+| Browser auth mode is reported as `authorization-header` instead of `query-token` | The validation path is not exercising the web-export auth seam correctly | In browser/web mode, validate credentials through the query-token transport path; web exports must not rely on WebSocket handshake headers |
+
+The Story 11.5 web-export proof path is skip-safe by design. Missing local runtime access, missing browser binaries, missing export templates, or loopback HTTP restrictions should skip the browser lane with explicit prerequisite messages instead of failing the entire static suite.
 
 ## See Also
 

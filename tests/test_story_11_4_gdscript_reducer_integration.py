@@ -27,8 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENE_PATH = "res://tests/godot_integration/gdscript_reducer_smoke.tscn"
 SCENE = ROOT / "tests" / "godot_integration" / "gdscript_reducer_smoke.tscn"
 RUNNER = ROOT / "tests" / "godot_integration" / "gdscript_reducer_smoke.gd"
-FIXTURE_REMOTE_TABLES = (
-    ROOT / "tests" / "fixtures" / "gdscript_generated" / "smoke_test" / "remote_tables.gd"
+FIXTURE_CLIENT = (
+    ROOT / "tests" / "fixtures" / "gdscript_generated" / "smoke_test" / "spacetimedb_client.gd"
 )
 EVENT_PREFIX = "E2E-EVENT "
 STEP_TIMEOUT_SECONDS = 45
@@ -82,8 +82,8 @@ def _parse_events_from_stdout(stdout: bytes) -> list[dict]:
 def test_story_11_4_smoke_harness_files_exist() -> None:
     assert SCENE.exists(), "gdscript_reducer_smoke.tscn missing under tests/godot_integration/"
     assert RUNNER.exists(), "gdscript_reducer_smoke.gd missing under tests/godot_integration/"
-    assert FIXTURE_REMOTE_TABLES.exists(), (
-        "remote_tables.gd missing under tests/fixtures/gdscript_generated/smoke_test/"
+    assert FIXTURE_CLIENT.exists(), (
+        "spacetimedb_client.gd missing under tests/fixtures/gdscript_generated/smoke_test/"
     )
 
 
@@ -105,7 +105,9 @@ def test_story_11_4_runner_contract_strings_present() -> None:
         '"reducer_call_succeeded"',
         '"reducer_call_failed"',
         '"returned_empty_invocation_id"',
-        "invoke_reducer",
+        "spacetimedb_client.gd",
+        "reducers.ping",
+        "reducers.ping_insert",
         "contract_count",
         EVENT_PREFIX,
     ):
@@ -119,7 +121,7 @@ def test_story_11_4_runner_uses_native_gdscript_reducer_lane() -> None:
     content = RUNNER.read_text(encoding="utf-8")
     for expected in (
         "gdscript_connection_service.gd",
-        "remote_tables.gd",
+        "spacetimedb_client.gd",
         "configure_bindings",
         "reducer_call_succeeded.connect",
         "reducer_call_failed.connect",

@@ -2,8 +2,7 @@ extends Node
 
 const EVENT_PREFIX := "E2E-EVENT "
 const ConnectionServiceScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd")
-const RemoteTablesScript = preload("res://tests/fixtures/gdscript_generated/smoke_test/remote_tables.gd")
-const BsatnWriterScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/bsatn_writer.gd")
+const SpacetimeClientScript = preload("res://tests/fixtures/gdscript_generated/smoke_test/spacetimedb_client.gd")
 
 enum Phase {
 	NONE,
@@ -22,7 +21,7 @@ var _value: String = ""
 var _step_timeout_seconds: float = 45.0
 
 var _service = null
-var _bindings = null
+var _client = null
 var _phase: Phase = Phase.NONE
 var _phase_started_at: float = 0.0
 var _finished: bool = false
@@ -53,8 +52,8 @@ func _ready() -> void:
 		return
 
 	_service = ConnectionServiceScript.new()
-	_bindings = RemoteTablesScript.new()
-	var configure_result: int = _service.configure_bindings(_bindings)
+	_client = SpacetimeClientScript.new(_service)
+	var configure_result: int = _service.configure_bindings(_client)
 	if configure_result != OK:
 		_fail("bootstrap", "configure_bindings failed: %s" % error_string(configure_result))
 		return
@@ -118,9 +117,9 @@ func _on_subscription_applied(_event: Dictionary) -> void:
 	})
 
 	_set_phase(Phase.WAIT_PING_RESULT)
-	_ping_invocation_id = _service.invoke_reducer("ping", PackedByteArray())
+	_ping_invocation_id = _client.reducers.ping()
 	if _ping_invocation_id.is_empty():
-		_fail("invoke_ping", "invoke_reducer('ping', ...) returned empty invocation_id")
+		_fail("invoke_ping", "reducers.ping() returned empty invocation_id")
 
 
 func _on_reducer_call_succeeded(event: Dictionary) -> void:
@@ -141,11 +140,9 @@ func _on_reducer_call_succeeded(event: Dictionary) -> void:
 		})
 
 		_set_phase(Phase.WAIT_PING_INSERT_RESULT)
-		var writer = BsatnWriterScript.new()
-		writer.write_string(_value)
-		_ping_insert_invocation_id = _service.invoke_reducer("ping_insert", writer.get_bytes())
+		_ping_insert_invocation_id = _client.reducers.ping_insert(_value)
 		if _ping_insert_invocation_id.is_empty():
-			_fail("invoke_ping_insert", "invoke_reducer('ping_insert', ...) returned empty invocation_id")
+			_fail("invoke_ping_insert", "reducers.ping_insert(...) returned empty invocation_id")
 		return
 
 	if _phase == Phase.WAIT_PING_INSERT_RESULT and invocation_id == _ping_insert_invocation_id:
@@ -184,7 +181,7 @@ func _on_row_changed(event: Dictionary) -> void:
 		return
 
 	var new_row = event.get("new_row")
-	if new_row == null or String(new_row.get("value", "")) != _value:
+	if new_row == null or String(_row_value(new_row, "value")) != _value:
 		return
 
 	_ping_insert_row_observed = true
@@ -284,6 +281,17 @@ func _finish(passed: bool) -> void:
 		"status": "ok" if passed else "error",
 	})])
 	get_tree().quit(0 if passed else 1)
+
+
+func _row_value(row, field_name: String):
+	if row == null:
+		return null
+	if row is Dictionary:
+		return row.get(field_name, null)
+	if row.has_method("to_dictionary"):
+		var as_dict = row.to_dictionary()
+		return as_dict.get(field_name, null)
+	return null
 
 
 func _now_seconds() -> float:

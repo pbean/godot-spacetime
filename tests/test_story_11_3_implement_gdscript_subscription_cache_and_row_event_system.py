@@ -36,9 +36,12 @@ ROW_EVENT_PATH = GDSCRIPT_DIR / "gdscript_row_changed_event.gd"
 TABLE_CONTRACT_PATH = GDSCRIPT_DIR / "gdscript_table_contract.gd"
 
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "gdscript_generated" / "smoke_test"
+FIXTURE_README = FIXTURE_DIR / "README.md"
 FIXTURE_REMOTE_TABLES = FIXTURE_DIR / "remote_tables.gd"
-FIXTURE_SMOKE_TEST = FIXTURE_DIR / "smoke_test_table.gd"
-FIXTURE_TYPED_ENTITY = FIXTURE_DIR / "typed_entity_table.gd"
+FIXTURE_REMOTE_REDUCERS = FIXTURE_DIR / "remote_reducers.gd"
+FIXTURE_CLIENT = FIXTURE_DIR / "spacetimedb_client.gd"
+FIXTURE_SMOKE_TEST = FIXTURE_DIR / "Tables" / "smoke_test_table.gd"
+FIXTURE_TYPED_ENTITY = FIXTURE_DIR / "Tables" / "typed_entity_table.gd"
 
 PARSER_PROBE_PATH = ROOT / "tests" / "godot_integration" / "gdscript_protocol_parser_probe.gd"
 PARSER_PROBE_SCENE_PATH = "res://tests/godot_integration/gdscript_protocol_parser_probe.tscn"
@@ -238,7 +241,10 @@ def test_story_11_3_protocol_reuses_story_11_1_helpers_and_single_compression_la
 
 def test_story_11_3_fixture_bindings_stay_outside_addon_shipping_boundary() -> None:
     required = [
+        FIXTURE_README,
         FIXTURE_REMOTE_TABLES,
+        FIXTURE_REMOTE_REDUCERS,
+        FIXTURE_CLIENT,
         FIXTURE_SMOKE_TEST,
         FIXTURE_TYPED_ENTITY,
     ]
@@ -252,6 +258,21 @@ def test_story_11_3_fixture_bindings_stay_outside_addon_shipping_boundary() -> N
         "Test-only fixture bindings must stay outside addons/ so Story 11.5 remains the shipping-codegen story. "
         f"Found unexpected addon paths: {[str(path.relative_to(ROOT)) for path in addon_generated]}"
     )
+
+
+def test_story_11_3_fixture_bindings_are_generated_artifacts() -> None:
+    readme = _read(FIXTURE_README)
+    assert "read-only" in readme
+    assert "generate-gdscript-smoke-test.sh" in readme
+
+    for path in (FIXTURE_REMOTE_TABLES, FIXTURE_REMOTE_REDUCERS, FIXTURE_CLIENT, FIXTURE_SMOKE_TEST, FIXTURE_TYPED_ENTITY):
+        content = _read(path)
+        assert "AUTOMATICALLY GENERATED" in content, (
+            f"{path.relative_to(ROOT)} must carry the Story 11.5 generated-file banner."
+        )
+        assert "WILL NOT BE SAVED" in content, (
+            f"{path.relative_to(ROOT)} must preserve the Story 11.5 read-only warning."
+        )
 
 
 def test_story_11_3_native_gdscript_lane_avoids_dotnet_transport_and_editor_scope_creep() -> None:

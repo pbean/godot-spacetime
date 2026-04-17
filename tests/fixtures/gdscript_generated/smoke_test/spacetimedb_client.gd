@@ -2,6 +2,8 @@
 # EDITS TO THIS FILE WILL NOT BE SAVED. Regenerate with: bash scripts/codegen/generate-gdscript-smoke-test.sh
 extends RefCounted
 
+var tables = null
+var reducers = null
 var SmokeTest = null
 var TypedEntity = null
 
@@ -9,9 +11,14 @@ func _load_generated_script(relative_path: String):
 	var base_dir := get_script().resource_path.get_base_dir()
 	return load(base_dir.path_join(relative_path))
 
-func _init() -> void:
-	SmokeTest = _load_generated_script("Tables/smoke_test_table.gd").new()
-	TypedEntity = _load_generated_script("Tables/typed_entity_table.gd").new()
+func _init(connection_service = null) -> void:
+	tables = _load_generated_script("remote_tables.gd").new()
+	reducers = _load_generated_script("remote_reducers.gd").new(connection_service)
+	SmokeTest = tables.SmokeTest
+	TypedEntity = tables.TypedEntity
+
+func attach_connection(connection_service) -> void:
+	reducers.attach_connection(connection_service)
 
 func get_table_contracts() -> Array:
-	return [SmokeTest, TypedEntity]
+	return tables.get_table_contracts()
