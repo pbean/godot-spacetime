@@ -1,5 +1,6 @@
 using System;
 using Godot;
+using GodotSpacetime;
 
 namespace GodotSpacetime.Connection;
 
@@ -15,6 +16,12 @@ public partial class ConnectionOpenedEvent : RefCounted
 
     /// <summary>Server-assigned identity string for the authenticated session. Empty for anonymous connections.</summary>
     public string Identity { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Typed form of the same identity exposed by <see cref="Identity"/>.
+    /// <c>default(Identity)</c> for anonymous connections or when no identity was captured.
+    /// </summary>
+    public Identity IdentityValue { get; set; } = default;
 
     public DateTimeOffset ConnectedAt { get; set; }
 }

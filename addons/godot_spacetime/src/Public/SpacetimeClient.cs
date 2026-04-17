@@ -102,6 +102,14 @@ public partial class SpacetimeClient : Node
 
     public ConnectionStatus CurrentStatus => _currentStatus;
 
+    /// <summary>
+    /// The server-assigned identity of the live session, or <c>null</c> when
+    /// <see cref="ConnectionState"/> is not <c>Connected</c>. Resets to <c>null</c>
+    /// on every teardown path (explicit <c>Disconnect</c>, transport failure,
+    /// failed <c>Connect</c>). Typed form of <see cref="ConnectionOpenedEvent.Identity"/>.
+    /// </summary>
+    public Identity? CurrentIdentity => _connectionService.CurrentIdentity;
+
     public ConnectionTelemetryStats CurrentTelemetry => _connectionService.CurrentTelemetry;
 
     internal bool TelemetryBytesSentProven => _connectionService.TelemetryBytesSentProven;
