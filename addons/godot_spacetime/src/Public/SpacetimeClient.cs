@@ -38,6 +38,10 @@ public partial class SpacetimeClient : Node
     private static readonly StringName BytesReceivedMonitorId = new("GodotSpacetime/Connection/BytesReceived");
     private static readonly StringName UptimeSecondsMonitorId = new("GodotSpacetime/Connection/UptimeSeconds");
     private static readonly StringName LastReducerRoundTripMonitorId = new("GodotSpacetime/Reducers/LastRoundTripMilliseconds");
+    private static readonly StringName MessagesReceivedPerSecondMonitorId = new("GodotSpacetime/Connection/MessagesReceivedPerSecond");
+    private static readonly StringName MessagesSentPerSecondMonitorId = new("GodotSpacetime/Connection/MessagesSentPerSecond");
+    private static readonly StringName BytesReceivedPerSecondMonitorId = new("GodotSpacetime/Connection/BytesReceivedPerSecond");
+    private static readonly StringName BytesSentPerSecondMonitorId = new("GodotSpacetime/Connection/BytesSentPerSecond");
     private static readonly object LiveClientsGate = new();
     private static readonly Dictionary<string, SpacetimeClient> LiveClients = new(StringComparer.Ordinal);
     private readonly SpacetimeConnectionService _connectionService = new();
@@ -306,6 +310,10 @@ public partial class SpacetimeClient : Node
         EnsurePerformanceMonitor(BytesReceivedMonitorId, Callable.From<double>(GetBytesReceivedMonitor));
         EnsurePerformanceMonitor(UptimeSecondsMonitorId, Callable.From<double>(GetUptimeSecondsMonitor));
         EnsurePerformanceMonitor(LastReducerRoundTripMonitorId, Callable.From<double>(GetLastReducerRoundTripMonitor));
+        EnsurePerformanceMonitor(MessagesReceivedPerSecondMonitorId, Callable.From<double>(GetMessagesReceivedPerSecondMonitor));
+        EnsurePerformanceMonitor(MessagesSentPerSecondMonitorId, Callable.From<double>(GetMessagesSentPerSecondMonitor));
+        EnsurePerformanceMonitor(BytesReceivedPerSecondMonitorId, Callable.From<double>(GetBytesReceivedPerSecondMonitor));
+        EnsurePerformanceMonitor(BytesSentPerSecondMonitorId, Callable.From<double>(GetBytesSentPerSecondMonitor));
     }
 
     private void RemovePerformanceMonitors()
@@ -316,6 +324,10 @@ public partial class SpacetimeClient : Node
         RemovePerformanceMonitor(BytesReceivedMonitorId);
         RemovePerformanceMonitor(UptimeSecondsMonitorId);
         RemovePerformanceMonitor(LastReducerRoundTripMonitorId);
+        RemovePerformanceMonitor(MessagesReceivedPerSecondMonitorId);
+        RemovePerformanceMonitor(MessagesSentPerSecondMonitorId);
+        RemovePerformanceMonitor(BytesReceivedPerSecondMonitorId);
+        RemovePerformanceMonitor(BytesSentPerSecondMonitorId);
     }
 
     private static void EnsurePerformanceMonitor(StringName monitorId, Callable callable)
@@ -346,6 +358,14 @@ public partial class SpacetimeClient : Node
     private double GetUptimeSecondsMonitor() => Math.Max(0, CurrentTelemetry.ConnectionUptimeSeconds);
 
     private double GetLastReducerRoundTripMonitor() => Math.Max(0, CurrentTelemetry.LastReducerRoundTripMilliseconds);
+
+    private double GetMessagesReceivedPerSecondMonitor() => Math.Max(0, CurrentTelemetry.MessagesReceivedPerSecond);
+
+    private double GetMessagesSentPerSecondMonitor() => Math.Max(0, CurrentTelemetry.MessagesSentPerSecond);
+
+    private double GetBytesReceivedPerSecondMonitor() => Math.Max(0, CurrentTelemetry.BytesReceivedPerSecond);
+
+    private double GetBytesSentPerSecondMonitor() => Math.Max(0, CurrentTelemetry.BytesSentPerSecond);
 
     private void PublishValidationFailure(string message)
     {

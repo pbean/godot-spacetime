@@ -51,8 +51,12 @@ The typed telemetry properties are:
 - `BytesReceived`
 - `ConnectionUptimeSeconds`
 - `LastReducerRoundTripMilliseconds`
+- `MessagesReceivedPerSecond`
+- `MessagesSentPerSecond`
+- `BytesReceivedPerSecond`
+- `BytesSentPerSecond`
 
-Units are explicit: counts for `MessagesSent` / `MessagesReceived`, bytes for `BytesSent` / `BytesReceived`, seconds for uptime, and milliseconds for reducer RTT.
+Units are explicit: counts for `MessagesSent` / `MessagesReceived`, bytes for `BytesSent` / `BytesReceived`, seconds for uptime, and milliseconds for reducer RTT. The four `*PerSecond` properties are derived rates — they refresh on-read against a 1-second minimum sliding baseline, so two reads inside the same 1-second bucket return the same value, and a fresh session reads `0.0` until the first full second of uptime elapses.
 
 The same values are mirrored into Godot `Performance` custom monitors:
 
@@ -62,10 +66,14 @@ The same values are mirrored into Godot `Performance` custom monitors:
 - `GodotSpacetime/Connection/BytesReceived`
 - `GodotSpacetime/Connection/UptimeSeconds`
 - `GodotSpacetime/Reducers/LastRoundTripMilliseconds`
+- `GodotSpacetime/Connection/MessagesReceivedPerSecond`
+- `GodotSpacetime/Connection/MessagesSentPerSecond`
+- `GodotSpacetime/Connection/BytesReceivedPerSecond`
+- `GodotSpacetime/Connection/BytesSentPerSecond`
 
 Reset behavior is deliberate:
 
-- `Disconnect()` resets `CurrentTelemetry` to zero immediately.
+- `Disconnect()` resets `CurrentTelemetry` to zero immediately — including the four `*PerSecond` rates.
 - A later reconnect starts a fresh measurement window rather than carrying over the previous session.
 
 On the pinned stack, `BytesSent` is measured from the SDK's serialized outbound payload path rather than from a documented public wire-byte counter. Story 9.3 validation records that observed runtime behavior instead of guessing.

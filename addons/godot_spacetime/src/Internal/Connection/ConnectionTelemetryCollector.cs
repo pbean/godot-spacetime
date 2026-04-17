@@ -9,12 +9,18 @@ internal sealed class ConnectionTelemetryCollector
 
     private readonly ConnectionTelemetryStats _stats = new();
     private DateTimeOffset? _connectedAtUtc;
+    private DateTimeOffset? _rateBaselineUtc;
+    private long _rateBaselineMessagesReceived;
+    private long _rateBaselineMessagesSent;
+    private long _rateBaselineBytesReceived;
+    private long _rateBaselineBytesSent;
 
     internal ConnectionTelemetryStats CurrentTelemetry
     {
         get
         {
             RefreshUptime();
+            RefreshRates();
             return _stats;
         }
     }
@@ -28,12 +34,18 @@ internal sealed class ConnectionTelemetryCollector
     {
         Reset();
         _connectedAtUtc = DateTimeOffset.UtcNow;
+        _rateBaselineUtc = _connectedAtUtc;
         RefreshUptime();
     }
 
     internal void Reset()
     {
         _connectedAtUtc = null;
+        _rateBaselineUtc = null;
+        _rateBaselineMessagesReceived = 0;
+        _rateBaselineMessagesSent = 0;
+        _rateBaselineBytesReceived = 0;
+        _rateBaselineBytesSent = 0;
         BytesSentSource = string.Empty;
         _stats.MessagesSent = 0;
         _stats.MessagesReceived = 0;
@@ -41,6 +53,10 @@ internal sealed class ConnectionTelemetryCollector
         _stats.BytesReceived = 0;
         _stats.ConnectionUptimeSeconds = 0;
         _stats.LastReducerRoundTripMilliseconds = 0;
+        _stats.MessagesReceivedPerSecond = 0;
+        _stats.MessagesSentPerSecond = 0;
+        _stats.BytesReceivedPerSecond = 0;
+        _stats.BytesSentPerSecond = 0;
     }
 
     internal void RecordInboundMessage(int byteCount)
@@ -84,5 +100,30 @@ internal sealed class ConnectionTelemetryCollector
         _stats.ConnectionUptimeSeconds = _connectedAtUtc.HasValue
             ? Math.Max(0, (DateTimeOffset.UtcNow - _connectedAtUtc.Value).TotalSeconds)
             : 0;
+    }
+
+    private void RefreshRates()
+    {
+        if (!_rateBaselineUtc.HasValue)
+            return;
+
+        var elapsedSeconds = (DateTimeOffset.UtcNow - _rateBaselineUtc.Value).TotalSeconds;
+        if (elapsedSeconds < 1.0)
+            return;
+
+        _stats.MessagesReceivedPerSecond = Math.Max(0,
+            (_stats.MessagesReceived - _rateBaselineMessagesReceived) / elapsedSeconds);
+        _stats.MessagesSentPerSecond = Math.Max(0,
+            (_stats.MessagesSent - _rateBaselineMessagesSent) / elapsedSeconds);
+        _stats.BytesReceivedPerSecond = Math.Max(0,
+            (_stats.BytesReceived - _rateBaselineBytesReceived) / elapsedSeconds);
+        _stats.BytesSentPerSecond = Math.Max(0,
+            (_stats.BytesSent - _rateBaselineBytesSent) / elapsedSeconds);
+
+        _rateBaselineUtc = DateTimeOffset.UtcNow;
+        _rateBaselineMessagesReceived = _stats.MessagesReceived;
+        _rateBaselineMessagesSent = _stats.MessagesSent;
+        _rateBaselineBytesReceived = _stats.BytesReceived;
+        _rateBaselineBytesSent = _stats.BytesSent;
     }
 }
