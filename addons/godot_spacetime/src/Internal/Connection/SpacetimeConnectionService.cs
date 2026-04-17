@@ -16,7 +16,7 @@ using GodotSpacetime.Runtime.Subscriptions;
 
 namespace GodotSpacetime.Runtime.Connection;
 
-internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnectionTelemetrySink, ISubscriptionEventSink, IRowChangeEventSink, IReducerEventSink
+internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscriptionEventSink, IRowChangeEventSink, IReducerEventSink
 {
     private readonly ConnectionStateMachine _stateMachine = new();
     private ReconnectPolicy _reconnectPolicy = new();
@@ -366,17 +366,17 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     void IConnectionEventSink.OnConnected(string identity, string token)
     {
-        HandleConnected(_currentTransportSessionId, identity, token);
+        HandleConnected(Volatile.Read(ref _currentTransportSessionId), identity, token);
     }
 
     void IConnectionEventSink.OnConnectError(Exception error)
     {
-        HandleConnectError(_currentTransportSessionId, error);
+        HandleConnectError(Volatile.Read(ref _currentTransportSessionId), error);
     }
 
     void IConnectionEventSink.OnDisconnected(Exception? error)
     {
-        HandleDisconnected(_currentTransportSessionId, error);
+        HandleDisconnected(Volatile.Read(ref _currentTransportSessionId), error);
     }
 
     void ISubscriptionEventSink.OnSubscriptionApplied(SubscriptionHandle handle)
@@ -428,7 +428,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     void IReducerEventSink.OnReducerCallSucceeded(string reducerName, string invocationId, DateTimeOffset calledAt)
     {
-        HandleReducerCallSucceeded(_activeTelemetrySessionId, reducerName, invocationId, calledAt);
+        HandleReducerCallSucceeded(Volatile.Read(ref _activeTelemetrySessionId), reducerName, invocationId, calledAt);
     }
 
     void IReducerEventSink.OnReducerCallFailed(
@@ -440,7 +440,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
         string recoveryGuidance)
     {
         HandleReducerCallFailed(
-            _activeTelemetrySessionId,
+            Volatile.Read(ref _activeTelemetrySessionId),
             reducerName,
             invocationId,
             calledAt,
@@ -508,8 +508,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     private void ResetDisconnectedSessionState()
     {
-        _currentTransportSessionId = 0;
-        _activeTelemetrySessionId = 0;
+        Volatile.Write(ref _currentTransportSessionId, 0);
+        Volatile.Write(ref _activeTelemetrySessionId, 0);
         _subscriptionRegistry.Clear();
         _pendingReplacements.Clear();
         ClearCacheView();
@@ -521,18 +521,13 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
         _telemetryCollector.Reset();
     }
 
-    void IConnectionTelemetrySink.OnInboundMessageReceived(int byteCount)
-    {
-        HandleInboundMessageReceived(_activeTelemetrySessionId, byteCount);
-    }
-
     private void HandleConnected(long sessionId, string identity, string token)
     {
         if (!IsCurrentTransportSession(sessionId))
             return;
 
         _reconnectPolicy.Reset();
-        _activeTelemetrySessionId = sessionId;
+        Volatile.Write(ref _activeTelemetrySessionId, sessionId);
         _telemetryCollector.StartSession(sessionId);
         if (_adapter.TryReadTrackerCounts(out var trackerCounts))
         {
@@ -705,7 +700,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     private void RecordOutboundMessage(long byteCount)
     {
-        var sessionId = _activeTelemetrySessionId;
+        var sessionId = Volatile.Read(ref _activeTelemetrySessionId);
         if (sessionId == 0)
             return;
 
@@ -714,7 +709,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     private void SyncTrackerCountsForActiveSession()
     {
-        var sessionId = _activeTelemetrySessionId;
+        var sessionId = Volatile.Read(ref _activeTelemetrySessionId);
         if (sessionId == 0)
             return;
 
@@ -729,21 +724,26 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     private long AllocateTransportSessionId()
     {
-        var sessionId = _nextTransportSessionId + 1;
+        // Interlocked.Increment guarantees atomic read-modify-write on a 64-bit counter
+        // even if Connect() is invoked concurrently. Long.MaxValue wraparound throws rather
+        // than silently reusing session id 1 (which could collide with an ancient session).
+        var sessionId = Interlocked.Increment(ref _nextTransportSessionId);
         if (sessionId <= 0)
-            sessionId = 1;
+        {
+            throw new InvalidOperationException(
+                "Transport session id counter overflowed. Restart the process to reset the counter.");
+        }
 
-        _nextTransportSessionId = sessionId;
-        _currentTransportSessionId = sessionId;
-        _activeTelemetrySessionId = 0;
+        Volatile.Write(ref _currentTransportSessionId, sessionId);
+        Volatile.Write(ref _activeTelemetrySessionId, 0);
         return sessionId;
     }
 
     private bool IsCurrentTransportSession(long sessionId) =>
-        sessionId > 0 && sessionId == _currentTransportSessionId;
+        sessionId > 0 && sessionId == Volatile.Read(ref _currentTransportSessionId);
 
     private bool IsActiveTelemetrySession(long sessionId) =>
-        sessionId > 0 && sessionId == _activeTelemetrySessionId;
+        sessionId > 0 && sessionId == Volatile.Read(ref _activeTelemetrySessionId);
 
     private bool HasPendingReplacementInFlight(Guid handleId)
     {

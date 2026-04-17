@@ -129,13 +129,6 @@ internal sealed class SpacetimeSdkConnectionAdapter
         return true;
     }
 
-    internal (long MessagesSent, long MessagesReceived) ReadTrackerCounts()
-    {
-        return TryReadTrackerCounts(out var trackerCounts)
-            ? trackerCounts
-            : (0, 0);
-    }
-
     internal static MessageCompressionMode GetEffectiveCompressionMode(MessageCompressionMode requestedCompressionMode)
     {
         // The pinned 2.1.x client runtime currently canonicalizes Brotli requests to Gzip.
