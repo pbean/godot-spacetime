@@ -310,6 +310,29 @@ def test_probe_local_runtime_timeout_is_skip_not_fail(
     assert "timed out" in result.reason
 
 
+def test_probe_local_runtime_strips_ansi_from_ping_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A TTY-aware wrapper around the test harness can trick `spacetime server
+    ping` into emitting SGR color codes around the host URL. The probe must
+    strip them before parsing — otherwise SPACETIME_E2E_HOST gets fed an
+    invalid URL like `\\x1b[32mhttp://...\\x1b[0m` and the dynamic lifecycle
+    test fails with a confusing 'cannot dial' error."""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _FakeCompletedProcess:
+        if "list" in cmd:
+            return _FakeCompletedProcess(returncode=0, stdout="local\n")
+        return _FakeCompletedProcess(
+            returncode=0,
+            stdout="\x1b[1mServer is online:\x1b[0m \x1b[32mhttp://127.0.0.1:3000\x1b[0m\n",
+        )
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_local_runtime("/fake/spacetime")
+    assert result.available
+    assert result.host == "http://127.0.0.1:3000"
+
+
 # ---------------------------------------------------------------------------
 # ProbeResult shape (regression guard)
 # ---------------------------------------------------------------------------

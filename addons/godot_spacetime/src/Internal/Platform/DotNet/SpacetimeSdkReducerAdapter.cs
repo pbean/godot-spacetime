@@ -127,8 +127,23 @@ internal sealed class SpacetimeSdkReducerAdapter
         else
             return;
 
+        // Wire each reducer event independently. If one event's parameter type is
+        // unloadable (e.g. its generic argument lives in an assembly that didn't
+        // resolve), the failure is logged and skipped instead of aborting the
+        // whole loop and leaving every other reducer without a callback.
         foreach (var evt in reducers.GetType().GetEvents(BindingFlags.Public | BindingFlags.Instance))
-            TryWireReducerEvent(this, reducers, evt, sink);
+        {
+            try
+            {
+                TryWireReducerEvent(this, reducers, evt, sink);
+            }
+            catch (Exception ex)
+            {
+                Godot.GD.PushError(
+                    $"SpacetimeSdkReducerAdapter: failed to wire reducer event '{evt.Name}': " +
+                    $"{ex.GetType().Name}: {ex.Message}. Other reducer callbacks will still be wired.");
+            }
+        }
     }
 
     private static void TryWireReducerEvent(

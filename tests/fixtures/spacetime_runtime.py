@@ -14,10 +14,17 @@ green on any developer machine, with or without a real runtime present.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
 from dataclasses import dataclass
+
+# Matches the CSI/SGR ANSI escape sequences `spacetime server ping` may emit
+# when its stdout is attached to a TTY. Strips colors and cursor-control codes
+# so the host parser sees the raw `Server is online: <host>` line regardless
+# of whether a developer wrapper has tricked the CLI into colorized output.
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 DEFAULT_SPACETIME_SERVER = "local"
 # Binary name preference order. godot-mono is the test's required harness,
@@ -306,10 +313,15 @@ def probe_local_runtime(spacetime_cli_path: str) -> ProbeResult:
 
 
 def _parse_ping_host(stdout: str) -> str:
-    """Extract `Server is online: <host>` from `spacetime server ping` output."""
+    """Extract `Server is online: <host>` from `spacetime server ping` output.
+
+    Strips ANSI escape sequences before scanning so a TTY-aware wrapper around
+    the test harness cannot produce a host like `\x1b[32mhttp://...\x1b[0m`
+    that the dynamic lifecycle test then refuses to dial.
+    """
     marker = "Server is online:"
     for line in stdout.splitlines():
-        stripped = line.strip()
+        stripped = _ANSI_ESCAPE.sub("", line).strip()
         idx = stripped.find(marker)
         if idx != -1:
             return stripped[idx + len(marker):].strip()
