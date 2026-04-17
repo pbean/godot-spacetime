@@ -1,8 +1,8 @@
 """
-Story 11.3: GDScript subscription/cache integration smoke coverage
+Story 11.4: GDScript reducer invocation integration smoke coverage
 
-Runs a headless Godot scene that exercises the native GDScript subscription
-lane against a real local SpacetimeDB runtime when available.
+Runs a headless Godot scene that exercises the native GDScript reducer lane
+against a real local SpacetimeDB runtime when available.
 """
 
 from __future__ import annotations
@@ -24,9 +24,9 @@ from tests.fixtures.spacetime_runtime import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-SCENE_PATH = "res://tests/godot_integration/gdscript_subscription_smoke.tscn"
-SCENE = ROOT / "tests" / "godot_integration" / "gdscript_subscription_smoke.tscn"
-RUNNER = ROOT / "tests" / "godot_integration" / "gdscript_subscription_smoke.gd"
+SCENE_PATH = "res://tests/godot_integration/gdscript_reducer_smoke.tscn"
+SCENE = ROOT / "tests" / "godot_integration" / "gdscript_reducer_smoke.tscn"
+RUNNER = ROOT / "tests" / "godot_integration" / "gdscript_reducer_smoke.gd"
 FIXTURE_REMOTE_TABLES = (
     ROOT / "tests" / "fixtures" / "gdscript_generated" / "smoke_test" / "remote_tables.gd"
 )
@@ -35,10 +35,11 @@ STEP_TIMEOUT_SECONDS = 45
 TOTAL_TIMEOUT_SECONDS = 240
 REQUIRED_STEPS = (
     "connect",
+    "configured_bindings",
     "subscribe",
-    "observe_row_change",
-    "replace_success",
-    "replace_failure",
+    "invoke_ping",
+    "invoke_ping_insert",
+    "fault_guard_passed",
 )
 
 
@@ -70,7 +71,7 @@ def _parse_events_from_stdout(stdout: bytes) -> list[dict]:
         idx = stripped.find(EVENT_PREFIX)
         if idx == -1:
             continue
-        payload = stripped[idx + len(EVENT_PREFIX):].strip()
+        payload = stripped[idx + len(EVENT_PREFIX) :].strip()
         try:
             events.append(json.loads(payload))
         except json.JSONDecodeError:
@@ -78,15 +79,15 @@ def _parse_events_from_stdout(stdout: bytes) -> list[dict]:
     return events
 
 
-def test_story_11_3_smoke_harness_files_exist() -> None:
-    assert SCENE.exists(), "gdscript_subscription_smoke.tscn missing under tests/godot_integration/"
-    assert RUNNER.exists(), "gdscript_subscription_smoke.gd missing under tests/godot_integration/"
+def test_story_11_4_smoke_harness_files_exist() -> None:
+    assert SCENE.exists(), "gdscript_reducer_smoke.tscn missing under tests/godot_integration/"
+    assert RUNNER.exists(), "gdscript_reducer_smoke.gd missing under tests/godot_integration/"
     assert FIXTURE_REMOTE_TABLES.exists(), (
         "remote_tables.gd missing under tests/fixtures/gdscript_generated/smoke_test/"
     )
 
 
-def test_story_11_3_runner_contract_strings_present() -> None:
+def test_story_11_4_runner_contract_strings_present() -> None:
     content = RUNNER.read_text(encoding="utf-8")
     for expected in (
         "SPACETIME_E2E_HOST",
@@ -96,43 +97,41 @@ def test_story_11_3_runner_contract_strings_present() -> None:
         "SPACETIME_E2E_VALUE",
         "SPACETIME_E2E_STEP_TIMEOUT",
         '"connect"',
+        '"configured_bindings"',
         '"subscribe"',
-        '"observe_row_change"',
-        '"replace_success"',
-        '"replace_failure"',
-        '"subscription_applied"',
-        '"subscription_failed"',
-        '"row_changed"',
-        "replace_subscription",
-        "ping_insert",
+        '"invoke_ping"',
+        '"invoke_ping_insert"',
+        '"fault_guard_passed"',
+        '"reducer_call_succeeded"',
+        '"reducer_call_failed"',
+        '"returned_empty_invocation_id"',
+        "invoke_reducer",
         "contract_count",
         EVENT_PREFIX,
     ):
         assert expected in content, (
-            "gdscript_subscription_smoke.gd must declare the headless contract and lifecycle payloads for Story 11.3. "
+            "gdscript_reducer_smoke.gd must declare the headless contract and lifecycle payloads for Story 11.4. "
             f"Missing {expected!r}."
         )
 
 
-def test_story_11_3_runner_uses_native_gdscript_subscription_lane() -> None:
+def test_story_11_4_runner_uses_native_gdscript_reducer_lane() -> None:
     content = RUNNER.read_text(encoding="utf-8")
     for expected in (
         "gdscript_connection_service.gd",
         "remote_tables.gd",
         "configure_bindings",
-        "get_remote_tables",
-        "subscription_applied.connect",
-        "subscription_failed.connect",
-        "row_changed.connect",
+        "reducer_call_succeeded.connect",
+        "reducer_call_failed.connect",
         "JSON.stringify",
     ):
         assert expected in content, (
-            "gdscript_subscription_smoke.gd must drive the new native GDScript subscription/cache lane. "
+            "gdscript_reducer_smoke.gd must drive the native GDScript reducer lane. "
             f"Missing {expected!r}."
         )
 
 
-def test_story_11_3_integration_reuses_runtime_probes_and_smoke_test_module() -> None:
+def test_story_11_4_integration_reuses_runtime_probes_and_smoke_test_module() -> None:
     content = Path(__file__).read_text(encoding="utf-8")
     for expected in (
         "probe_spacetime_cli",
@@ -141,12 +140,12 @@ def test_story_11_3_integration_reuses_runtime_probes_and_smoke_test_module() ->
         'str(ROOT / "spacetime" / "modules" / "smoke_test")',
     ):
         assert expected in content, (
-            "Story 11.3 integration coverage must stay skip-safe and reuse the shared smoke_test runtime pattern. "
+            "Story 11.4 integration coverage must stay skip-safe and reuse the shared smoke_test runtime pattern. "
             f"Missing {expected!r}."
         )
 
 
-def test_story_11_3_gdscript_subscription_smoke_e2e() -> None:
+def test_story_11_4_gdscript_reducer_smoke_e2e() -> None:
     cli_probe = probe_spacetime_cli()
     if not cli_probe.available:
         pytest.skip(f"spacetime CLI not available on PATH: {cli_probe.reason}")
@@ -159,7 +158,7 @@ def test_story_11_3_gdscript_subscription_smoke_e2e() -> None:
     if not runtime_probe.available:
         pytest.skip(f"SpacetimeDB runtime unavailable: {runtime_probe.reason}")
 
-    module_name = f"gdscript-subscription-smoke-{uuid.uuid4().hex[:12]}"
+    module_name = f"gdscript-reducer-smoke-{uuid.uuid4().hex[:12]}"
     try:
         _publish_module(cli_probe.path, runtime_probe.server, module_name)
     except subprocess.CalledProcessError as exc:
@@ -172,9 +171,9 @@ def test_story_11_3_gdscript_subscription_smoke_e2e() -> None:
             "SpacetimeDB runtime unavailable: smoke_test publish timed out after 180s"
         )
 
-    e2e_value = f"story-11-3-{uuid.uuid4().hex[:8]}"
+    e2e_value = f"story-11-4-{uuid.uuid4().hex[:8]}"
 
-    with tempfile.TemporaryDirectory(prefix="story-11-3-godot-home-") as godot_home:
+    with tempfile.TemporaryDirectory(prefix="story-11-4-godot-home-") as godot_home:
         env = os.environ.copy()
         env["HOME"] = godot_home
         env["XDG_DATA_HOME"] = godot_home
@@ -204,70 +203,73 @@ def test_story_11_3_gdscript_subscription_smoke_e2e() -> None:
 
     events = _parse_events_from_stdout(proc.stdout or b"")
     assert elapsed < TOTAL_TIMEOUT_SECONDS, (
-        f"gdscript subscription smoke harness did not finish within {TOTAL_TIMEOUT_SECONDS}s "
+        f"gdscript reducer smoke harness did not finish within {TOTAL_TIMEOUT_SECONDS}s "
         f"(elapsed={elapsed:.1f}s)"
     )
     assert events, (
-        "gdscript subscription smoke runner emitted no events. "
+        "gdscript reducer smoke runner emitted no events. "
         f"godot exit={proc.returncode}. elapsed={elapsed:.2f}s. "
         f"stdout tail: {(proc.stdout or b'').decode('utf-8', 'replace')[-1200:]}. "
         f"stderr tail: {(proc.stderr or b'').decode('utf-8', 'replace')[-600:]}"
     )
 
     error_steps = [e for e in events if e.get("event") == "step" and e.get("status") == "error"]
-    assert not error_steps, f"gdscript subscription smoke runner reported failing step(s): {error_steps}"
+    assert not error_steps, f"gdscript reducer smoke runner reported failing step(s): {error_steps}"
 
-    step_sequence = [e["name"] for e in events if e.get("event") == "step" and e.get("status") == "ok"]
+    step_sequence = [
+        e["name"] for e in events if e.get("event") == "step" and e.get("status") == "ok"
+    ]
     assert step_sequence == list(REQUIRED_STEPS), (
-        "gdscript subscription smoke runner must emit the full Story 11.3 lifecycle in strict order. "
+        "gdscript reducer smoke runner must emit the full Story 11.4 lifecycle in strict order. "
         f"got step_sequence={step_sequence}"
     )
 
     steps = {e["name"]: e for e in events if e.get("event") == "step" and e.get("status") == "ok"}
     done = next((e for e in events if e.get("event") == "done"), None)
-    row_events = [e for e in events if e.get("event") == "row_changed"]
-    failed_events = [e for e in events if e.get("event") == "subscription_failed"]
 
-    assert done is not None, f"missing done event in gdscript subscription smoke log: {events}"
+    assert done is not None, f"missing done event in gdscript reducer smoke log: {events}"
     assert done.get("status") == "ok", f"done event reported failure: {done}"
 
     connect = steps["connect"]
     assert connect.get("state") == "Connected"
-    assert connect.get("contract_count") == 2, (
-        f"connect step must report 2 registered table contracts (SmokeTest + TypedEntity). got {connect}"
+
+    configured = steps["configured_bindings"]
+    assert configured.get("contract_count") == 2, (
+        f"configured_bindings step must report 2 registered table contracts. got {configured}"
     )
 
     subscribe = steps["subscribe"]
-    assert subscribe.get("table_handle") == "SmokeTest"
-    assert subscribe.get("typed_cache_ready") is True
-    assert subscribe.get("protocol_kind") == "SubscribeApplied"
+    assert subscribe.get("subscribed") is True
 
-    observe = steps["observe_row_change"]
-    assert observe.get("value") == e2e_value
-    assert observe.get("change_type") == "Insert"
-    assert "typed_table_handle" in (observe.get("via") or [])
-    assert "row_changed_event" in (observe.get("via") or [])
-
-    replace_success = steps["replace_success"]
-    assert replace_success.get("old_status") == "Superseded"
-    assert replace_success.get("new_status") == "Active"
-    assert replace_success.get("preserved_value") == e2e_value
-
-    replace_failure = steps["replace_failure"]
-    assert replace_failure.get("failed_handle_status") == "Closed"
-    assert replace_failure.get("authoritative_status") == "Active"
-    assert replace_failure.get("preserved_value") == e2e_value
-    assert replace_failure.get("error_message"), (
-        f"replace_failure step must surface the structured subscription error. got {replace_failure}"
+    invoke_ping = steps["invoke_ping"]
+    assert invoke_ping.get("reducer_name") == "ping", (
+        f"invoke_ping step must report reducer_name='ping'. got {invoke_ping}"
+    )
+    assert invoke_ping.get("succeeded") is True, (
+        f"invoke_ping step must report succeeded=true. got {invoke_ping}"
     )
 
-    assert row_events, f"missing row_changed events in gdscript subscription smoke log: {events}"
-    assert failed_events, (
-        "gdscript subscription smoke runner must surface a structured subscription_failed event "
-        f"for the invalid replacement query. got events={events}"
+    invoke_ping_insert = steps["invoke_ping_insert"]
+    assert invoke_ping_insert.get("reducer_name") == "ping_insert", (
+        f"invoke_ping_insert step must report reducer_name='ping_insert'. got {invoke_ping_insert}"
+    )
+    assert invoke_ping_insert.get("succeeded") is True
+    assert invoke_ping_insert.get("row_observed") is True, (
+        f"invoke_ping_insert step must report row_observed=true (row_changed Insert event). "
+        f"got {invoke_ping_insert}"
+    )
+
+    fault_guard = steps["fault_guard_passed"]
+    assert fault_guard.get("guard_triggered") is True, (
+        f"fault_guard_passed step must confirm push_error fired for empty reducer name. "
+        f"got {fault_guard}"
+    )
+    assert fault_guard.get("returned_empty_invocation_id") is True, (
+        "fault_guard_passed step must prove invoke_reducer() rejected the empty reducer name "
+        "synchronously by returning an empty invocation_id."
     )
 
     assert proc.returncode == 0, (
-        f"gdscript subscription smoke runner exited with code {proc.returncode}. "
+        f"gdscript reducer smoke runner exited with code {proc.returncode}. "
         f"stderr tail: {(proc.stderr or b'').decode('utf-8', 'replace')[-400:]}"
     )

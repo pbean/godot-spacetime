@@ -7,6 +7,8 @@ signal protocol_message(message)
 signal subscription_applied(event)
 signal subscription_failed(event)
 signal row_changed(event)
+signal reducer_call_succeeded(event)
+signal reducer_call_failed(event)
 
 const ConnectionProtocolScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd")
 const FileTokenStoreScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/file_token_store.gd")
@@ -58,6 +60,13 @@ var _pending_subscriptions: Dictionary = {}
 # new_handle_id -> old_handle_id
 var _pending_replacements: Dictionary = {}
 var _authoritative_handle_id: int = -1
+# request_id -> {invocation_id: String, reducer_name: String, called_at: float}
+var _pending_reducer_calls: Dictionary = {}
+var _next_invocation_id: int = 1
+
+const REDUCER_RECOVERY_GUIDANCE_FAILED := "Check the reducer inputs or server-side rules before retrying or showing a player-facing error."
+const REDUCER_RECOVERY_GUIDANCE_OUT_OF_ENERGY := "Back off and retry later, or tell the player the action is temporarily unavailable."
+const REDUCER_RECOVERY_GUIDANCE_UNKNOWN := "Do not retry automatically. Surface a safe generic error and capture diagnostics for follow-up."
 
 
 func _init(websocket_factory: Callable = Callable()) -> void:
@@ -101,6 +110,13 @@ func subscribe(query_sqls: Array) -> Object:
 		push_error("Subscribe() requires binding metadata. Call configure_bindings() before applying subscriptions.")
 		return null
 
+	if not _pending_subscriptions.is_empty():
+		push_error(
+			"Subscribe() requires no in-flight subscriptions. " +
+			"Wait for the current subscription_applied event before calling subscribe() again."
+		)
+		return null
+
 	if _authoritative_handle_id != -1:
 		push_error(
 			"Subscribe() requires no authoritative subscription. " +
@@ -127,6 +143,7 @@ func unsubscribe(handle: Object) -> void:
 		return
 
 	_remove_pending_replacement_references(subscription_handle.handle_id)
+	# query_set_id == request_id by construction (_begin_subscription passes request_id as query_set_id_value)
 	_pending_subscriptions.erase(subscription_handle.query_set_id)
 	_send_unsubscribe_for_query_set(subscription_handle.query_set_id)
 	_subscription_registry.unregister(subscription_handle.handle_id)
@@ -271,6 +288,47 @@ func send_protocol_message(tag: int, payload_writer: Callable = Callable()) -> i
 	return _socket.put_packet(payload)
 
 
+func invoke_reducer(reducer_name: String, args_bytes: PackedByteArray) -> String:
+	if String(_current_status.get("state", STATE_DISCONNECTED)) != STATE_CONNECTED:
+		push_error(
+			"invoke_reducer() requires an active Connected session. " +
+			"Call open_connection() and wait for Connected before invoking reducers."
+		)
+		return ""
+
+	var clean_reducer_name := reducer_name.strip_edges()
+	if clean_reducer_name.is_empty():
+		push_error("invoke_reducer() requires a non-empty reducer_name.")
+		return ""
+
+	var invocation_id := str(_next_invocation_id)
+	_next_invocation_id += 1
+
+	var called_at := Time.get_unix_time_from_system()
+	var request_id := _reserve_request_id()
+
+	_pending_reducer_calls[request_id] = {
+		"invocation_id": invocation_id,
+		"reducer_name": clean_reducer_name,
+		"called_at": called_at,
+	}
+
+	var send_result := send_protocol_message(
+		ConnectionProtocolScript.CLIENT_MESSAGE_CALL_REDUCER,
+		func(writer) -> void:
+			writer.write_u32(request_id)
+			writer.write_u32(0)
+			writer.write_string(clean_reducer_name)
+			writer.write_bytes(args_bytes)
+	)
+	if send_result != OK:
+		_pending_reducer_calls.erase(request_id)
+		push_error("invoke_reducer() failed to send the wire payload: %s" % error_string(send_result))
+		return ""
+
+	return invocation_id
+
+
 func force_transport_fault_for_testing(reason: String = "simulated transport fault") -> void:
 	if String(_current_status.get("state", STATE_DISCONNECTED)) not in [STATE_CONNECTED, STATE_DEGRADED]:
 		return
@@ -314,6 +372,8 @@ func _drain_packets() -> void:
 				_handle_subscription_error(message)
 			"TransactionUpdate":
 				_handle_transaction_update(message)
+			"ReducerResult":
+				_handle_reducer_result(message)
 
 
 func _handle_initial_connection(message: Dictionary) -> void:
@@ -423,6 +483,7 @@ func _schedule_retry_or_disconnect(error_message: String) -> void:
 			_transition_to(STATE_DEGRADED, degraded_description, AUTH_NONE)
 
 		_next_retry_at_seconds = _now_seconds() + delay_seconds
+		_reset_pending_reducer_runtime()
 		_dispose_socket_immediately()
 		return
 
@@ -617,6 +678,67 @@ func _handle_transaction_update(message: Dictionary) -> void:
 	_emit_row_changed_events(_cache_store.apply_transaction_updates(relevant_updates))
 
 
+func _handle_reducer_result(message: Dictionary) -> void:
+	var request_id := int(message.get("request_id", -1))
+	var pending = _pending_reducer_calls.get(request_id)
+	_pending_reducer_calls.erase(request_id)
+
+	var invocation_id: String
+	var reducer_name: String
+	var called_at: float
+
+	if pending != null:
+		invocation_id = String(pending.get("invocation_id", "untracked"))
+		reducer_name = String(pending.get("reducer_name", String(message.get("reducer_name", "unknown"))))
+		called_at = float(pending.get("called_at", Time.get_unix_time_from_system()))
+	else:
+		invocation_id = "untracked-" + str(_next_invocation_id)
+		_next_invocation_id += 1
+		reducer_name = String(message.get("reducer_name", "unknown"))
+		called_at = Time.get_unix_time_from_system()
+
+	var now := Time.get_unix_time_from_system()
+	var status := String(message.get("status", "Unknown"))
+	match status:
+		"Committed":
+			emit_signal("reducer_call_succeeded", {
+				"reducer_name": reducer_name,
+				"invocation_id": invocation_id,
+				"called_at_unix_time": called_at,
+				"completed_at_unix_time": now,
+			})
+		"Failed":
+			emit_signal("reducer_call_failed", {
+				"reducer_name": reducer_name,
+				"invocation_id": invocation_id,
+				"called_at_unix_time": called_at,
+				"failed_at_unix_time": now,
+				"error_message": String(message.get("error_message", "Reducer failed")),
+				"failure_category": "Failed",
+				"recovery_guidance": REDUCER_RECOVERY_GUIDANCE_FAILED,
+			})
+		"OutOfEnergy":
+			emit_signal("reducer_call_failed", {
+				"reducer_name": reducer_name,
+				"invocation_id": invocation_id,
+				"called_at_unix_time": called_at,
+				"failed_at_unix_time": now,
+				"error_message": "Out of energy — reducer not executed",
+				"failure_category": "OutOfEnergy",
+				"recovery_guidance": REDUCER_RECOVERY_GUIDANCE_OUT_OF_ENERGY,
+			})
+		_:
+			emit_signal("reducer_call_failed", {
+				"reducer_name": reducer_name,
+				"invocation_id": invocation_id,
+				"called_at_unix_time": called_at,
+				"failed_at_unix_time": now,
+				"error_message": "Unexpected reducer status: %s" % status,
+				"failure_category": "Unknown",
+				"recovery_guidance": REDUCER_RECOVERY_GUIDANCE_UNKNOWN,
+			})
+
+
 func _begin_subscription(query_sqls: Array, replaced_handle_id: int = -1) -> Object:
 	var request_id := _reserve_request_id()
 	var handle_id := _next_handle_id
@@ -702,6 +824,11 @@ func _as_subscription_handle(handle: Object, caller_name: String):
 			push_error("%s requires a valid subscription handle." % caller_name)
 			return null
 
+	for required_prop in ["handle_id", "query_set_id", "status"]:
+		if not (required_prop in handle):
+			push_error("%s requires a valid subscription handle." % caller_name)
+			return null
+
 	return handle
 
 
@@ -734,6 +861,12 @@ func _reset_subscription_runtime() -> void:
 	_next_handle_id = 1
 	_subscription_registry.clear()
 	_cache_store.clear()
+	_reset_pending_reducer_runtime()
+
+
+func _reset_pending_reducer_runtime() -> void:
+	_pending_reducer_calls.clear()
+	_next_invocation_id = 1
 
 
 func _create_socket() -> WebSocketPeer:

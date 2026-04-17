@@ -165,10 +165,11 @@ def test_story_11_3_service_tracks_pending_replacements_and_request_correlation(
         "_pending_subscriptions",
         "_pending_replacements",
         "request_id → handle".replace("→", "->"),
+        "_pending_subscriptions.is_empty()",
     ):
         assert expected in content, (
-            "Story 11.3 must keep explicit request/handle correlation and overlap-first replacement state. "
-            f"Missing {expected!r}."
+            "Story 11.3 must keep explicit request/handle correlation, overlap-first replacement state, "
+            f"and an in-flight subscription guard. Missing {expected!r}."
         )
 
 
