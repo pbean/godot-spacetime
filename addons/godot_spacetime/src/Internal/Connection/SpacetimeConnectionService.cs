@@ -140,6 +140,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     internal bool TelemetryBytesSentProven => _telemetryCollector.HasProvenOutboundBytes;
 
+    internal Identity? CurrentIdentity { get; private set; }
+
     internal string TelemetryBytesSentSource => _telemetryCollector.BytesSentSource;
 
     public void Connect(SpacetimeSettings settings)
@@ -541,6 +543,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     private void Disconnect(string description)
     {
+        CurrentIdentity = null;
         var prevState = CurrentStatus.State;
         RunConnectionTeardown(() =>
         {
@@ -576,6 +579,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         _reconnectPolicy.Reset();
         _activeCompressionMode = MessageCompressionMode.None;
         _telemetryCollector.Reset();
+        CurrentIdentity = null;
     }
 
     private void HandleConnected(long sessionId, string identity, string token)
@@ -583,6 +587,27 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         if (!IsCurrentTransportSession(sessionId))
             return;
 
+        if (string.IsNullOrEmpty(identity))
+        {
+            CurrentIdentity = null;
+        }
+        else
+        {
+            try
+            {
+                CurrentIdentity = Identity.FromHexString(identity);
+            }
+            catch (ArgumentException ex)
+            {
+                // Defensive: the pinned ClientSDK 2.1.0 emits 64-char hex, but a future
+                // SDK shape change should not abort session setup mid-callback.
+                CurrentIdentity = null;
+                SpacetimeLog.Warning(
+                    LogCategory.Connection,
+                    "Connected identity was not parseable as 64-char hex; CurrentIdentity left null. " +
+                    $"Parse error: {ex.Message}");
+            }
+        }
         _reconnectPolicy.Reset();
         Volatile.Write(ref _activeTelemetrySessionId, sessionId);
         _telemetryCollector.StartSession(sessionId);
@@ -638,12 +663,16 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 _activeCompressionMode);
         }
 
+        // Snapshot to avoid a concurrent Disconnect nulling CurrentIdentity between
+        // the assignment above and event emission.
+        var identitySnapshot = CurrentIdentity ?? default;
         OnConnectionOpened?.Invoke(
             new ConnectionOpenedEvent
             {
                 Host = _host,
                 Database = _database,
                 Identity = identity,
+                IdentityValue = identitySnapshot,
                 ConnectedAt = DateTimeOffset.UtcNow,
             }
         );

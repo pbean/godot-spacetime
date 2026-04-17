@@ -121,6 +121,21 @@ The identity string is included in [`ConnectionOpenedEvent.Identity`](../addons/
 For anonymous connections, the identity is a new server-assigned value; for credential-bearing connections,
 it is the identity associated with the provided token.
 
+A typed [`Identity`](../addons/godot_spacetime/src/Public/Identity.cs) value is also available.
+[`SpacetimeClient.CurrentIdentity`](../addons/godot_spacetime/src/Public/SpacetimeClient.cs) returns the
+current session's identity (or `null` when `ConnectionState` is not `Connected`), and the same typed value
+is carried on `ConnectionOpenedEvent.IdentityValue` alongside the existing string. `Identity.ToString()`
+returns the 64-character uppercase hex form matching the supported runtime's own identity rendering; `==`,
+`Equals`, and `GetHashCode` compare case-insensitively across `FromHexString` inputs, so "current-player"
+code can hold a single typed value and use it for in-process equality checks against identities captured
+elsewhere in the session without manually normalizing case. Generated row-handle helpers from `spacetime
+generate` use the supported runtime's own identity type; bridge by round-tripping through `ToString()` /
+`FromHexString()` when a generated helper needs to be called with the captured identity.
+`default(Identity).ToString()` returns 64 `'0'` characters, matching the supported runtime's default
+identity. `Identity.FromHexString(string)` and `Identity.FromBytes(ReadOnlySpan<byte>)` are the supported
+factories; both throw on bad input — `ArgumentNullException` on a null string and `ArgumentException`
+otherwise — without echoing the offending value into the exception message.
+
 **Session Restoration:** When `SpacetimeSettings.TokenStore` is configured and `Credentials` is not explicitly
 set, `Connect()` calls `GetTokenAsync()` on the token store before opening the connection. If a non-empty
 token is returned, it is injected via `WithToken()` — identical to setting `Credentials` explicitly for that
