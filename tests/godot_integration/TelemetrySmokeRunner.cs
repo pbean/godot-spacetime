@@ -464,6 +464,16 @@ public partial class TelemetrySmokeRunner : Node
             return;
         }
 
+        if (snapshot.MessagesReceivedPerSecond != 0 ||
+            snapshot.MessagesSentPerSecond != 0 ||
+            snapshot.BytesReceivedPerSecond != 0 ||
+            snapshot.BytesSentPerSecond != 0)
+        {
+            EmitError("read_telemetry_reconnect", "reconnect must clear the public per-second telemetry fields.");
+            Finish(pass: false);
+            return;
+        }
+
         if (snapshot.MessagesSent > _telemetryBeforeTraffic.MessagesSent ||
             snapshot.MessagesReceived > _telemetryBeforeTraffic.MessagesReceived ||
             snapshot.BytesSent > _telemetryBeforeTraffic.BytesSent ||
@@ -507,6 +517,10 @@ public partial class TelemetrySmokeRunner : Node
             telemetry.BytesReceived,
             telemetry.ConnectionUptimeSeconds,
             telemetry.LastReducerRoundTripMilliseconds,
+            telemetry.MessagesReceivedPerSecond,
+            telemetry.MessagesSentPerSecond,
+            telemetry.BytesReceivedPerSecond,
+            telemetry.BytesSentPerSecond,
             monitorValues,
             _client.TelemetryBytesSentSource,
             _client.TelemetryBytesSentProven);
@@ -519,7 +533,11 @@ public partial class TelemetrySmokeRunner : Node
                snapshot.BytesSent == 0 &&
                snapshot.BytesReceived == 0 &&
                snapshot.ConnectionUptimeSeconds == 0 &&
-               snapshot.LastReducerRoundTripMilliseconds == 0;
+               snapshot.LastReducerRoundTripMilliseconds == 0 &&
+               snapshot.MessagesReceivedPerSecond == 0 &&
+               snapshot.MessagesSentPerSecond == 0 &&
+               snapshot.BytesReceivedPerSecond == 0 &&
+               snapshot.BytesSentPerSecond == 0;
     }
 
     private static double ReadMonitor(StringName monitorId)
@@ -658,6 +676,10 @@ public partial class TelemetrySmokeRunner : Node
         long BytesReceived,
         double ConnectionUptimeSeconds,
         double LastReducerRoundTripMilliseconds,
+        double MessagesReceivedPerSecond,
+        double MessagesSentPerSecond,
+        double BytesReceivedPerSecond,
+        double BytesSentPerSecond,
         IReadOnlyDictionary<string, double> PerformanceMonitors,
         string BytesSentSource,
         bool BytesSentProven)
@@ -672,6 +694,10 @@ public partial class TelemetrySmokeRunner : Node
                 ["bytes_received"] = BytesReceived,
                 ["connection_uptime_seconds"] = ConnectionUptimeSeconds,
                 ["last_reducer_round_trip_milliseconds"] = LastReducerRoundTripMilliseconds,
+                ["messages_received_per_second"] = MessagesReceivedPerSecond,
+                ["messages_sent_per_second"] = MessagesSentPerSecond,
+                ["bytes_received_per_second"] = BytesReceivedPerSecond,
+                ["bytes_sent_per_second"] = BytesSentPerSecond,
                 ["performance_monitors"] = PerformanceMonitors,
                 ["bytes_sent_proven"] = BytesSentProven,
             };
@@ -687,7 +713,11 @@ public partial class TelemetrySmokeRunner : Node
                     Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/BytesSent"] - BytesSent) < 0.001 &&
                     Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/BytesReceived"] - BytesReceived) < 0.001 &&
                     Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/UptimeSeconds"] - ConnectionUptimeSeconds) < 0.250 &&
-                    Math.Abs(PerformanceMonitors["GodotSpacetime/Reducers/LastRoundTripMilliseconds"] - LastReducerRoundTripMilliseconds) < 0.250;
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Reducers/LastRoundTripMilliseconds"] - LastReducerRoundTripMilliseconds) < 0.250 &&
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/MessagesReceivedPerSecond"] - MessagesReceivedPerSecond) < 0.001 &&
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/MessagesSentPerSecond"] - MessagesSentPerSecond) < 0.001 &&
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/BytesReceivedPerSecond"] - BytesReceivedPerSecond) < 0.001 &&
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/BytesSentPerSecond"] - BytesSentPerSecond) < 0.001;
             }
 
             return payload;

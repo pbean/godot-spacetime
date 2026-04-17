@@ -109,11 +109,14 @@ internal sealed class SpacetimeSdkConnectionAdapter
         connection?.Disconnect();
     }
 
-    internal (long MessagesSent, long MessagesReceived) ReadTrackerCounts()
+    internal bool TryReadTrackerCounts(out (long MessagesSent, long MessagesReceived) trackerCounts)
     {
         var stats = TryGetStats();
         if (stats == null)
-            return (0, 0);
+        {
+            trackerCounts = default;
+            return false;
+        }
 
         var outboundMessages =
             GetTrackedRequestCount(stats.SubscriptionRequestTracker) +
@@ -122,7 +125,15 @@ internal sealed class SpacetimeSdkConnectionAdapter
             GetTrackedRequestCount(stats.ProcedureRequestTracker);
 
         var inboundMessages = stats.ParseMessageTracker?.GetSampleCount() ?? 0;
-        return (outboundMessages, inboundMessages);
+        trackerCounts = (outboundMessages, inboundMessages);
+        return true;
+    }
+
+    internal (long MessagesSent, long MessagesReceived) ReadTrackerCounts()
+    {
+        return TryReadTrackerCounts(out var trackerCounts)
+            ? trackerCounts
+            : (0, 0);
     }
 
     internal static MessageCompressionMode GetEffectiveCompressionMode(MessageCompressionMode requestedCompressionMode)

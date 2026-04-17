@@ -242,12 +242,12 @@ def test_connection_service_on_disconnected_ignores_teardown_and_late_callbacks(
         "addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs"
     )
     on_disconnected_match = re.search(
-        r"OnDisconnected\(Exception\? error\)(.*?)(?=\n\s+void\s+ISubscriptionEventSink|\Z)",
+        r"private\s+void\s+HandleDisconnected\(long sessionId, Exception\? error\)(.*?)(?=\n\s+private\s+void\s+HandleInboundMessageReceived|\Z)",
         content,
         re.DOTALL,
     )
     assert on_disconnected_match is not None, (
-        "OnDisconnected method must exist in SpacetimeConnectionService (AC 2)"
+        "HandleDisconnected method must exist in SpacetimeConnectionService (AC 2)"
     )
     body = on_disconnected_match.group(1)
     assert "_isTearingDownConnection" in body, (

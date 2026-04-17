@@ -120,14 +120,14 @@ def test_connection_service_tracks_transient_restored_credentials() -> None:
 
 def test_connection_service_clears_restored_credentials_after_open_attempt() -> None:
     content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
-    pos_open = content.find("_adapter.Open(settings, this);")
+    pos_open = content.find("_adapter.Open(settings, new SessionBoundConnectionSink(this, sessionId));")
     pos_finally = content.find("finally")
     pos_clear = content.find("settings.Credentials = null;")
     assert pos_open != -1 and pos_finally != -1 and pos_clear != -1, (
         "SpacetimeConnectionService.cs must clear a restored credential in a finally block after the open attempt"
     )
     assert pos_open < pos_finally < pos_clear, (
-        "Restored credentials must be cleared only after _adapter.Open(settings, this) has been attempted"
+        "Restored credentials must be cleared only after the session-bound _adapter.Open(...) call has been attempted"
     )
 
 

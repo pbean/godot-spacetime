@@ -36,6 +36,64 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
     private readonly SpacetimeSdkReducerAdapter _reducerAdapter = new();
     private readonly SpacetimeSdkQueryAdapter _queryAdapter = new();
     private readonly ReducerInvoker _reducerInvoker;
+    private long _nextTransportSessionId;
+    private long _currentTransportSessionId;
+    private long _activeTelemetrySessionId;
+
+    private sealed class SessionBoundConnectionSink : IConnectionEventSink, IConnectionTelemetrySink
+    {
+        private readonly SpacetimeConnectionService _owner;
+        private readonly long _sessionId;
+
+        internal SessionBoundConnectionSink(SpacetimeConnectionService owner, long sessionId)
+        {
+            _owner = owner;
+            _sessionId = sessionId;
+        }
+
+        void IConnectionEventSink.OnConnected(string identity, string token) =>
+            _owner.HandleConnected(_sessionId, identity, token);
+
+        void IConnectionEventSink.OnConnectError(Exception error) =>
+            _owner.HandleConnectError(_sessionId, error);
+
+        void IConnectionEventSink.OnDisconnected(Exception? error) =>
+            _owner.HandleDisconnected(_sessionId, error);
+
+        void IConnectionTelemetrySink.OnInboundMessageReceived(int byteCount) =>
+            _owner.HandleInboundMessageReceived(_sessionId, byteCount);
+    }
+
+    private sealed class SessionBoundReducerEventSink : IReducerEventSink
+    {
+        private readonly SpacetimeConnectionService _owner;
+        private readonly long _sessionId;
+
+        internal SessionBoundReducerEventSink(SpacetimeConnectionService owner, long sessionId)
+        {
+            _owner = owner;
+            _sessionId = sessionId;
+        }
+
+        void IReducerEventSink.OnReducerCallSucceeded(string reducerName, string invocationId, DateTimeOffset calledAt) =>
+            _owner.HandleReducerCallSucceeded(_sessionId, reducerName, invocationId, calledAt);
+
+        void IReducerEventSink.OnReducerCallFailed(
+            string reducerName,
+            string invocationId,
+            DateTimeOffset calledAt,
+            string errorMessage,
+            ReducerFailureCategory failureCategory,
+            string recoveryGuidance) =>
+            _owner.HandleReducerCallFailed(
+                _sessionId,
+                reducerName,
+                invocationId,
+                calledAt,
+                errorMessage,
+                failureCategory,
+                recoveryGuidance);
+    }
 
     /// <summary>
     /// Maps newHandleId → oldHandleId for in-flight overlap-first subscription replacements.
@@ -72,8 +130,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
     {
         get
         {
-            var trackerCounts = _adapter.ReadTrackerCounts();
-            _telemetryCollector.UpdateTrackerCounts(trackerCounts.MessagesSent, trackerCounts.MessagesReceived);
+            SyncTrackerCountsForActiveSession();
             return _telemetryCollector.CurrentTelemetry;
         }
     }
@@ -124,9 +181,10 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
             $"CONNECTING — opening a session to {_host}/{_database}",
             activeCompressionMode: _activeCompressionMode);
 
+        var sessionId = AllocateTransportSessionId();
         try
         {
-            _adapter.Open(settings, this);
+            _adapter.Open(settings, new SessionBoundConnectionSink(this, sessionId));
         }
         catch (Exception ex)
         {
@@ -173,7 +231,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
         {
             var sdkSub = _subscriptionAdapter.Subscribe(connection, querySqls, this, handle);
             _subscriptionRegistry.UpdateSdkSubscription(handle.HandleId, sdkSub);
-            _telemetryCollector.RecordOutboundMessage(_subscriptionAdapter.MeasureSubscribePayloadBytes(querySqls));
+            RecordOutboundMessage(_subscriptionAdapter.MeasureSubscribePayloadBytes(querySqls));
             return handle;
         }
         catch
@@ -202,7 +260,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
             _subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
         {
             if (_subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription))
-                _telemetryCollector.RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
+                RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
         }
 
         handle.Close();
@@ -250,7 +308,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
         {
             var sdkSub = _subscriptionAdapter.Subscribe(connection, newQueries, this, newHandle);
             _subscriptionRegistry.UpdateSdkSubscription(newHandle.HandleId, sdkSub);
-            _telemetryCollector.RecordOutboundMessage(_subscriptionAdapter.MeasureSubscribePayloadBytes(newQueries));
+            RecordOutboundMessage(_subscriptionAdapter.MeasureSubscribePayloadBytes(newQueries));
             return newHandle;
         }
         catch
@@ -282,7 +340,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
                 "This is a programming fault — ensure the connection is fully established before querying.");
 
         var queryTask = _queryAdapter.QueryAsync<TRow>(remoteTables, sqlClause, timeout);
-        _telemetryCollector.RecordOutboundMessage(_queryAdapter.MeasureQueryPayloadBytes(sqlClause));
+        RecordOutboundMessage(_queryAdapter.MeasureQueryPayloadBytes(sqlClause));
         return queryTask;
     }
 
@@ -295,7 +353,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
         var payloadBytes = _reducerAdapter.MeasurePayloadBytes(reducerArgs);
         _reducerInvoker.Invoke(reducerArgs);
-        _telemetryCollector.RecordOutboundMessage(payloadBytes);
+        RecordOutboundMessage(payloadBytes);
     }
 
     public void FrameTick()
@@ -308,124 +366,17 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     void IConnectionEventSink.OnConnected(string identity, string token)
     {
-        _reconnectPolicy.Reset();
-        _telemetryCollector.StartSession();
-        _cacheViewAdapter.SetDb(_adapter.GetDb());   // wire cache view on connect
-        _reducerAdapter.SetConnection(_adapter.Connection);  // wire reducer adapter on connect
-        _reducerAdapter.RegisterCallbacks(this);             // wire reducer result callbacks
-        var db = _adapter.GetDb();                   // wire row callbacks
-        if (db != null)
-            _rowCallbackAdapter.RegisterCallbacks(db, this);
-        if (_tokenStore != null)
-        {
-            // Optional token persistence must never break a successful connection.
-            try
-            {
-                _ = _tokenStore.StoreTokenAsync(token).ContinueWith(
-                    static completedTask => _ = completedTask.Exception,
-                    CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default
-                );
-            }
-            catch (Exception)
-            {
-            }
-        }
-
-        var authState = _credentialsProvided ? ConnectionAuthState.TokenRestored : ConnectionAuthState.None;
-
-        // Once the server accepts the token, the "restored from store" distinction is no longer
-        // relevant for failure classification. A subsequent Degraded→Disconnected is a network
-        // issue, not a token-expiry event.
-        _restoredFromStore = false;
-
-        if (CurrentStatus.State != ConnectionState.Connected)
-        {
-            var description = CurrentStatus.State == ConnectionState.Degraded
-                ? "CONNECTED — active session established after recovery"
-                : _credentialsProvided
-                    ? "CONNECTED — authenticated session established"
-                    : "CONNECTED — active session established";
-            _stateMachine.Transition(
-                ConnectionState.Connected,
-                description,
-                authState,
-                _activeCompressionMode);
-        }
-
-        OnConnectionOpened?.Invoke(
-            new ConnectionOpenedEvent
-            {
-                Host = _host,
-                Database = _database,
-                Identity = identity,
-                ConnectedAt = DateTimeOffset.UtcNow,
-            }
-        );
+        HandleConnected(_currentTransportSessionId, identity, token);
     }
 
     void IConnectionEventSink.OnConnectError(Exception error)
     {
-        ClearCacheView();
-
-        if (CurrentStatus.State == ConnectionState.Connecting)
-        {
-            RunConnectionTeardown(() =>
-            {
-                ResetDisconnectedSessionState();
-                if (_restoredFromStore)
-                {
-                    _stateMachine.Transition(
-                        ConnectionState.Disconnected,
-                        $"DISCONNECTED — stored token was rejected: {error.Message}",
-                        ConnectionAuthState.TokenExpired,
-                        _activeCompressionMode
-                    );
-                    return;
-                }
-
-                if (_credentialsProvided)
-                {
-                    var authState = IsLikelyAuthError(error)
-                        ? ConnectionAuthState.AuthFailed
-                        : ConnectionAuthState.ConnectFailed;
-                    var label = authState == ConnectionAuthState.AuthFailed
-                        ? "authentication failed"
-                        : "connection failed (credentials were provided but the cause is ambiguous)";
-                    _stateMachine.Transition(
-                        ConnectionState.Disconnected,
-                        $"DISCONNECTED — {label}: {error.Message}",
-                        authState,
-                        _activeCompressionMode
-                    );
-                    return;
-                }
-
-                _stateMachine.Transition(
-                    ConnectionState.Disconnected,
-                    $"DISCONNECTED — failed to connect: {error.Message}",
-                    activeCompressionMode: _activeCompressionMode
-                );
-            });
-            return;
-        }
-
-        HandleDisconnectError(error);
+        HandleConnectError(_currentTransportSessionId, error);
     }
 
     void IConnectionEventSink.OnDisconnected(Exception? error)
     {
-        if (_isTearingDownConnection || CurrentStatus.State == ConnectionState.Disconnected)
-            return;
-
-        if (error == null)
-        {
-            Disconnect("DISCONNECTED — not connected to SpacetimeDB");
-            return;
-        }
-
-        HandleDisconnectError(error);
+        HandleDisconnected(_currentTransportSessionId, error);
     }
 
     void ISubscriptionEventSink.OnSubscriptionApplied(SubscriptionHandle handle)
@@ -438,7 +389,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
             if (_subscriptionRegistry.TryGetEntry(oldHandleId, out var oldEntry))
             {
                 if (_subscriptionAdapter.TryUnsubscribe(oldEntry.SdkSubscription))
-                    _telemetryCollector.RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
+                    RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
                 oldEntry.Handle.Supersede();
                 _subscriptionRegistry.Unregister(oldHandleId);
             }
@@ -477,8 +428,7 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     void IReducerEventSink.OnReducerCallSucceeded(string reducerName, string invocationId, DateTimeOffset calledAt)
     {
-        _telemetryCollector.RecordReducerRoundTrip(calledAt, DateTimeOffset.UtcNow);
-        OnReducerCallSucceeded?.Invoke(new ReducerCallResult(reducerName, invocationId, calledAt));
+        HandleReducerCallSucceeded(_activeTelemetrySessionId, reducerName, invocationId, calledAt);
     }
 
     void IReducerEventSink.OnReducerCallFailed(
@@ -489,14 +439,14 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
         ReducerFailureCategory failureCategory,
         string recoveryGuidance)
     {
-        _telemetryCollector.RecordReducerRoundTrip(calledAt, DateTimeOffset.UtcNow);
-        OnReducerCallFailed?.Invoke(new ReducerCallError(
+        HandleReducerCallFailed(
+            _activeTelemetrySessionId,
             reducerName,
             invocationId,
             calledAt,
             errorMessage,
             failureCategory,
-            recoveryGuidance));
+            recoveryGuidance);
     }
 
     private void HandleDisconnectError(Exception error)
@@ -558,6 +508,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     private void ResetDisconnectedSessionState()
     {
+        _currentTransportSessionId = 0;
+        _activeTelemetrySessionId = 0;
         _subscriptionRegistry.Clear();
         _pendingReplacements.Clear();
         ClearCacheView();
@@ -571,8 +523,227 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, IConnec
 
     void IConnectionTelemetrySink.OnInboundMessageReceived(int byteCount)
     {
-        _telemetryCollector.RecordInboundMessage(byteCount);
+        HandleInboundMessageReceived(_activeTelemetrySessionId, byteCount);
     }
+
+    private void HandleConnected(long sessionId, string identity, string token)
+    {
+        if (!IsCurrentTransportSession(sessionId))
+            return;
+
+        _reconnectPolicy.Reset();
+        _activeTelemetrySessionId = sessionId;
+        _telemetryCollector.StartSession(sessionId);
+        if (_adapter.TryReadTrackerCounts(out var trackerCounts))
+        {
+            _telemetryCollector.InitializeTrackerBaseline(
+                sessionId,
+                trackerCounts.MessagesSent,
+                trackerCounts.MessagesReceived);
+        }
+
+        _cacheViewAdapter.SetDb(_adapter.GetDb());   // wire cache view on connect
+        _reducerAdapter.SetConnection(_adapter.Connection);  // wire reducer adapter on connect
+        _reducerAdapter.RegisterCallbacks(new SessionBoundReducerEventSink(this, sessionId));
+        var db = _adapter.GetDb();                   // wire row callbacks
+        if (db != null)
+            _rowCallbackAdapter.RegisterCallbacks(db, this);
+        if (_tokenStore != null)
+        {
+            // Optional token persistence must never break a successful connection.
+            try
+            {
+                _ = _tokenStore.StoreTokenAsync(token).ContinueWith(
+                    static completedTask => _ = completedTask.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default
+                );
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        var authState = _credentialsProvided ? ConnectionAuthState.TokenRestored : ConnectionAuthState.None;
+
+        // Once the server accepts the token, the "restored from store" distinction is no longer
+        // relevant for failure classification. A subsequent Degraded→Disconnected is a network
+        // issue, not a token-expiry event.
+        _restoredFromStore = false;
+
+        if (CurrentStatus.State != ConnectionState.Connected)
+        {
+            var description = CurrentStatus.State == ConnectionState.Degraded
+                ? "CONNECTED — active session established after recovery"
+                : _credentialsProvided
+                    ? "CONNECTED — authenticated session established"
+                    : "CONNECTED — active session established";
+            _stateMachine.Transition(
+                ConnectionState.Connected,
+                description,
+                authState,
+                _activeCompressionMode);
+        }
+
+        OnConnectionOpened?.Invoke(
+            new ConnectionOpenedEvent
+            {
+                Host = _host,
+                Database = _database,
+                Identity = identity,
+                ConnectedAt = DateTimeOffset.UtcNow,
+            }
+        );
+    }
+
+    private void HandleConnectError(long sessionId, Exception error)
+    {
+        if (!IsCurrentTransportSession(sessionId))
+            return;
+
+        ClearCacheView();
+
+        if (CurrentStatus.State == ConnectionState.Connecting)
+        {
+            RunConnectionTeardown(() =>
+            {
+                ResetDisconnectedSessionState();
+                if (_restoredFromStore)
+                {
+                    _stateMachine.Transition(
+                        ConnectionState.Disconnected,
+                        $"DISCONNECTED — stored token was rejected: {error.Message}",
+                        ConnectionAuthState.TokenExpired,
+                        _activeCompressionMode
+                    );
+                    return;
+                }
+
+                if (_credentialsProvided)
+                {
+                    var authState = IsLikelyAuthError(error)
+                        ? ConnectionAuthState.AuthFailed
+                        : ConnectionAuthState.ConnectFailed;
+                    var label = authState == ConnectionAuthState.AuthFailed
+                        ? "authentication failed"
+                        : "connection failed (credentials were provided but the cause is ambiguous)";
+                    _stateMachine.Transition(
+                        ConnectionState.Disconnected,
+                        $"DISCONNECTED — {label}: {error.Message}",
+                        authState,
+                        _activeCompressionMode
+                    );
+                    return;
+                }
+
+                _stateMachine.Transition(
+                    ConnectionState.Disconnected,
+                    $"DISCONNECTED — failed to connect: {error.Message}",
+                    activeCompressionMode: _activeCompressionMode
+                );
+            });
+            return;
+        }
+
+        HandleDisconnectError(error);
+    }
+
+    private void HandleDisconnected(long sessionId, Exception? error)
+    {
+        if (!IsCurrentTransportSession(sessionId) ||
+            _isTearingDownConnection ||
+            CurrentStatus.State == ConnectionState.Disconnected)
+        {
+            return;
+        }
+
+        if (error == null)
+        {
+            Disconnect("DISCONNECTED — not connected to SpacetimeDB");
+            return;
+        }
+
+        HandleDisconnectError(error);
+    }
+
+    private void HandleInboundMessageReceived(long sessionId, int byteCount)
+    {
+        _telemetryCollector.RecordInboundMessage(sessionId, byteCount);
+    }
+
+    private void HandleReducerCallSucceeded(long sessionId, string reducerName, string invocationId, DateTimeOffset calledAt)
+    {
+        if (!IsActiveTelemetrySession(sessionId))
+            return;
+
+        _telemetryCollector.RecordReducerRoundTrip(sessionId, calledAt, DateTimeOffset.UtcNow);
+        OnReducerCallSucceeded?.Invoke(new ReducerCallResult(reducerName, invocationId, calledAt));
+    }
+
+    private void HandleReducerCallFailed(
+        long sessionId,
+        string reducerName,
+        string invocationId,
+        DateTimeOffset calledAt,
+        string errorMessage,
+        ReducerFailureCategory failureCategory,
+        string recoveryGuidance)
+    {
+        if (!IsActiveTelemetrySession(sessionId))
+            return;
+
+        _telemetryCollector.RecordReducerRoundTrip(sessionId, calledAt, DateTimeOffset.UtcNow);
+        OnReducerCallFailed?.Invoke(new ReducerCallError(
+            reducerName,
+            invocationId,
+            calledAt,
+            errorMessage,
+            failureCategory,
+            recoveryGuidance));
+    }
+
+    private void RecordOutboundMessage(long byteCount)
+    {
+        var sessionId = _activeTelemetrySessionId;
+        if (sessionId == 0)
+            return;
+
+        _telemetryCollector.RecordOutboundMessage(sessionId, byteCount);
+    }
+
+    private void SyncTrackerCountsForActiveSession()
+    {
+        var sessionId = _activeTelemetrySessionId;
+        if (sessionId == 0)
+            return;
+
+        if (_adapter.TryReadTrackerCounts(out var trackerCounts))
+        {
+            _telemetryCollector.SyncTrackerCounts(
+                sessionId,
+                trackerCounts.MessagesSent,
+                trackerCounts.MessagesReceived);
+        }
+    }
+
+    private long AllocateTransportSessionId()
+    {
+        var sessionId = _nextTransportSessionId + 1;
+        if (sessionId <= 0)
+            sessionId = 1;
+
+        _nextTransportSessionId = sessionId;
+        _currentTransportSessionId = sessionId;
+        _activeTelemetrySessionId = 0;
+        return sessionId;
+    }
+
+    private bool IsCurrentTransportSession(long sessionId) =>
+        sessionId > 0 && sessionId == _currentTransportSessionId;
+
+    private bool IsActiveTelemetrySession(long sessionId) =>
+        sessionId > 0 && sessionId == _activeTelemetrySessionId;
 
     private bool HasPendingReplacementInFlight(Guid handleId)
     {
