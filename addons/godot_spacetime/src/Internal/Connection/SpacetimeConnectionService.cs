@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GodotSpacetime.Auth;
 using GodotSpacetime.Connection;
+using GodotSpacetime.Logging;
 using GodotSpacetime.Queries;
 using GodotSpacetime.Reducers;
 using GodotSpacetime.Runtime.Cache;
@@ -265,6 +266,65 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         handle.Close();
         _subscriptionRegistry.Unregister(handle.HandleId);
+    }
+
+    /// <summary>
+    /// Closes a previously applied subscription scope and invokes <paramref name="onEnded"/>
+    /// exactly once when the close completes. The callback is expected to already be wrapped
+    /// by <see cref="SpacetimeClient"/>'s main-thread dispatch before it reaches this method.
+    /// Semantics match <see cref="Unsubscribe"/>: idempotent on <c>Closed</c>/<c>Superseded</c>
+    /// handles (callback is NOT invoked), inline callback invocation when disconnected or when
+    /// the adapter cannot wire the SDK's <c>UnsubscribeThen</c>, otherwise the callback fires
+    /// from the SDK's own ended-event path.
+    /// </summary>
+    public void UnsubscribeThen(SubscriptionHandle handle, Action onEnded)
+    {
+        ArgumentNullException.ThrowIfNull(handle);
+        ArgumentNullException.ThrowIfNull(onEnded);
+
+        if (handle.Status == SubscriptionStatus.Closed ||
+            handle.Status == SubscriptionStatus.Superseded)
+            return;  // idempotent — no callback fires on already-terminal handles
+
+        RemovePendingReplacementReferences(handle.HandleId);
+
+        bool sdkCallbackWired = false;
+        if (CurrentStatus.State == ConnectionState.Connected &&
+            _subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
+        {
+            if (_subscriptionAdapter.TryUnsubscribeThen(entry.SdkSubscription, onEnded))
+            {
+                RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
+                sdkCallbackWired = true;
+            }
+            else if (_subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription))
+            {
+                RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
+            }
+        }
+
+        handle.Close();
+        _subscriptionRegistry.Unregister(handle.HandleId);
+
+        if (!sdkCallbackWired)
+        {
+            // disconnected or adapter fallback — fire inline.
+            // A user-supplied onEnded throwing must not escape the public Unsubscribe path,
+            // so absorb any exception and surface it via SpacetimeLog rather than unwinding
+            // back into SpacetimeClient.UnsubscribeThen.
+            try
+            {
+                onEnded();
+            }
+            catch (Exception ex)
+            {
+                SpacetimeLog.Error(
+                    LogCategory.Subscription,
+                    "UnsubscribeThen completion callback threw on the inline dispatch path; the exception " +
+                    "was absorbed to preserve the public Unsubscribe no-throw contract.",
+                    ex);
+            }
+        }
     }
 
     /// <summary>
