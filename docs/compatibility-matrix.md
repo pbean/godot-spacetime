@@ -13,6 +13,7 @@ The following documentation references this file as the authoritative version ba
 | `.NET` SDK | `8.0+` | Supported |
 | SpacetimeDB server and CLI | `2.1+` | Supported |
 | `SpacetimeDB.ClientSDK` | `2.1.0` | Supported |
+| Native GDScript web export | `4.6.2` | Supported |
 | Godot C# web export | N/A | Out-of-Scope |
 
 The machine-checkable source of truth for this baseline lives in `scripts/compatibility/support-baseline.json`, and `.github/workflows/validate-foundation.yml` enforces it through `python3 scripts/compatibility/validate-foundation.py`.
@@ -24,7 +25,7 @@ The machine-checkable source of truth for this baseline lives in `scripts/compat
 | **Supported** | This version combination is the declared target for the current release. It is validated in CI, covered in all documentation, and eligible for bug reports. |
 | **Experimental** | This version combination has been tested informally but is not covered by CI or formal compatibility checks. It may work, but bugs may not be prioritized. |
 | **Deferred** | This version combination is on the roadmap but not yet validated or targeted. It will appear as `Supported` in a future release when formally validated. |
-| **Out-of-Scope** | This version combination is explicitly not supported and will not be investigated. Known out-of-scope targets include Godot C# web export and GDScript-only runtime delivery for v1. |
+| **Out-of-Scope** | This version combination is explicitly not supported and will not be investigated. Known out-of-scope targets include Godot C# web export. |
 
 Only `Supported` entries are declared in the current release. `Experimental` and `Deferred` entries will be added in future releases as the compatibility matrix expands.
 

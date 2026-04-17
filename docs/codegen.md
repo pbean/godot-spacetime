@@ -15,12 +15,43 @@ bash scripts/codegen/generate-smoke-test.sh
 
 The script outputs generated C# bindings to `demo/generated/smoke_test/`.
 
+## Generating GDScript Smoke Test Bindings
+
+Story 11.5 adds a repo-owned GDScript emitter for the native GDScript runtime
+and web-export fixture path:
+
+```bash
+bash scripts/codegen/generate-gdscript-smoke-test.sh
+```
+
+That command writes generated GDScript bindings to
+`tests/fixtures/gdscript_generated/smoke_test/`.
+
+There is no upstream `gdscript` target in the pinned CLI. The canonical
+GDScript workflow therefore:
+
+1. Runs the existing pinned C# frontend first (`spacetime generate --lang csharp`)
+2. Reuses `scripts/codegen/detect-godot-types.py` for Godot-native type layout detection
+3. Runs `scripts/codegen/generate-gdscript-bindings.py` to emit the GDScript
+   `Types/`, `Tables/`, `remote_tables.gd`, `remote_reducers.gd`, and
+   `spacetimedb_client.gd` surface
+
+The generated GDScript smoke-test fixture is committed as a read-only artifact
+for Story 11.3 / 11.4 / 11.5 validation. Do not hand-edit files under
+`tests/fixtures/gdscript_generated/smoke_test/`.
+
 ## Regenerating After Schema Changes
 
 Rerun the same script after any schema change. The script clears the previous output before regenerating, so no manual cleanup is required:
 
 ```bash
 bash scripts/codegen/generate-smoke-test.sh
+```
+
+For the native GDScript fixture path, rerun:
+
+```bash
+bash scripts/codegen/generate-gdscript-smoke-test.sh
 ```
 
 ## Editor-Based Codegen (Fetch from Server)
@@ -80,6 +111,7 @@ The same entrypoint is used by `.github/workflows/validate-foundation.yml` after
 - `tests/fixtures/generated/` is reserved for read-only generated bindings consumed by tests.
 - `tests/fixtures/generated/multi_module_smoke/` is the read-only Story 10.1 fixture that compiles the same module surface under a second namespace for multi-module validation.
 - `tests/fixtures/generated/view_test/` is the read-only Story 10.4 fixture that validates view-definition bindings under a distinct namespace.
+- `tests/fixtures/gdscript_generated/smoke_test/` is the read-only Story 11.5 fixture containing generated native GDScript bindings and the stable `remote_tables.gd` preload target used by the Epic 11 smoke lanes.
 - `tests/fixtures/settings/` is reserved for non-shipping test settings and environment fixtures.
 
 ## Generated Schema Concepts
