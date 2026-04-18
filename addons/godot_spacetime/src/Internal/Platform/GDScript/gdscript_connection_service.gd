@@ -510,6 +510,15 @@ func _finish_disconnect(
 	_disconnect_requested = false
 	_transport_request = {}
 	_reset_subscription_runtime()
+	# Clear session state BEFORE emitting state_changed/connection_closed so that
+	# signal handlers can synchronously call open_connection() and have their
+	# freshly-resolved credential flags (_restored_from_store, _credentials_provided)
+	# survive this teardown.
+	_session_token = ""
+	_credentials_provided = false
+	_restored_from_store = false
+	_ever_connected_this_cycle = false
+	_last_transport_error = ""
 	_transition_to(STATE_DISCONNECTED, description, auth_state)
 
 	if emit_close_event:
@@ -518,12 +527,6 @@ func _finish_disconnect(
 			"error_message": error_message,
 			"closed_at_unix_time": Time.get_unix_time_from_system(),
 		})
-
-	_session_token = ""
-	_credentials_provided = false
-	_restored_from_store = false
-	_ever_connected_this_cycle = false
-	_last_transport_error = ""
 
 
 func _start_transport(token: String) -> int:

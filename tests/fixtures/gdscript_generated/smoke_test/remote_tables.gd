@@ -6,7 +6,7 @@ var SmokeTest = null
 var TypedEntity = null
 
 func _load_generated_script(relative_path: String):
-	var base_dir := get_script().resource_path.get_base_dir()
+	var base_dir: String = get_script().resource_path.get_base_dir()
 	return load(base_dir.path_join(relative_path))
 
 func _init() -> void:

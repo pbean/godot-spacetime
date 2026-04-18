@@ -65,6 +65,12 @@ public partial class MultiModuleSmokeRunner : Node
     private bool _sawGetRows;
     private bool _sawRowChangedEvent;
     private int _crossTalkCount;
+    // Row-change events can be dispatched by the SDK BEFORE ReducerCallSucceeded for a
+    // TransactionUpdate that carries both, so the runner may see the insert while it is
+    // still in the InvokeClient phase. Buffer every matching insert by (clientId,value)
+    // so StartObservation can replay the one it needs instead of timing out waiting for
+    // a signal that already fired.
+    private readonly HashSet<string> _observedInsertKeys = new();
 
     public override void _Ready()
     {
@@ -503,8 +509,22 @@ public partial class MultiModuleSmokeRunner : Node
         _currentExpectedValue = expectedValue;
         _sawTypedTableHandle = false;
         _sawGetRows = false;
-        _sawRowChangedEvent = false;
+        // Replay any RowChanged events that already fired for this (client, value)
+        // pair. The SDK dispatches row-change callbacks ahead of the reducer-success
+        // callback for the same TransactionUpdate, so by the time observation starts
+        // the insert signal has typically already arrived and is recorded in
+        // _observedInsertKeys; gating _sawRowChangedEvent on a future signal would
+        // deadlock waiting for a signal that will not fire again.
+        _sawRowChangedEvent = _observedInsertKeys.Contains(InsertKey(observedClientId, expectedValue));
         _crossTalkCount = 0;
+        foreach (var key in _observedInsertKeys)
+        {
+            if (key.EndsWith("|" + expectedValue, StringComparison.Ordinal) &&
+                !key.StartsWith(observedClientId + "|", StringComparison.Ordinal))
+            {
+                _crossTalkCount++;
+            }
+        }
         StartStep(step);
         CheckObservationViaTypedTableHandle();
         CheckObservationViaGetRows();
@@ -522,13 +542,18 @@ public partial class MultiModuleSmokeRunner : Node
         if (_finished || rowEvent == null)
             return;
 
-        if (_currentStep is not Step.ObserveClientA and not Step.ObserveClientB)
-            return;
-
         if (rowEvent.TableName != "SmokeTest" || rowEvent.ChangeType != RowChangeType.Insert)
             return;
 
         var observedValue = ExtractRowValue(rowEvent.NewRow);
+        if (observedValue == null)
+            return;
+
+        _observedInsertKeys.Add(InsertKey(clientId, observedValue));
+
+        if (_currentStep is not Step.ObserveClientA and not Step.ObserveClientB)
+            return;
+
         if (observedValue != _currentExpectedValue)
             return;
 
@@ -541,6 +566,8 @@ public partial class MultiModuleSmokeRunner : Node
         CheckObservationViaGetRows();
         TryCompleteObservation();
     }
+
+    private static string InsertKey(string clientId, string value) => clientId + "|" + value;
 
     private void CheckObservationViaTypedTableHandle()
     {

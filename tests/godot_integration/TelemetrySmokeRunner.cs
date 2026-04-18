@@ -55,10 +55,18 @@ public partial class TelemetrySmokeRunner : Node
     private bool _sawGetRows;
     private bool _sawTypedTableHandle;
     private bool _sawRowChangedEvent;
+    // Row-change events arrive from the SDK on a TransactionUpdate before the
+    // matching ReducerCallSucceeded callback, so the insert signal for the
+    // pending ping_insert value typically fires during the InvokeReducer phase.
+    // Buffer every matching insert value so observation state can be re-seeded
+    // when ObserveRowChange begins instead of waiting for a signal that has
+    // already passed.
+    private readonly HashSet<string> _observedInsertValues = new();
     private TelemetrySnapshot? _telemetryBeforeTraffic;
     private ReducerCallResult? _lastReducerResult;
     private ConnectionTelemetryStats? _stableTelemetryReference;
     private bool _stableTelemetryReusedAfterReconnect;
+    private bool _postReconnectSubscribeRequested;
 
     public override void _Ready()
     {
@@ -215,7 +223,17 @@ public partial class TelemetrySmokeRunner : Node
 
     private void OnSubscriptionApplied(SubscriptionAppliedEvent appliedEvent)
     {
-        if (_finished || _client == null || _phase != Phase.Subscribe)
+        if (_finished || _client == null)
+            return;
+
+        if (_phase == Phase.ReadTelemetryReconnect && _postReconnectSubscribeRequested)
+        {
+            _postReconnectSubscribeRequested = false;
+            FinishAfterPostReconnectTraffic();
+            return;
+        }
+
+        if (_phase != Phase.Subscribe)
             return;
 
         EmitStepOk("subscribe", new Dictionary<string, object?>
@@ -280,6 +298,11 @@ public partial class TelemetrySmokeRunner : Node
             return;
 
         var value = ExtractRowValue(rowEvent.NewRow);
+        if (value == null)
+            return;
+
+        _observedInsertValues.Add(value);
+
         if (value != _expectedValue)
             return;
 
@@ -319,7 +342,11 @@ public partial class TelemetrySmokeRunner : Node
     {
         _sawGetRows = false;
         _sawTypedTableHandle = false;
-        _sawRowChangedEvent = false;
+        // Seed from the buffered insert set — the RowChanged signal for the
+        // current _expectedValue may already have fired during InvokeReducer
+        // because the SDK delivers row-change callbacks before the matching
+        // ReducerCallSucceeded for the same TransactionUpdate.
+        _sawRowChangedEvent = _observedInsertValues.Contains(_expectedValue);
     }
 
     private void CheckTypedTableHandle()
@@ -485,11 +512,34 @@ public partial class TelemetrySmokeRunner : Node
         }
 
         EmitStepOk("read_telemetry_reconnect", snapshot.ToPayload(includeMonitorComparison: true, includeSource: true));
+
+        // Prove outbound-byte tracking survives the disconnect/reconnect cycle by
+        // exercising the public subscribe path once more and re-capturing the
+        // telemetry source for the done event. Test harness expects the
+        // read_telemetry_reconnect step to observe an empty source (the session
+        // was just reset) AND the done event to observe the SDK-BSATN source
+        // (because traffic after reconnect still flows through the pinned
+        // ClientMessage.BSATN serializer).
+        _postReconnectSubscribeRequested = true;
+        try
+        {
+            _client!.Subscribe(new[] { "SELECT * FROM smoke_test" });
+        }
+        catch (Exception ex)
+        {
+            EmitError("read_telemetry_reconnect", "post-reconnect subscribe threw: " + ex.Message);
+            Finish(pass: false);
+        }
+    }
+
+    private void FinishAfterPostReconnectTraffic()
+    {
+        var finalSnapshot = CaptureTelemetrySnapshot();
         Finish(pass: true, new Dictionary<string, object?>
         {
             ["stable_telemetry_instance_reused"] = _stableTelemetryReusedAfterReconnect,
-            ["bytes_sent_source"] = snapshot.BytesSentSource,
-            ["bytes_sent_proven"] = snapshot.BytesSentProven,
+            ["bytes_sent_source"] = finalSnapshot.BytesSentSource,
+            ["bytes_sent_proven"] = finalSnapshot.BytesSentProven,
         });
     }
 
