@@ -145,8 +145,12 @@ func _on_connection_opened(event: Dictionary) -> void:
 			_set_phase(Phase.WAIT_CLEAN_DISCONNECT)
 			_service.close_connection()
 		Phase.WAIT_RECOVERY_CONNECT:
-			_service.force_transport_fault_for_testing("simulated transport fault")
+			# Advance the phase BEFORE triggering the fault — force_transport_fault_for_testing
+			# synchronously emits the Degraded state_changed signal, and the observe_degraded
+			# step only fires when the handler observes _phase == Phase.WAIT_DEGRADED at the
+			# moment of the signal.
 			_set_phase(Phase.WAIT_DEGRADED)
+			_service.force_transport_fault_for_testing("simulated transport fault")
 		Phase.WAIT_RECOVERED:
 			_emit_step("recover_connection", {
 				"status": "ok",

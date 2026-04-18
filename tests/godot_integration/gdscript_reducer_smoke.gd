@@ -288,7 +288,7 @@ func _row_value(row, field_name: String):
 		return null
 	if row is Dictionary:
 		return row.get(field_name, null)
-	if row.has_method("to_dictionary"):
+	if row is Object and row.has_method("to_dictionary"):
 		var as_dict = row.to_dictionary()
 		return as_dict.get(field_name, null)
 	return null

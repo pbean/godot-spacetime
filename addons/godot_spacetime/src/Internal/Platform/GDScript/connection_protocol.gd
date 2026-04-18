@@ -87,9 +87,24 @@ static func parse_server_message(packet: PackedByteArray, is_compressed: bool = 
 	var tag := reader.read_u8()
 	match tag:
 		SERVER_MESSAGE_INITIAL_CONNECTION:
+			# Observed pinned-runtime InitialConnection wire layout:
+			#
+			#   tag(1) | Identity(32) | extra_byte(1) | Token(u32_len + utf8_bytes) | ConnectionId(16)
+			#
+			# Field order and the lone extra byte both differ from the client-side
+			# InitialConnection struct declaration (Identity -> ConnectionId ->
+			# Token with ConnectionId immediately after Identity, no intervening
+			# byte). Reading with the declared order yields a token that overlaps
+			# the JWT header by 15 bytes (starts with "iLCJ..." instead of
+			# "eyJ0...") and carries trailing binary slop from the ConnectionId
+			# bytes, which the server then rejects with HTTP 400 on any
+			# subsequent Authorization: Bearer reconnect. Until the declared
+			# struct and the live wire converge, prefer the wire order observed
+			# empirically against the pinned runtime.
 			var identity_bytes := reader.read_fixed_bytes(32)
-			var connection_id_bytes := reader.read_fixed_bytes(16)
+			reader.read_u8()
 			var token := reader.read_string()
+			var connection_id_bytes := reader.read_fixed_bytes(16)
 			return {
 				"kind": "InitialConnection",
 				"tag": tag,

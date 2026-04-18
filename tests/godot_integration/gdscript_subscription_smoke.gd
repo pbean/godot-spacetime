@@ -325,7 +325,7 @@ func _row_value(row, field_name: String):
 		return null
 	if row is Dictionary:
 		return row.get(field_name, null)
-	if row.has_method("to_dictionary"):
+	if row is Object and row.has_method("to_dictionary"):
 		var as_dict = row.to_dictionary()
 		return as_dict.get(field_name, null)
 	return null
@@ -342,7 +342,7 @@ func _normalize_for_json(value):
 		for item in value:
 			normalized_array.append(_normalize_for_json(item))
 		return normalized_array
-	if value != null and value.has_method("to_dictionary"):
+	if value is Object and value.has_method("to_dictionary"):
 		return _normalize_for_json(value.to_dictionary())
 	return value
 

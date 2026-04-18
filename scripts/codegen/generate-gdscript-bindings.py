@@ -422,7 +422,7 @@ def _render_type_script(spec: TypeSpec, regen_command: str) -> str:
 def _generated_type_helpers() -> list[str]:
     return [
         "func _load_generated_script(relative_path: String):",
-        "\tvar base_dir := get_script().resource_path.get_base_dir()",
+        "\tvar base_dir: String = get_script().resource_path.get_base_dir()",
         "\treturn load(base_dir.path_join(relative_path))",
         "",
         "func _read_generated_value(relative_path: String, reader):",
@@ -463,7 +463,7 @@ def _render_table_script(table: TableSpec, row_spec: TypeSpec, regen_command: st
             f"\t_row_script = _load_generated_script({_quote_gd(row_relative_path)})",
             "",
             "func _load_generated_script(relative_path: String):",
-            "\tvar base_dir := get_script().resource_path.get_base_dir()",
+            "\tvar base_dir: String = get_script().resource_path.get_base_dir()",
             "\treturn load(base_dir.path_join(relative_path))",
             "",
             "func sql_table_name() -> String:",
@@ -503,7 +503,7 @@ def _render_remote_tables(tables: tuple[TableSpec, ...], regen_command: str) -> 
         [
             "",
             "func _load_generated_script(relative_path: String):",
-            "\tvar base_dir := get_script().resource_path.get_base_dir()",
+            "\tvar base_dir: String = get_script().resource_path.get_base_dir()",
             "\treturn load(base_dir.path_join(relative_path))",
             "",
             "func _init() -> void:",
@@ -575,7 +575,7 @@ def _render_spacetimedb_client(tables: tuple[TableSpec, ...], regen_command: str
         [
             "",
             "func _load_generated_script(relative_path: String):",
-            "\tvar base_dir := get_script().resource_path.get_base_dir()",
+            "\tvar base_dir: String = get_script().resource_path.get_base_dir()",
             "\treturn load(base_dir.path_join(relative_path))",
             "",
             "func _init(connection_service = null) -> void:",
