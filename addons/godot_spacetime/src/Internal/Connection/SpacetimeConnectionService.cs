@@ -34,6 +34,11 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private readonly SubscriptionRegistry _subscriptionRegistry = new();
     private readonly Dictionary<Guid, Action> _pendingUnsubscribeThenCallbacks = new();
     private readonly object _pendingUnsubscribeThenCallbacksGate = new();
+    // Named gate covering the four shared-mutable connection-state fields:
+    // _subscriptionRegistry, _pendingReplacements, _reconnectPolicy, _currentIdentity.
+    // Signal/event emission must happen OUTSIDE this lock — snapshot inside,
+    // release, then emit. See docs/runtime-boundaries.md `## Threading Model`.
+    private readonly object _connectionStateGate = new();
     private readonly CacheViewAdapter _cacheViewAdapter = new();
     private readonly SpacetimeSdkRowCallbackAdapter _rowCallbackAdapter = new();
     private readonly SpacetimeSdkReducerAdapter _reducerAdapter = new();
@@ -140,7 +145,21 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     internal bool TelemetryBytesSentProven => _telemetryCollector.HasProvenOutboundBytes;
 
-    internal Identity? CurrentIdentity { get; private set; }
+    private Identity? _currentIdentity;
+
+    internal Identity? CurrentIdentity
+    {
+        get
+        {
+            lock (_connectionStateGate)
+                return _currentIdentity;
+        }
+        private set
+        {
+            lock (_connectionStateGate)
+                _currentIdentity = value;
+        }
+    }
 
     internal string TelemetryBytesSentSource => _telemetryCollector.BytesSentSource;
 
@@ -177,8 +196,11 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         _credentialsProvided = !string.IsNullOrWhiteSpace(settings.Credentials);
         _restoredFromStore = restoredCredentials;   // ← track source of credentials for failure routing
-        _reconnectPolicy = new ReconnectPolicy(settings.MaxReconnectAttempts, settings.InitialBackoffSeconds);
-        _reconnectPolicy.Reset();
+        lock (_connectionStateGate)
+        {
+            _reconnectPolicy = new ReconnectPolicy(settings.MaxReconnectAttempts, settings.InitialBackoffSeconds);
+            _reconnectPolicy.Reset();
+        }
         _activeCompressionMode = SpacetimeSdkConnectionAdapter.GetEffectiveCompressionMode(settings.CompressionMode);
 
         _stateMachine.Transition(
@@ -230,18 +252,21 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 "Not connected — no active IDbConnection. Call Connect() first.");
 
         var handle = new SubscriptionHandle();
-        _subscriptionRegistry.Register(handle);
+        lock (_connectionStateGate)
+            _subscriptionRegistry.Register(handle);
 
         try
         {
             var sdkSub = _subscriptionAdapter.Subscribe(connection, querySqls, this, handle);
-            _subscriptionRegistry.UpdateSdkSubscription(handle.HandleId, sdkSub);
+            lock (_connectionStateGate)
+                _subscriptionRegistry.UpdateSdkSubscription(handle.HandleId, sdkSub);
             RecordOutboundMessage(_subscriptionAdapter.MeasureSubscribePayloadBytes(querySqls));
             return handle;
         }
         catch
         {
-            _subscriptionRegistry.Unregister(handle.HandleId);
+            lock (_connectionStateGate)
+                _subscriptionRegistry.Unregister(handle.HandleId);
             throw;
         }
     }
@@ -261,15 +286,24 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         RemovePendingReplacementReferences(handle.HandleId);
 
-        if (CurrentStatus.State == ConnectionState.Connected &&
-            _subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
+        // Snapshot the registry entry under the gate; the SDK adapter call
+        // must run OUTSIDE the lock to honor the snapshot-then-emit rule.
+        SubscriptionEntry? entry = null;
+        if (CurrentStatus.State == ConnectionState.Connected)
+        {
+            lock (_connectionStateGate)
+                _subscriptionRegistry.TryGetEntry(handle.HandleId, out entry);
+        }
+
+        if (entry != null)
         {
             if (_subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription))
                 RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
         }
 
         handle.Close();
-        _subscriptionRegistry.Unregister(handle.HandleId);
+        lock (_connectionStateGate)
+            _subscriptionRegistry.Unregister(handle.HandleId);
     }
 
     /// <summary>
@@ -295,9 +329,14 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         RemovePendingReplacementReferences(handle.HandleId);
 
         object? sdkSubscription = null;
-        if (CurrentStatus.State == ConnectionState.Connected &&
-            _subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
-            sdkSubscription = entry.SdkSubscription;
+        if (CurrentStatus.State == ConnectionState.Connected)
+        {
+            lock (_connectionStateGate)
+            {
+                if (_subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
+                    sdkSubscription = entry.SdkSubscription;
+            }
+        }
 
         var forwardedOnEnded = RegisterPendingUnsubscribeThenCallback(handle.HandleId, onEnded);
 
@@ -305,7 +344,8 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         // callers observe the handle as terminal immediately after return, and a
         // synchronously-invoked SDK callback cannot see the handle as still Active.
         handle.Close();
-        _subscriptionRegistry.Unregister(handle.HandleId);
+        lock (_connectionStateGate)
+            _subscriptionRegistry.Unregister(handle.HandleId);
 
         bool sdkCallbackWired = false;
         if (CurrentStatus.State == ConnectionState.Connected)
@@ -357,22 +397,28 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 "Not connected — no active IDbConnection.");
 
         var newHandle = new SubscriptionHandle();
-        _subscriptionRegistry.Register(newHandle);
-
-        // Wire the overlap-first replacement hook: when newHandle is applied, close oldHandle
-        _pendingReplacements[newHandle.HandleId] = oldHandle.HandleId;
+        lock (_connectionStateGate)
+        {
+            _subscriptionRegistry.Register(newHandle);
+            // Wire the overlap-first replacement hook: when newHandle is applied, close oldHandle
+            _pendingReplacements[newHandle.HandleId] = oldHandle.HandleId;
+        }
 
         try
         {
             var sdkSub = _subscriptionAdapter.Subscribe(connection, newQueries, this, newHandle);
-            _subscriptionRegistry.UpdateSdkSubscription(newHandle.HandleId, sdkSub);
+            lock (_connectionStateGate)
+                _subscriptionRegistry.UpdateSdkSubscription(newHandle.HandleId, sdkSub);
             RecordOutboundMessage(_subscriptionAdapter.MeasureSubscribePayloadBytes(newQueries));
             return newHandle;
         }
         catch
         {
-            _pendingReplacements.Remove(newHandle.HandleId);
-            _subscriptionRegistry.Unregister(newHandle.HandleId);
+            lock (_connectionStateGate)
+            {
+                _pendingReplacements.Remove(newHandle.HandleId);
+                _subscriptionRegistry.Unregister(newHandle.HandleId);
+            }
             throw;
         }
     }
@@ -439,18 +485,31 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     void ISubscriptionEventSink.OnSubscriptionApplied(SubscriptionHandle handle)
     {
-        // Overlap-first replacement: if this is a pending replacement, close the old subscription now
-        if (_pendingReplacements.TryGetValue(handle.HandleId, out var oldHandleId))
+        // Overlap-first replacement: if this is a pending replacement, close the old subscription now.
+        // Snapshot the old SDK subscription + handle inside the gate, release, then call the SDK
+        // adapter outside the lock and emit the signal last (snapshot-then-emit).
+        object? oldSdkSubscription = null;
+        SubscriptionHandle? oldHandle = null;
+        lock (_connectionStateGate)
         {
-            _pendingReplacements.Remove(handle.HandleId);
-
-            if (_subscriptionRegistry.TryGetEntry(oldHandleId, out var oldEntry))
+            if (_pendingReplacements.TryGetValue(handle.HandleId, out var oldHandleId))
             {
-                if (_subscriptionAdapter.TryUnsubscribe(oldEntry.SdkSubscription))
-                    RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
-                oldEntry.Handle.Supersede();
-                _subscriptionRegistry.Unregister(oldHandleId);
+                _pendingReplacements.Remove(handle.HandleId);
+
+                if (_subscriptionRegistry.TryGetEntry(oldHandleId, out var oldEntry))
+                {
+                    oldSdkSubscription = oldEntry.SdkSubscription;
+                    oldHandle = oldEntry.Handle;
+                    _subscriptionRegistry.Unregister(oldHandleId);
+                }
             }
+        }
+
+        if (oldHandle != null)
+        {
+            if (_subscriptionAdapter.TryUnsubscribe(oldSdkSubscription))
+                RecordOutboundMessage(_subscriptionAdapter.MeasureUnsubscribePayloadBytes());
+            oldHandle.Supersede();
         }
 
         OnSubscriptionApplied?.Invoke(new SubscriptionAppliedEvent(handle));
@@ -458,13 +517,17 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     void ISubscriptionEventSink.OnSubscriptionError(SubscriptionHandle handle, Exception error)
     {
-        // Remove pending replacement entry WITHOUT touching old handle — old remains active (AC: 5)
+        // Remove pending replacement entry WITHOUT touching old handle — old remains active (AC: 5).
+        // Snapshot-then-emit under _connectionStateGate keeps SDK adapter calls + signal emission
+        // outside every lock scope (see docs/runtime-boundaries.md `## Threading Model`).
         RemovePendingReplacementReferences(handle.HandleId);
-
-        if (_subscriptionRegistry.TryGetEntry(handle.HandleId, out var entry))
+        SubscriptionEntry? entry;
+        lock (_connectionStateGate)
+            _subscriptionRegistry.TryGetEntry(handle.HandleId, out entry);
+        if (entry != null)
             _subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription);
-
-        _subscriptionRegistry.Unregister(handle.HandleId);
+        lock (_connectionStateGate)
+            _subscriptionRegistry.Unregister(handle.HandleId);
         handle.Close();
         OnSubscriptionFailed?.Invoke(new SubscriptionFailedEvent(handle, error));
     }
@@ -511,11 +574,29 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     {
         ClearCacheView();
 
-        if (CurrentStatus.State == ConnectionState.Connected && _reconnectPolicy.TryBeginRetry(out var attemptNumber, out var delay))
+        // Snapshot the reconnect-policy decision under the gate; release before
+        // calling the state machine, because Transition() drives signal emission.
+        bool retryBegan = false;
+        int attemptNumber = 0;
+        TimeSpan delay = default;
+        int maxAttempts = 0;
+        if (CurrentStatus.State == ConnectionState.Connected)
+        {
+            lock (_connectionStateGate)
+            {
+                if (_reconnectPolicy.TryBeginRetry(out attemptNumber, out delay))
+                {
+                    retryBegan = true;
+                    maxAttempts = _reconnectPolicy.MaxAttempts;
+                }
+            }
+        }
+
+        if (retryBegan)
         {
             _stateMachine.Transition(
                 ConnectionState.Degraded,
-                $"DEGRADED — session experiencing issues; reconnecting (attempt {attemptNumber}/{_reconnectPolicy.MaxAttempts}, backoff {delay.TotalSeconds:0.#}s): {error.Message}",
+                $"DEGRADED — session experiencing issues; reconnecting (attempt {attemptNumber}/{maxAttempts}, backoff {delay.TotalSeconds:0.#}s): {error.Message}",
                 activeCompressionMode: _activeCompressionMode
             );
             return;
@@ -543,7 +624,6 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     private void Disconnect(string description)
     {
-        CurrentIdentity = null;
         var prevState = CurrentStatus.State;
         RunConnectionTeardown(() =>
         {
@@ -569,17 +649,25 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     {
         Volatile.Write(ref _currentTransportSessionId, 0);
         Volatile.Write(ref _activeTelemetrySessionId, 0);
-        _subscriptionRegistry.Clear();
+        // Mutate the four gate-protected fields together; SDK adapter calls
+        // and the telemetry-collector reset stay OUTSIDE the lock per the
+        // snapshot-then-emit / no-adapter-inside-lock contract. CurrentIdentity
+        // assignment goes through its locked setter (re-entrant lock) so the
+        // public property name remains the documented teardown surface.
+        lock (_connectionStateGate)
+        {
+            _subscriptionRegistry.Clear();
+            _pendingReplacements.Clear();
+            _reconnectPolicy.Reset();
+            CurrentIdentity = null;
+        }
         CancelPendingUnsubscribeThenCallbacks();
-        _pendingReplacements.Clear();
         ClearCacheView();
         _rowCallbackAdapter.ClearRegistration();
         _adapter.Close();
         _reducerAdapter.ClearConnection();
-        _reconnectPolicy.Reset();
         _activeCompressionMode = MessageCompressionMode.None;
         _telemetryCollector.Reset();
-        CurrentIdentity = null;
     }
 
     private void HandleConnected(long sessionId, string identity, string token)
@@ -587,28 +675,26 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         if (!IsCurrentTransportSession(sessionId))
             return;
 
-        if (string.IsNullOrEmpty(identity))
-        {
-            CurrentIdentity = null;
-        }
-        else
+        Identity? parsedIdentity = null;
+        if (!string.IsNullOrEmpty(identity))
         {
             try
             {
-                CurrentIdentity = Identity.FromHexString(identity);
+                parsedIdentity = Identity.FromHexString(identity);
             }
             catch (ArgumentException ex)
             {
                 // Defensive: the pinned ClientSDK 2.1.0 emits 64-char hex, but a future
                 // SDK shape change should not abort session setup mid-callback.
-                CurrentIdentity = null;
                 SpacetimeLog.Warning(
                     LogCategory.Connection,
                     "Connected identity was not parseable as 64-char hex; CurrentIdentity left null. " +
                     $"Parse error: {ex.Message}");
             }
         }
-        _reconnectPolicy.Reset();
+        CurrentIdentity = parsedIdentity;
+        lock (_connectionStateGate)
+            _reconnectPolicy.Reset();
         Volatile.Write(ref _activeTelemetrySessionId, sessionId);
         _telemetryCollector.StartSession(sessionId);
         if (_adapter.TryReadTrackerCounts(out var trackerCounts))
@@ -663,16 +749,16 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 _activeCompressionMode);
         }
 
-        // Snapshot to avoid a concurrent Disconnect nulling CurrentIdentity between
-        // the assignment above and event emission.
-        var identitySnapshot = CurrentIdentity ?? default;
+        // parsedIdentity is the local function-scope snapshot captured at parse time;
+        // reusing it here avoids a re-read race against a concurrent Disconnect that
+        // could null _currentIdentity between the assignment above and event emission.
         OnConnectionOpened?.Invoke(
             new ConnectionOpenedEvent
             {
                 Host = _host,
                 Database = _database,
                 Identity = identity,
-                IdentityValue = identitySnapshot,
+                IdentityValue = parsedIdentity ?? default,
                 ConnectedAt = DateTimeOffset.UtcNow,
             }
         );
@@ -833,37 +919,43 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     private bool HasPendingReplacementInFlight(Guid handleId)
     {
-        if (_pendingReplacements.ContainsKey(handleId))
-            return true;
-
-        foreach (var pendingOldHandleId in _pendingReplacements.Values)
+        lock (_connectionStateGate)
         {
-            if (pendingOldHandleId == handleId)
+            if (_pendingReplacements.ContainsKey(handleId))
                 return true;
-        }
 
-        return false;
+            foreach (var pendingOldHandleId in _pendingReplacements.Values)
+            {
+                if (pendingOldHandleId == handleId)
+                    return true;
+            }
+
+            return false;
+        }
     }
 
     private void RemovePendingReplacementReferences(Guid handleId)
     {
-        _pendingReplacements.Remove(handleId);
-
-        List<Guid>? pendingHandlesToRemove = null;
-        foreach (var pair in _pendingReplacements)
+        lock (_connectionStateGate)
         {
-            if (pair.Value != handleId)
-                continue;
+            _pendingReplacements.Remove(handleId);
 
-            pendingHandlesToRemove ??= new List<Guid>();
-            pendingHandlesToRemove.Add(pair.Key);
+            List<Guid>? pendingHandlesToRemove = null;
+            foreach (var pair in _pendingReplacements)
+            {
+                if (pair.Value != handleId)
+                    continue;
+
+                pendingHandlesToRemove ??= new List<Guid>();
+                pendingHandlesToRemove.Add(pair.Key);
+            }
+
+            if (pendingHandlesToRemove == null)
+                return;
+
+            foreach (var pendingHandleId in pendingHandlesToRemove)
+                _pendingReplacements.Remove(pendingHandleId);
         }
-
-        if (pendingHandlesToRemove == null)
-            return;
-
-        foreach (var pendingHandleId in pendingHandlesToRemove)
-            _pendingReplacements.Remove(pendingHandleId);
     }
 
     private Action RegisterPendingUnsubscribeThenCallback(Guid handleId, Action onEnded)

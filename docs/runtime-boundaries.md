@@ -594,3 +594,93 @@ Multi-client note: `SpacetimeLog.Sink` is a single process-wide slot. If two `Sp
 No-teardown contract: `SpacetimeClient._ExitTree` does not restore the previously-active sink. A sink installed by a client that later exits the tree remains the process-wide default until another client replaces it or the app clears `SpacetimeLog.Sink` explicitly. Short-lived clients that install a scene-scoped sink should reset `SpacetimeLog.Sink` to `GodotConsoleLogSink.Instance` in their own teardown code if they need the process default back.
 
 Sink-failure fallback: if a custom `ILogSink.Write` throws, `SpacetimeLog` falls back to `GodotConsoleLogSink.Instance` for that entry and pushes an `Error`-level diagnostic naming the failed sink and the throw. The SDK runtime call site never observes the exception — custom sinks cannot take down the emitting code path.
+
+---
+
+## Threading Model
+
+The SDK is single-thread by default — the supported `2.1.x` runtime serializes
+SDK callbacks through `FrameTick()` on the Godot main thread. A handful of
+shared-mutable fields, however, are reachable from `Task.ContinueWith(...,
+TaskScheduler.Default)` continuations today (the token-store path) and would
+become reachable from any future background timer or async callback. Those
+fields carry a structural memory-barrier contract so that adding such a path
+later cannot silently corrupt SDK state.
+
+### Protected fields
+
+| Field | Location | Protection |
+|-------|----------|------------|
+| `_sink` | `Public/Logging/SpacetimeLog.cs` | `volatile ILogSink` reference fence |
+| `_subscriptionRegistry` | `Internal/Connection/SpacetimeConnectionService.cs` | `lock (_connectionStateGate)` on every read/write |
+| `_pendingReplacements` | `Internal/Connection/SpacetimeConnectionService.cs` | `lock (_connectionStateGate)` on every read/write |
+| `_reconnectPolicy` | `Internal/Connection/SpacetimeConnectionService.cs` | `lock (_connectionStateGate)` on every reference reassignment and method call (`Reset()`, `TryBeginRetry()`, `MaxAttempts`) |
+| `_currentIdentity` (backing field for `CurrentIdentity`) | `Internal/Connection/SpacetimeConnectionService.cs` | `lock (_connectionStateGate)` in both the property getter and setter — direct `_currentIdentity` access from anywhere other than the two accessors is forbidden |
+
+### `_connectionStateGate` ownership
+
+`_connectionStateGate` is a single named `private readonly object` declared
+adjacent to `_pendingUnsubscribeThenCallbacksGate` in
+`SpacetimeConnectionService`. It covers all four protected service-level
+fields. The single-gate choice eliminates lock-ordering concerns and matches
+the repo's existing one-gate-per-logical-responsibility pattern. Contention is
+zero today (single-thread access) and would remain near-zero under any
+speculative future async path.
+
+### `volatile _sink` rationale
+
+`_sink` is a reference to an `ILogSink` interface. `volatile` provides exactly
+the publish/acquire fence needed: a reader picking up `_sink` from a
+background continuation (e.g. `Task.ContinueWith(..., TaskScheduler.Default)`
+inside the token-store persistence path) observes either the previous or the
+post-publish reference, never a torn or stale value. The setter null-coalesce
+contract (`?? GodotConsoleLogSink.Instance`) and `SafeWrite`'s local-snapshot
+pattern (`var sink = _sink;`) are preserved — `volatile` only adds the fence;
+the snapshot is what protects against between-read teardown of a custom sink.
+
+The fence guards the **field reference**, not the lifecycle of the object the
+reference points to: a consumer that disposes a custom `ILogSink` after
+replacing `Sink` may still race with an in-flight `SafeWrite` that has already
+captured the old reference. Custom sinks must outlive any concurrently-running
+log emission; the recommended pattern is to keep sinks alive for the lifetime
+of the process or wrap disposal in coordination with the logging callers.
+
+`CurrentIdentity` is `Identity?` (a `Nullable<Identity>` value type of about
+40 bytes); `volatile` cannot apply to value types and `Volatile.Read<T>` does
+not accept `Nullable<T>`. Locking is the only correct option.
+
+### Snapshot-then-emit pattern
+
+Inside every `lock (_connectionStateGate)` scope: mutate the protected
+field(s), capture any data needed for downstream signal emission or SDK
+adapter calls into local variables, then **release the lock** before invoking
+the signal/event or SDK call. Widening the lock to cover signal emission or
+SDK adapter calls would introduce deadlock risk; narrowing it back is the
+hard rule.
+
+For example, `OnSubscriptionApplied` snapshots the old SDK subscription
+reference and old handle inside the gate, releases, and only then calls
+`_subscriptionAdapter.TryUnsubscribe(...)` and emits the
+`OnSubscriptionApplied?.Invoke(...)` signal. The same pattern is used by
+`OnSubscriptionError`, `Unsubscribe`, `UnsubscribeThen`,
+`HandleDisconnectError`, and `ResetDisconnectedSessionState`.
+
+### `_stats` reference-return out of scope
+
+`ConnectionTelemetryCollector._stats` and the
+`SpacetimeClient.CurrentTelemetry` reference-return semantics are
+intentionally **not** covered by `_connectionStateGate`. The
+runtime-telemetry-hardening spec
+(`_bmad-output/implementation-artifacts/spec-runtime-telemetry-hardening.md`)
+constrains `_stats` to a single stable instance with reference-return reads,
+which precludes wrapping every read in a lock. That spec's session-fenced
+sinks plus monotonic elapsed-time discipline cover its threading concerns
+separately; this section's contract does not extend to it.
+
+### `ReconnectPolicy` internal state
+
+`ReconnectPolicy._attemptsUsed` is intentionally left unhardened internally —
+the chosen strategy is caller-side locking under `_connectionStateGate`,
+which makes external callers safe. Adding `Interlocked.Exchange` on
+`_attemptsUsed` would be defense-in-depth but expands scope and is explicitly
+out of scope here.
