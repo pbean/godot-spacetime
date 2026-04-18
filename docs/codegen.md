@@ -84,8 +84,11 @@ Safety constraint:
 
 Implementation details:
 
-- The editor fetches the module artifact from the server's HTTP API and then
-  runs `spacetime generate --bin-path ... --lang csharp --out-dir ... --namespace ... -y`.
+- The editor fetches raw schema JSON from
+  `/v1/database/{module}/schema?version=9`, wraps it as a `V9` `RawModuleDef`,
+  and then runs the pinned hidden
+  `spacetime generate --module-def ... --lang csharp --out-dir ... --namespace ... -y`
+  path from a temporary workspace.
 - After generation, the editor runs `python3 scripts/codegen/detect-godot-types.py`
   on the generated `Types/` directory so Godot companion files are refreshed too.
 - The `spacetime` CLI must be installed on the developer machine and available

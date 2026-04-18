@@ -15,6 +15,10 @@ namespace GodotSpacetime.Editor.Codegen;
 internal sealed class EditorCodegenService
 {
     private const string DefaultGeneratedNamespace = "Spacetime" + "DB.Types";
+    private const int SchemaVersion = 9;
+    private const string ModuleDefVariantName = "V9";
+    private const string ModuleDefFileName = "module-def.json";
+    private const string TempModuleSourceDirectoryName = "spacetimedb";
     private static readonly TimeSpan HttpTimeout = TimeSpan.FromSeconds(30);
     private readonly string _projectRoot;
 
@@ -64,11 +68,12 @@ internal sealed class EditorCodegenService
                 safetyError);
         }
 
-        string? tempArtifactPath = null;
+        string? tempWorkspacePath = null;
         try
         {
             var artifact = await FetchSchemaArtifactAsync(trimmedServerUrl, trimmedModuleName).ConfigureAwait(false);
-            tempArtifactPath = WriteArtifactToTempFile(artifact);
+            tempWorkspacePath = CreateTempCodegenWorkspace();
+            var tempArtifactPath = WriteArtifactToTempFile(tempWorkspacePath, artifact);
 
             PrepareOutputDirectory(absoluteOutputDir);
 
@@ -76,8 +81,8 @@ internal sealed class EditorCodegenService
                 "spacetime",
                 [
                     "generate",
-                    "--bin-path",
-                    tempArtifactPath,
+                    "--module-def",
+                    ModuleDefFileName,
                     "--lang",
                     "csharp",
                     "--out-dir",
@@ -85,7 +90,8 @@ internal sealed class EditorCodegenService
                     "--namespace",
                     trimmedNamespace,
                     "-y",
-                ]).ConfigureAwait(false);
+                ],
+                tempWorkspacePath).ConfigureAwait(false);
 
             if (codegenProcess.ExitCode != 0)
             {
@@ -131,9 +137,9 @@ internal sealed class EditorCodegenService
         }
         finally
         {
-            if (!string.IsNullOrEmpty(tempArtifactPath))
+            if (!string.IsNullOrEmpty(tempWorkspacePath))
             {
-                TryDeleteFile(tempArtifactPath);
+                TryDeleteDirectory(tempWorkspacePath);
             }
         }
     }
@@ -141,77 +147,40 @@ internal sealed class EditorCodegenService
     private async Task<DownloadedArtifact> FetchSchemaArtifactAsync(string serverUrl, string moduleName)
     {
         var normalizedServer = NormalizeServerUrl(serverUrl);
-        var modulePath = $"v1/database/{Uri.EscapeDataString(moduleName)}";
-        var candidateUris = new[]
-        {
-            new Uri(normalizedServer, modulePath),
-            new Uri(normalizedServer, $"{modulePath}/wasm"),
-            new Uri(normalizedServer, $"{modulePath}/schema"),
-        };
+        var schemaUri = new Uri(
+            normalizedServer,
+            $"v1/database/{Uri.EscapeDataString(moduleName)}/schema?version={SchemaVersion}");
 
         using var httpClient = new HttpClient
         {
             Timeout = HttpTimeout,
         };
 
-        string? lastNon404Error = null;
-        byte[]? lastJsonPayload = null;
-
-        foreach (var candidateUri in candidateUris)
+        using var response = await SendAnonymousGetAsync(httpClient, schemaUri).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
         {
-            using var response = await SendAnonymousGetAsync(httpClient, candidateUri).ConfigureAwait(false);
-
-            if (response.StatusCode == HttpStatusCode.NotFound)
-            {
-                continue;
-            }
-
-            if (!response.IsSuccessStatusCode)
-            {
-                lastNon404Error = $"GET {candidateUri} returned {(int)response.StatusCode} {response.ReasonPhrase}.";
-                continue;
-            }
-
-            var payload = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-            if (!IsJsonResponse(response, payload))
-            {
-                return new DownloadedArtifact(payload, ".wasm");
-            }
-
-            lastJsonPayload = payload;
-            if (TryExtractDownloadUri(payload, normalizedServer, out var downloadUri))
-            {
-                using var nestedResponse = await SendAnonymousGetAsync(httpClient, downloadUri).ConfigureAwait(false);
-                if (!nestedResponse.IsSuccessStatusCode)
-                {
-                    throw new EditorCodegenFailureException(
-                        $"FAILED — could not reach server: {(int)nestedResponse.StatusCode} {nestedResponse.ReasonPhrase}",
-                        $"GET {downloadUri} returned {(int)nestedResponse.StatusCode} {nestedResponse.ReasonPhrase}.");
-                }
-
-                var nestedPayload = await nestedResponse.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-                if (IsJsonResponse(nestedResponse, nestedPayload))
-                {
-                    lastJsonPayload = nestedPayload;
-                    continue;
-                }
-
-                return new DownloadedArtifact(nestedPayload, ".wasm");
-            }
+            throw new EditorCodegenFailureException(
+                "FAILED — could not reach server: module endpoint not found",
+                $"No supported schema endpoint was found at {schemaUri}.");
         }
 
-        if (lastJsonPayload is not null)
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new EditorCodegenFailureException(
+                $"FAILED — could not reach server: {(int)response.StatusCode} {response.ReasonPhrase}",
+                $"GET {schemaUri} returned {(int)response.StatusCode} {response.ReasonPhrase}.");
+        }
+
+        var payload = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+        if (!IsJsonResponse(response, payload))
         {
             throw new EditorCodegenFailureException(
                 "FAILED — generation error (see recovery guidance)",
-                "The server returned JSON metadata or schema but no downloadable wasm artifact. " +
-                "The pinned spacetime generate flow requires a wasm artifact for --bin-path.");
+                $"The server returned a non-JSON schema response from {schemaUri}. " +
+                $"The pinned editor flow expects JSON from /schema?version={SchemaVersion}.");
         }
 
-        throw new EditorCodegenFailureException(
-            "FAILED — could not reach server: module endpoint not found",
-            lastNon404Error ??
-            $"No supported module endpoint was found under {new Uri(normalizedServer, modulePath)}.");
+        return new DownloadedArtifact(WrapModuleDefJson(payload), ".json");
     }
 
     private static Uri NormalizeServerUrl(string serverUrl)
@@ -349,101 +318,54 @@ internal sealed class EditorCodegenService
         return preview.StartsWith("{", StringComparison.Ordinal) || preview.StartsWith("[", StringComparison.Ordinal);
     }
 
-    private static bool TryExtractDownloadUri(byte[] jsonPayload, Uri baseUri, out Uri downloadUri)
+    private static byte[] WrapModuleDefJson(byte[] schemaPayload)
     {
-        using var document = JsonDocument.Parse(jsonPayload);
-        if (TryExtractDownloadUri(document.RootElement, baseUri, out downloadUri))
+        try
         {
-            return true;
-        }
+            using var schemaDocument = JsonDocument.Parse(schemaPayload);
+            using var stream = new MemoryStream();
+            using var writer = new Utf8JsonWriter(stream);
 
-        downloadUri = null!;
-        return false;
+            writer.WriteStartObject();
+            writer.WritePropertyName(ModuleDefVariantName);
+            schemaDocument.RootElement.WriteTo(writer);
+            writer.WriteEndObject();
+            writer.Flush();
+
+            return stream.ToArray();
+        }
+        catch (JsonException ex)
+        {
+            throw new EditorCodegenFailureException(
+                "FAILED — generation error (see recovery guidance)",
+                $"The server returned schema JSON that could not be parsed as RawModuleDef {ModuleDefVariantName}.\n{ex.Message}");
+        }
     }
 
-    private static bool TryExtractDownloadUri(JsonElement element, Uri baseUri, out Uri downloadUri)
+    private static string CreateTempCodegenWorkspace()
     {
-        if (element.ValueKind == JsonValueKind.Object)
-        {
-            foreach (var property in element.EnumerateObject())
-            {
-                if (property.Value.ValueKind == JsonValueKind.String &&
-                    LooksLikeArtifactUrlKey(property.Name) &&
-                    TryCreateUri(baseUri, property.Value.GetString(), out downloadUri))
-                {
-                    return true;
-                }
-            }
-
-            foreach (var property in element.EnumerateObject())
-            {
-                if (TryExtractDownloadUri(property.Value, baseUri, out downloadUri))
-                {
-                    return true;
-                }
-            }
-        }
-
-        if (element.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var item in element.EnumerateArray())
-            {
-                if (TryExtractDownloadUri(item, baseUri, out downloadUri))
-                {
-                    return true;
-                }
-            }
-        }
-
-        downloadUri = null!;
-        return false;
+        var workspacePath = Path.Combine(Path.GetTempPath(), $"godot-spacetime-codegen-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(workspacePath);
+        Directory.CreateDirectory(Path.Combine(workspacePath, TempModuleSourceDirectoryName));
+        return workspacePath;
     }
 
-    private static bool LooksLikeArtifactUrlKey(string propertyName)
+    private static string WriteArtifactToTempFile(string workspacePath, DownloadedArtifact artifact)
     {
-        return propertyName.Contains("wasm", StringComparison.OrdinalIgnoreCase) ||
-               propertyName.Contains("download", StringComparison.OrdinalIgnoreCase) ||
-               propertyName.Contains("artifact", StringComparison.OrdinalIgnoreCase) ||
-               propertyName.Contains("module", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool TryCreateUri(Uri baseUri, string? uriText, out Uri uri)
-    {
-        if (string.IsNullOrWhiteSpace(uriText))
-        {
-            uri = null!;
-            return false;
-        }
-
-        if (Uri.TryCreate(uriText, UriKind.Absolute, out var absoluteUri))
-        {
-            uri = absoluteUri;
-            return true;
-        }
-
-        if (Uri.TryCreate(baseUri, uriText, out var relativeUri))
-        {
-            uri = relativeUri;
-            return true;
-        }
-
-        uri = null!;
-        return false;
-    }
-
-    private string WriteArtifactToTempFile(DownloadedArtifact artifact)
-    {
-        var tempFilePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}{artifact.Extension}");
+        var tempFilePath = Path.Combine(workspacePath, ModuleDefFileName);
         File.WriteAllBytes(tempFilePath, artifact.Content);
         return tempFilePath;
     }
 
-    private async Task<ProcessExecutionResult> RunProcessAsync(string executable, IReadOnlyList<string> arguments)
+    private async Task<ProcessExecutionResult> RunProcessAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        string? workingDirectory = null)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
-            WorkingDirectory = _projectRoot,
+            WorkingDirectory = workingDirectory ?? _projectRoot,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -606,6 +528,23 @@ internal sealed class EditorCodegenService
             if (File.Exists(path))
             {
                 File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
             }
         }
         catch (IOException)

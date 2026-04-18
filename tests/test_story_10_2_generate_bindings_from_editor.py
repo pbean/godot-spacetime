@@ -54,7 +54,8 @@ def test_editor_codegen_service_declares_async_fetch_and_pipeline_surface() -> N
         "FetchSchemaArtifactAsync(",
         "SendAnonymousGetAsync(",
         "spacetime",
-        "--bin-path",
+        "--module-def",
+        "SchemaVersion = 9",
         "detect-godot-types.py",
     ):
         assert expected in content, (
@@ -184,7 +185,8 @@ def test_docs_cover_editor_based_codegen_workflow() -> None:
         "SpacetimeSettings.Host",
         "SpacetimeSettings.Database",
         "GeneratedBindingsNamespace",
-        "--bin-path",
+        "--module-def",
+        "version=9",
         "anonymous",
         "generated boundary",
     ):
