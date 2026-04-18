@@ -245,13 +245,42 @@ def test_spacetime_client_declares_current_identity_accessor() -> None:
 # ---------------------------------------------------------------------------
 
 def test_connection_service_declares_current_identity_property() -> None:
+    # The shared-state thread-safety hardening converted CurrentIdentity from an
+    # auto-property to a manual property over a `_currentIdentity` backing field
+    # whose getter/setter both acquire `_connectionStateGate`. The public name,
+    # type, and access modifiers are preserved; the manual-property shape adds
+    # the locked accessors required to publish writes safely across threads.
+    # See `_bmad-output/implementation-artifacts/spec-shared-state-thread-safety.md`.
     content = _strip(SERVICE_CS)
     assert re.search(
-        r"internal\s+Identity\?\s+CurrentIdentity\s*\{\s*get;\s*private\s+set;\s*\}",
+        r"internal\s+Identity\?\s+CurrentIdentity\s*\{",
         content,
     ), (
-        "SpacetimeConnectionService must expose internal Identity? CurrentIdentity "
-        "{ get; private set; } (AC 1)"
+        "SpacetimeConnectionService must expose `internal Identity? CurrentIdentity { ... }` "
+        "(AC 1; manual property with locked accessors after thread-safety hardening)."
+    )
+    assert re.search(
+        r"private\s+Identity\?\s+_currentIdentity\b",
+        content,
+    ), (
+        "SpacetimeConnectionService must keep a `_currentIdentity` backing field for the "
+        "CurrentIdentity property (locked-accessor pattern, thread-safety hardening)."
+    )
+    # Both accessors must acquire the connection-state gate so cross-thread reads
+    # observe a fully-published identity value.
+    assert re.search(
+        r"lock\s*\(\s*_connectionStateGate\s*\)\s*return\s+_currentIdentity",
+        content,
+    ), (
+        "CurrentIdentity getter must acquire `_connectionStateGate` and return _currentIdentity "
+        "(thread-safety hardening contract)."
+    )
+    assert re.search(
+        r"lock\s*\(\s*_connectionStateGate\s*\)\s*_currentIdentity\s*=\s*value",
+        content,
+    ), (
+        "CurrentIdentity setter must acquire `_connectionStateGate` and assign _currentIdentity "
+        "(thread-safety hardening contract)."
     )
 
 
@@ -268,25 +297,41 @@ def test_connection_service_handle_connected_assigns_current_identity() -> None:
 
 
 def test_connection_service_emits_identity_value_on_opened_event() -> None:
-    """HandleConnected must populate ConnectionOpenedEvent.IdentityValue from
-    CurrentIdentity (via direct ?? default or a snapshot local) so consumers
-    see the typed identity on the open event (AC 1)."""
+    """HandleConnected must populate ConnectionOpenedEvent.IdentityValue from a
+    snapshot of the parsed identity (direct read, getter snapshot local, or
+    parse-time local) so consumers see the typed identity on the open event
+    (AC 1). The parse-time local pattern was introduced by the
+    spec-shared-state-thread-safety review-loop patch on 2026-04-17 to avoid a
+    re-read race against concurrent Disconnect."""
     content = _read(SERVICE_CS)
     body = _method_body(content, "private void HandleConnected(")
     direct = re.search(r"IdentityValue\s*=\s*CurrentIdentity\s*\?\?\s*default", body) is not None
-    # Snapshot pattern: a local captures `CurrentIdentity ?? default` and the event
-    # assigns IdentityValue = <that local>. This protects against a concurrent
-    # teardown nulling CurrentIdentity between assignment and event emission.
-    snapshot_local = re.search(
+    # Pattern A: a local captures `CurrentIdentity ?? default` and the event
+    # assigns IdentityValue = <that local>.
+    getter_local = re.search(
         r"var\s+(\w+)\s*=\s*CurrentIdentity\s*\?\?\s*default\s*;", body)
     snapshot = False
-    if snapshot_local:
-        local_name = snapshot_local.group(1)
+    if getter_local:
+        local_name = getter_local.group(1)
         snapshot = re.search(rf"IdentityValue\s*=\s*{re.escape(local_name)}\b", body) is not None
-    assert direct or snapshot, (
+    # Pattern B: a parse-time local (e.g. `Identity? parsedIdentity = ...`) is
+    # used for both `CurrentIdentity = <local>` and
+    # `IdentityValue = <local> ?? default`.
+    parse_local_match = re.search(
+        r"Identity\?\s+(\w+)\s*=\s*null\s*;", body)
+    parse_local = False
+    if parse_local_match:
+        local_name = parse_local_match.group(1)
+        assigns_current = re.search(
+            rf"CurrentIdentity\s*=\s*{re.escape(local_name)}\s*;", body) is not None
+        emits_event = re.search(
+            rf"IdentityValue\s*=\s*{re.escape(local_name)}\s*\?\?\s*default", body) is not None
+        parse_local = assigns_current and emits_event
+    assert direct or snapshot or parse_local, (
         "HandleConnected must emit IdentityValue on the ConnectionOpenedEvent derived "
-        "from CurrentIdentity — either directly (IdentityValue = CurrentIdentity ?? default) "
-        "or via a captured snapshot local (AC 1)"
+        "from the parsed identity — either directly (IdentityValue = CurrentIdentity ?? default), "
+        "via a getter snapshot local, or via a parse-time `Identity? <local> = null;` "
+        "captured at FromHexString call time (AC 1)"
     )
 
 
@@ -300,10 +345,18 @@ def test_connection_service_clears_current_identity_in_reset() -> None:
 
 
 def test_connection_service_clears_current_identity_on_disconnect() -> None:
-    """AC 4: Disconnect(reason) must clear CurrentIdentity to null to cover the
-    code path that does not route through ResetDisconnectedSessionState."""
+    """AC 4: Disconnect(reason) must clear CurrentIdentity to null. Either by
+    setting it inline OR by routing through ResetDisconnectedSessionState
+    (the canonical clearer, verified by
+    test_connection_service_clears_current_identity_in_reset above). Inline
+    nulling was removed by the spec-shared-state-thread-safety review-loop
+    patch on 2026-04-17 to keep the four-fields-clear sequence on a single
+    lock acquisition."""
     content = _read(SERVICE_CS)
     body = _method_body(content, "private void Disconnect(string ")
-    assert "CurrentIdentity = null" in body, (
-        "Disconnect(reason) must clear CurrentIdentity to null (AC 4)"
+    inline = "CurrentIdentity = null" in body
+    delegated = "ResetDisconnectedSessionState()" in body
+    assert inline or delegated, (
+        "Disconnect(reason) must clear CurrentIdentity to null — either inline "
+        "or by calling ResetDisconnectedSessionState() (AC 4)"
     )

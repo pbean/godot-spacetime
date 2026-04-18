@@ -18,7 +18,7 @@ namespace GodotSpacetime.Logging;
 /// </summary>
 public static class SpacetimeLog
 {
-    private static ILogSink _sink = GodotConsoleLogSink.Instance;
+    private static volatile ILogSink _sink = GodotConsoleLogSink.Instance;
 
     /// <summary>
     /// Active log destination. Defaults to <see cref="GodotConsoleLogSink.Instance"/>
