@@ -167,30 +167,28 @@ static func parse_server_message(packet: PackedByteArray, is_compressed: bool = 
 	# stripping (or decompressing) the envelope, the remaining bytes are the
 	# BSATN-encoded ServerMessage whose first byte is the variant tag.
 	#
-	# `is_compressed` is retained for backward compatibility with the legacy
-	# `v1.bsatn.spacetimedb` wire where the GDScript transport tracked a
-	# separate `_active_compression_mode` flag; in v2 the envelope byte is
-	# per-frame so callers can pass `false` and let this helper dispatch.
+	# `is_compressed` is retained only as a session-level hint from the service.
+	# In v2 the envelope byte is authoritative even when compression was
+	# requested for the whole session, so decoding always dispatches from
+	# `packet[0]` instead of forcing the legacy whole-frame gzip path.
 	if packet.is_empty():
-		return _raw_message("Unknown", -1, packet)
+		return _protocol_error("Empty ServerMessage packet.", -1, packet)
 
 	var payload := packet
 	var compression_tag := packet[0]
-	if is_compressed:
-		# Legacy gate — `_active_compression_mode != "None"` was set globally
-		# for the whole session. Fall back to decompressing the full packet
-		# minus the envelope byte so existing callers keep working.
-		payload = BsatnReaderScript.decompress_gzip(packet.slice(1, packet.size()))
-	else:
-		match compression_tag:
-			SERVER_ENVELOPE_NONE:
-				payload = packet.slice(1, packet.size())
-			SERVER_ENVELOPE_GZIP, SERVER_ENVELOPE_BROTLI:
-				# Brotli canonicalises to Gzip on the wire per upstream.
-				payload = BsatnReaderScript.decompress_gzip(packet.slice(1, packet.size()))
-			_:
-				push_error("Unknown ServerMessage compression envelope byte 0x%02X" % compression_tag)
-				return _raw_message("Unknown", compression_tag, packet)
+	match compression_tag:
+		SERVER_ENVELOPE_NONE:
+			payload = packet.slice(1, packet.size())
+		SERVER_ENVELOPE_GZIP, SERVER_ENVELOPE_BROTLI:
+			# Brotli canonicalises to Gzip on the wire per upstream.
+			payload = BsatnReaderScript.decompress_gzip(packet.slice(1, packet.size()))
+		_:
+			var session_hint := "session expects compressed frames" if is_compressed else "session accepts uncompressed frames"
+			return _protocol_error(
+				"Unknown ServerMessage compression envelope byte 0x%02X (%s)." % [compression_tag, session_hint],
+				-1,
+				packet
+			)
 
 	var reader = BsatnReaderScript.new(payload)
 	var tag := reader.read_u8()
@@ -208,29 +206,66 @@ static func parse_server_message(packet: PackedByteArray, is_compressed: bool = 
 			var identity_bytes := reader.read_fixed_bytes(32)
 			var connection_id_bytes := reader.read_fixed_bytes(16)
 			var token := reader.read_string()
-			return {
+			return _finalize_parsed_message({
 				"kind": "InitialConnection",
 				"tag": tag,
 				"identity": fixed_width_bytes_to_hex(identity_bytes),
 				"connection_id": fixed_width_bytes_to_hex(connection_id_bytes),
 				"token": token,
-			}
+			}, reader, tag, payload, "InitialConnection")
 		SERVER_MESSAGE_SUBSCRIBE_APPLIED:
-			return _parse_subscribe_applied(tag, payload, reader)
+			return _finalize_parsed_message(
+				_parse_subscribe_applied(tag, payload, reader),
+				reader,
+				tag,
+				payload,
+				"SubscribeApplied"
+			)
 		SERVER_MESSAGE_UNSUBSCRIBE_APPLIED:
-			return _parse_unsubscribe_applied(tag, payload, reader)
+			return _finalize_parsed_message(
+				_parse_unsubscribe_applied(tag, payload, reader),
+				reader,
+				tag,
+				payload,
+				"UnsubscribeApplied"
+			)
 		SERVER_MESSAGE_SUBSCRIPTION_ERROR:
-			return _parse_subscription_error(tag, payload, reader)
+			return _finalize_parsed_message(
+				_parse_subscription_error(tag, payload, reader),
+				reader,
+				tag,
+				payload,
+				"SubscriptionError"
+			)
 		SERVER_MESSAGE_TRANSACTION_UPDATE:
-			return _parse_transaction_update(tag, payload, reader)
+			return _finalize_parsed_message(
+				_parse_transaction_update(tag, payload, reader),
+				reader,
+				tag,
+				payload,
+				"TransactionUpdate"
+			)
 		SERVER_MESSAGE_ONE_OFF_QUERY_RESULT:
+			# Observed spacetime 2.1.0 fixture corpus: the smoke_test wire capture
+			# does not emit OneOffQueryResult. Until an authoritative fixture exists,
+			# keep the branch raw and document the gap in manifest.json rather than
+			# guessing at a struct shape the pinned runtime has not proven.
 			return _raw_message("OneOffQueryResult", tag, payload)
 		SERVER_MESSAGE_REDUCER_RESULT:
-			return _parse_reducer_result(tag, payload, reader)
+			return _finalize_parsed_message(
+				_parse_reducer_result(tag, payload, reader),
+				reader,
+				tag,
+				payload,
+				"ReducerResult"
+			)
 		SERVER_MESSAGE_PROCEDURE_RESULT:
+			# Observed spacetime 2.1.0 fixture corpus: the smoke_test workflow has
+			# no procedures, so no authoritative ProcedureResult capture exists yet.
+			# Keep the branch raw until the fixture corpus proves its layout.
 			return _raw_message("ProcedureResult", tag, payload)
 		_:
-			return _raw_message("Unknown", tag, payload)
+			return _protocol_error("Unknown ServerMessage variant tag %d." % tag, tag, payload)
 
 
 static func fixed_width_bytes_to_hex(bytes: PackedByteArray) -> String:
@@ -283,16 +318,34 @@ static func _parse_unsubscribe_applied(tag: int, payload: PackedByteArray, reade
 static func _parse_subscription_error(tag: int, payload: PackedByteArray, reader) -> Dictionary:
 	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: SDK declaration is
 	# `SubscriptionError { RequestId: Option<u32>, QuerySetId, Error }`.
+	#
+	# Observed live replacement-failure frame against the pinned 2.1.0 server
+	# also carries a second u32 slot after QuerySetId in the
+	# `subscription_error_recv.bin` fixture. Its value matches the request/query
+	# set id in the captured smoke_test session, so the parser consumes it when
+	# the next two u32 values fit the pattern `<duplicate id><string len>`.
 	var request_id = null
 	var has_request_id = reader.read_option_tag()
 	if has_request_id:
 		request_id = reader.read_u32()
+	var query_set_id: int = reader.read_u32()
+	if reader.remaining_bytes() >= 8:
+		var duplicate_id_candidate: int = reader.peek_u32()
+		var string_len_after_duplicate: int = reader.peek_u32(4)
+		var fits_duplicate_shape: bool = string_len_after_duplicate <= (reader.remaining_bytes() - 8)
+		var duplicate_matches_id: bool = duplicate_id_candidate == query_set_id or (
+			request_id != null and duplicate_id_candidate == int(request_id)
+		)
+		if duplicate_matches_id and fits_duplicate_shape:
+			var duplicate_request_id: int = reader.read_u32()
+			if request_id == null:
+				request_id = duplicate_request_id
 
 	return {
 		"kind": "SubscriptionError",
 		"tag": tag,
 		"request_id": request_id,
-		"query_set_id": reader.read_u32(),
+		"query_set_id": query_set_id,
 		"error_message": reader.read_string(),
 		"raw_payload": payload.slice(1, payload.size()),
 	}
@@ -503,6 +556,26 @@ static func _parse_reducer_result(tag: int, payload: PackedByteArray, reader) ->
 		"timestamp_micros": timestamp_micros,
 		"query_sets": query_sets,
 		"raw_payload": payload.slice(1, payload.size()),
+	}
+
+
+static func _finalize_parsed_message(message: Dictionary, reader, tag: int, payload: PackedByteArray, context: String) -> Dictionary:
+	if reader.has_more():
+		return _protocol_error(
+			"%s parse drift: %d trailing byte(s) remain after decode." % [context, reader.remaining_bytes()],
+			tag,
+			payload
+		)
+	return message
+
+
+static func _protocol_error(error_message: String, tag: int, payload: PackedByteArray) -> Dictionary:
+	push_error(error_message)
+	return {
+		"kind": "ProtocolError",
+		"tag": tag,
+		"error_message": error_message,
+		"raw_payload": payload.duplicate(),
 	}
 
 

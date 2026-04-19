@@ -1,0 +1,7 @@
+{
+  "error_message": "no such table: `definitely_missing_table`. If the table exists, it may be marked private., executing: `SELECT * FROM definitely_missing_table`",
+  "kind": "SubscriptionError",
+  "query_set_id": 24,
+  "request_id": 24,
+  "tag": 3
+}

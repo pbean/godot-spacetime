@@ -6,7 +6,7 @@ invokes the GDScript `encode_*` static helper via a Godot-headless harness
 and asserts the emitted bytes match the captured `.bin` byte-for-byte.
 
 For each server-fixture (InitialConnection / SubscribeApplied /
-UnsubscribeApplied / ReducerResult) the test invokes
+SubscriptionError / UnsubscribeApplied / ReducerResult) the test invokes
 `GdscriptConnectionProtocol.parse_server_message` via the same harness and
 asserts the structured Dictionary it returns matches a pinned expectation.
 
@@ -18,9 +18,7 @@ when `spacetime --version` or `SpacetimeDB.ClientSDK` NuGet changes.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -31,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / "gdscript_wire"
 HARNESS = FIXTURE_DIR / "parse_fixture_harness.gd"
 HARNESS_RES = "res://tests/fixtures/gdscript_wire/parse_fixture_harness.gd"
+TOKEN_HARNESS = FIXTURE_DIR / "service_token_validation_harness.gd"
+TOKEN_HARNESS_RES = "res://tests/fixtures/gdscript_wire/service_token_validation_harness.gd"
 EVENT_PREFIX = "WIRE-HARNESS "
 HARNESS_TIMEOUT_SECONDS = 40
 
@@ -51,15 +51,15 @@ def _require_godot() -> str:
     return godot.path
 
 
-def _invoke_harness(godot_path: str, harness_args: list[str]) -> dict:
-    """Run the Godot headless harness and return the parsed JSON result."""
+def _invoke_script_harness(godot_path: str, harness_res: str, harness_args: list[str]) -> dict:
+    """Run a Godot headless harness and return the parsed JSON result."""
     cmd = [
         godot_path,
         "--headless",
         "--path",
         str(ROOT),
         "--script",
-        HARNESS_RES,
+        harness_res,
         "++",  # sentinel; forgotten separator — actual user args come after `--`
     ]
     # Godot uses `--` to separate engine args from user script args. Use `++`
@@ -70,7 +70,7 @@ def _invoke_harness(godot_path: str, harness_args: list[str]) -> dict:
         "--path",
         str(ROOT),
         "--script",
-        HARNESS_RES,
+        harness_res,
         "--",
         *harness_args,
     ]
@@ -106,8 +106,19 @@ def _invoke_harness(godot_path: str, harness_args: list[str]) -> dict:
     raise AssertionError("unreachable")  # appeases type-checkers
 
 
+def _invoke_harness(godot_path: str, harness_args: list[str]) -> dict:
+    return _invoke_script_harness(godot_path, HARNESS_RES, harness_args)
+
+
 def _load_manifest() -> dict:
     return json.loads((FIXTURE_DIR / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _load_expected(name: str) -> dict:
+    path = FIXTURE_DIR / name
+    if not path.exists():
+        pytest.skip(f"expected parser output {name} missing")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _fixture_path(name: str) -> str:
@@ -131,6 +142,57 @@ def test_harness_file_exists() -> None:
         "tests/fixtures/gdscript_wire/parse_fixture_harness.gd must be present "
         "alongside the capture script."
     )
+    assert TOKEN_HARNESS.exists(), (
+        "tests/fixtures/gdscript_wire/service_token_validation_harness.gd must be present "
+        "alongside the parse harness."
+    )
+
+
+def test_manifest_documents_unobserved_server_messages() -> None:
+    manifest = _load_manifest()
+    documented = {
+        entry["kind"]: entry["reason"]
+        for entry in manifest.get("unobserved_server_messages", [])
+    }
+    assert "OneOffQueryResult" in documented, (
+        "manifest.json must explain why OneOffQueryResult remains a raw parser branch."
+    )
+    assert "ProcedureResult" in documented, (
+        "manifest.json must explain why ProcedureResult remains a raw parser branch."
+    )
+
+
+def test_invalid_initial_connection_token_is_not_persisted() -> None:
+    godot = _require_godot()
+    result = _invoke_script_harness(
+        godot,
+        TOKEN_HARNESS_RES,
+        ["simulate_initial_connection_token", "not-a-valid-jwt"],
+    )
+    assert result.get("ok"), f"harness reported error: {result}"
+    assert result["data"] == {
+        "session_token": "",
+        "stored_token": "",
+        "state": "Connected",
+        "auth_state": "None",
+    }
+
+
+def test_valid_initial_connection_token_is_persisted() -> None:
+    godot = _require_godot()
+    valid_token = _load_expected("initial_connection_expected.json")["token"]
+    result = _invoke_script_harness(
+        godot,
+        TOKEN_HARNESS_RES,
+        ["simulate_initial_connection_token", valid_token],
+    )
+    assert result.get("ok"), f"harness reported error: {result}"
+    assert result["data"] == {
+        "session_token": valid_token,
+        "stored_token": valid_token,
+        "state": "Connected",
+        "auth_state": "None",
+    }
 
 
 def test_client_subscribe_encode_matches_fixture() -> None:
@@ -236,14 +298,16 @@ def test_server_initial_connection_parse_matches_fixture() -> None:
     fixture = _fixture_path(entry["file"])
     result = _invoke_harness(godot, ["parse_initial_connection", fixture])
     assert result.get("ok"), f"harness reported error: {result}"
-    data = result["data"]
-    assert data["kind"] == "InitialConnection"
-    assert data["tag"] == 0
-    assert isinstance(data["identity"], str) and len(data["identity"]) == 64
-    assert isinstance(data["connection_id"], str) and len(data["connection_id"]) == 32
-    token = str(data["token"])
-    assert token.startswith("eyJ"), f"expected JWT-shaped token, got {token[:32]!r}"
-    assert token.count(".") == 2, "JWT must have three dot-separated segments"
+    assert result["data"] == _load_expected("initial_connection_expected.json")
+
+
+def test_session_compression_hint_does_not_override_v2_envelope_dispatch() -> None:
+    _require_fixtures()
+    godot = _require_godot()
+    fixture = _fixture_path("subscribe_applied_recv.bin")
+    result = _invoke_harness(godot, ["parse_any_session_compressed", fixture])
+    assert result.get("ok"), f"harness reported error: {result}"
+    assert result["data"] == _load_expected("subscribe_applied_expected.json")
 
 
 def test_server_subscribe_applied_parse_matches_fixture() -> None:
@@ -258,12 +322,22 @@ def test_server_subscribe_applied_parse_matches_fixture() -> None:
     fixture = _fixture_path(entry["file"])
     result = _invoke_harness(godot, ["parse_subscribe_applied", fixture])
     assert result.get("ok"), f"harness reported error: {result}"
-    data = result["data"]
-    assert data["kind"] == "SubscribeApplied"
-    assert data["tag"] == 1
-    assert int(data["request_id"]) == entry["request_id"]
-    assert int(data["query_set_id"]) == entry["query_set_id"]
-    assert isinstance(data["tables"], list), "tables must be a list"
+    assert result["data"] == _load_expected("subscribe_applied_expected.json")
+
+
+def test_server_subscription_error_parse_matches_fixture() -> None:
+    _require_fixtures()
+    godot = _require_godot()
+    manifest = _load_manifest()
+    entry = next(
+        (frame for frame in manifest["frames"] if frame["kind"] == "subscription_error"),
+        None,
+    )
+    assert entry is not None, "manifest missing subscription_error entry"
+    fixture = _fixture_path(entry["file"])
+    result = _invoke_harness(godot, ["parse_any", fixture])
+    assert result.get("ok"), f"harness reported error: {result}"
+    assert result["data"] == _load_expected("subscription_error_expected.json")
 
 
 def test_server_unsubscribe_applied_parse_matches_fixture() -> None:
@@ -278,11 +352,7 @@ def test_server_unsubscribe_applied_parse_matches_fixture() -> None:
     fixture = _fixture_path(entry["file"])
     result = _invoke_harness(godot, ["parse_unsubscribe_applied", fixture])
     assert result.get("ok"), f"harness reported error: {result}"
-    data = result["data"]
-    assert data["kind"] == "UnsubscribeApplied"
-    assert data["tag"] == 2
-    assert int(data["request_id"]) == entry["request_id"]
-    assert int(data["query_set_id"]) == entry["query_set_id"]
+    assert result["data"] == _load_expected("unsubscribe_applied_expected.json")
 
 
 def test_server_reducer_result_parse_matches_fixture() -> None:
@@ -297,11 +367,57 @@ def test_server_reducer_result_parse_matches_fixture() -> None:
     fixture = _fixture_path(entry["file"])
     result = _invoke_harness(godot, ["parse_reducer_result", fixture])
     assert result.get("ok"), f"harness reported error: {result}"
+    assert result["data"] == _load_expected("reducer_result_expected.json")
+
+
+def test_server_one_off_query_result_branch_stays_raw_until_fixture_exists(tmp_path: Path) -> None:
+    godot = _require_godot()
+    raw_fixture = tmp_path / "one_off_query_result.bin"
+    raw_fixture.write_bytes(bytes([0x00, 0x05, 0xAA, 0xBB]))
+    result = _invoke_harness(godot, ["parse_any", str(raw_fixture)])
+    assert result.get("ok"), f"harness reported error: {result}"
+    assert result["data"] == {"kind": "OneOffQueryResult", "tag": 5}
+
+
+def test_server_procedure_result_branch_stays_raw_until_fixture_exists(tmp_path: Path) -> None:
+    godot = _require_godot()
+    raw_fixture = tmp_path / "procedure_result.bin"
+    raw_fixture.write_bytes(bytes([0x00, 0x07, 0xDE, 0xAD]))
+    result = _invoke_harness(godot, ["parse_any", str(raw_fixture)])
+    assert result.get("ok"), f"harness reported error: {result}"
+    assert result["data"] == {"kind": "ProcedureResult", "tag": 7}
+
+
+def test_unknown_envelope_byte_becomes_protocol_error(tmp_path: Path) -> None:
+    godot = _require_godot()
+    broken_fixture = tmp_path / "bad_envelope.bin"
+    broken_fixture.write_bytes(bytes([0x63, 0x01, 0x02]))
+    result = _invoke_harness(godot, ["parse_any", str(broken_fixture)])
+    assert result.get("ok"), f"harness reported error: {result}"
     data = result["data"]
-    assert data["kind"] == "ReducerResult"
-    assert data["tag"] == 6
-    assert int(data["request_id"]) == entry["request_id"]
-    # v2 ReducerResult bundles TransactionUpdate inside Ok(ReducerOk) — we
-    # expect the status to be Committed for a successful ping_insert call.
-    assert data["status"] == "Committed", f"expected Committed, got {data['status']}"
-    assert isinstance(data.get("query_sets"), list)
+    assert data["kind"] == "ProtocolError"
+    assert "Unknown ServerMessage compression envelope byte" in data["error_message"]
+
+
+def test_unsubscribe_applied_requires_full_packet_consumption(tmp_path: Path) -> None:
+    godot = _require_godot()
+    fixture_bytes = Path(_fixture_path("unsubscribe_applied_recv.bin")).read_bytes()
+    broken_fixture = tmp_path / "unsubscribe_applied_with_trailer.bin"
+    broken_fixture.write_bytes(fixture_bytes + b"\x99")
+    result = _invoke_harness(godot, ["parse_any", str(broken_fixture)])
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["kind"] == "ProtocolError"
+    assert "UnsubscribeApplied parse drift" in data["error_message"]
+
+
+def test_reducer_result_requires_full_packet_consumption(tmp_path: Path) -> None:
+    godot = _require_godot()
+    fixture_bytes = Path(_fixture_path("reducer_result_recv.bin")).read_bytes()
+    broken_fixture = tmp_path / "reducer_result_with_trailer.bin"
+    broken_fixture.write_bytes(fixture_bytes + b"\x42")
+    result = _invoke_harness(godot, ["parse_any", str(broken_fixture)])
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["kind"] == "ProtocolError"
+    assert "ReducerResult parse drift" in data["error_message"]

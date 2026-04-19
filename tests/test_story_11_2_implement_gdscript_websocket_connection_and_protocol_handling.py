@@ -263,6 +263,20 @@ def test_story_11_2_compression_mode_consulted_when_draining_packets() -> None:
     )
 
 
+def test_story_11_2_protocol_errors_drive_connect_failure_or_retry_disconnect() -> None:
+    content = _service_src()
+    for expected in (
+        '"ProtocolError"',
+        "_handle_connect_failure(parse_error)",
+        "_schedule_retry_or_disconnect(parse_error)",
+    ):
+        assert expected in content, (
+            "gdscript_connection_service.gd must treat parser protocol errors as connection failures while "
+            "CONNECTING and as retry/disconnect triggers once CONNECTED, so wire drift is not silently dropped. "
+            f"Missing {expected!r}."
+        )
+
+
 def test_story_11_2_handshake_headers_guarded_for_web_compat() -> None:
     content = _service_src()
     assert "if not headers.is_empty():" in content, (

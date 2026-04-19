@@ -22,6 +22,7 @@ var _value: String = ""
 var _step_timeout_seconds: float = 45.0
 
 var _service = null
+var _mutator_service = null
 var _bindings = null
 var _phase: Phase = Phase.NONE
 var _phase_started_at: float = 0.0
@@ -30,6 +31,10 @@ var _last_protocol_kind: String = ""
 var _active_handle = null
 var _replacement_handle = null
 var _failed_replacement_handle = null
+var _observer_ready_for_mutation: bool = false
+var _mutator_connected: bool = false
+var _mutation_requested: bool = false
+var _mutator_invocation_id: String = ""
 
 
 func _ready() -> void:
@@ -50,6 +55,7 @@ func _ready() -> void:
 		return
 
 	_service = ConnectionServiceScript.new()
+	_mutator_service = ConnectionServiceScript.new()
 	_bindings = RemoteTablesScript.new()
 	var configure_result: int = _service.configure_bindings(_bindings)
 	if configure_result != OK:
@@ -61,11 +67,18 @@ func _ready() -> void:
 	_service.subscription_failed.connect(_on_subscription_failed)
 	_service.row_changed.connect(_on_row_changed)
 	_service.protocol_message.connect(_on_protocol_message)
+	_mutator_service.connection_opened.connect(_on_mutator_connection_opened)
+	_mutator_service.reducer_call_failed.connect(_on_mutator_reducer_call_failed)
 
 	_set_phase(Phase.WAIT_CONNECT)
 	var open_result: int = _service.open_connection(_host, _module_name)
 	if open_result != OK:
 		_fail("connect", "open_connection failed: %s" % error_string(open_result))
+		return
+
+	var mutator_open_result: int = _mutator_service.open_connection(_host, _module_name)
+	if mutator_open_result != OK:
+		_fail("connect", "mutator open_connection failed: %s" % error_string(mutator_open_result))
 
 
 func _process(delta: float) -> void:
@@ -73,6 +86,7 @@ func _process(delta: float) -> void:
 		return
 
 	_service.advance(delta)
+	_mutator_service.advance(delta)
 	if _phase == Phase.NONE or _phase == Phase.DONE:
 		return
 
@@ -129,17 +143,13 @@ func _on_subscription_applied(event: Dictionary) -> void:
 			var typed_cache_ready = typed_rows is Array and remote_tables.SmokeTest.count >= 0
 			_emit_step("subscribe", {
 				"status": "ok",
-				"table_handle": "SmokeTest",
-				"typed_cache_ready": typed_cache_ready,
-				"protocol_kind": _last_protocol_kind,
-			})
-
-			var invoke_result = _invoke_ping_insert()
-			if invoke_result != OK:
-				_fail("observe_row_change", "failed to invoke ping_insert via spacetime CLI")
-				return
-
+			"table_handle": "SmokeTest",
+			"typed_cache_ready": typed_cache_ready,
+			"protocol_kind": _last_protocol_kind,
+		})
+			_observer_ready_for_mutation = true
 			_set_phase(Phase.WAIT_ROW_CHANGE)
+			_maybe_invoke_ping_insert()
 		Phase.WAIT_REPLACE_SUCCESS:
 			if _replacement_handle == null or int(event.get("handle_id", -1)) != int(_replacement_handle.handle_id):
 				return
@@ -222,18 +232,47 @@ func _on_row_changed(event: Dictionary) -> void:
 	_set_phase(Phase.WAIT_REPLACE_SUCCESS)
 
 
+func _on_mutator_connection_opened(_event: Dictionary) -> void:
+	if _finished:
+		return
+	_mutator_connected = true
+	_maybe_invoke_ping_insert()
+
+
+func _on_mutator_reducer_call_failed(event: Dictionary) -> void:
+	if _finished or _phase != Phase.WAIT_ROW_CHANGE:
+		return
+	if String(event.get("invocation_id", "")) != _mutator_invocation_id:
+		return
+	_fail(
+		"observe_row_change",
+		"mutator ping_insert failed: %s" % String(event.get("error_message", "unknown reducer error"))
+	)
+
+
+func _maybe_invoke_ping_insert() -> void:
+	if _finished or _mutation_requested:
+		return
+	if not _observer_ready_for_mutation or not _mutator_connected:
+		return
+	var invoke_result := _invoke_ping_insert()
+	if invoke_result != OK:
+		_fail("observe_row_change", "failed to invoke ping_insert through the secondary GDScript connection")
+		return
+	_mutation_requested = true
+
+
 func _invoke_ping_insert() -> int:
-	# Use the native GDScript reducer lane to trigger the row insert rather
-	# than shelling out to `spacetime call`. The pytest harness runs the scene
-	# under HOME=<tempdir> which defeats the spacetime CLI's self-bootstrap
-	# lookup (`<HOME>/.local/share/spacetime/bin/current/spacetimedb-cli`),
-	# so invoking through the service is also the more robust path in CI.
+	# Drive the mutation through a second native GDScript connection so the
+	# observer lane has to receive a live subscription update from the server.
+	# This avoids the false-positive case where the same connection applies the
+	# row locally from its own bundled ReducerResult payload.
 	var BsatnWriterScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/bsatn_writer.gd")
 	var writer = BsatnWriterScript.new()
 	writer.write_string(_value)
 	var args_bytes: PackedByteArray = writer.get_bytes()
-	var invocation_id: String = _service.invoke_reducer("ping_insert", args_bytes)
-	if invocation_id.is_empty():
+	_mutator_invocation_id = _mutator_service.invoke_reducer("ping_insert", args_bytes)
+	if _mutator_invocation_id.is_empty():
 		_fail("observe_row_change", "native invoke_reducer(ping_insert) rejected the request synchronously")
 		return ERR_CANT_CONNECT
 	return OK
