@@ -737,7 +737,11 @@ func _handle_transaction_update(message: Dictionary) -> void:
 			push_warning("Skipping non-Dictionary TransactionUpdate.query_sets entry")
 			continue
 		var query_set_update: Dictionary = query_set_update_variant
-		var qs_id := int(query_set_update.get("query_set_id", -1))
+		var qs_id_variant = query_set_update.get("query_set_id", -1)
+		if typeof(qs_id_variant) != TYPE_INT:
+			push_warning("Skipping TransactionUpdate.query_sets entry with non-integer query_set_id")
+			continue
+		var qs_id := int(qs_id_variant)
 		if qs_id < 0:
 			push_warning("Skipping TransactionUpdate.query_sets entry with missing/negative query_set_id")
 			continue
@@ -783,7 +787,11 @@ func _handle_reducer_result(message: Dictionary) -> void:
 				push_warning("Skipping non-Dictionary ReducerResult.query_sets entry")
 				continue
 			var q: Dictionary = q_variant
-			var qs_id := int(q.get("query_set_id", -1))
+			var qs_id_variant = q.get("query_set_id", -1)
+			if typeof(qs_id_variant) != TYPE_INT:
+				push_warning("Skipping ReducerResult.query_sets entry with non-integer query_set_id")
+				continue
+			var qs_id := int(qs_id_variant)
 			if qs_id < 0:
 				push_warning("Skipping ReducerResult.query_sets entry with missing/negative query_set_id")
 				continue

@@ -367,6 +367,8 @@ static func _parse_transaction_update(tag: int, payload: PackedByteArray, reader
 	var query_sets: Array = []
 	for _i in range(query_set_count):
 		query_sets.append(_parse_query_set_update(reader))
+		if reader.parse_failed:
+			break
 
 	return {
 		"kind": "TransactionUpdate",
@@ -381,6 +383,8 @@ static func _parse_query_rows(reader) -> Array:
 	var tables: Array = []
 	for _i in range(table_count):
 		tables.append(_parse_single_table_rows(reader))
+		if reader.parse_failed:
+			break
 	return tables
 
 
@@ -401,6 +405,8 @@ static func _parse_query_set_update(reader) -> Dictionary:
 	var tables: Array = []
 	for _i in range(table_count):
 		tables.append(_parse_table_update(reader))
+		if reader.parse_failed:
+			break
 	return {
 		"query_set_id": query_set_id,
 		"tables": tables,
@@ -413,6 +419,8 @@ static func _parse_table_update(reader) -> Dictionary:
 	var updates: Array = []
 	for _i in range(update_count):
 		updates.append(_parse_table_update_rows(reader))
+		if reader.parse_failed:
+			break
 	return {
 		"table_name": table_name,
 		"updates": updates,
@@ -424,6 +432,12 @@ static func _parse_table_update_rows(reader) -> Dictionary:
 	match variant_tag:
 		0:
 			var inserts = _parse_bsatn_row_list(reader)
+			if reader.parse_failed:
+				return {
+					"variant": "PersistentTable",
+					"insert_row_payloads": [],
+					"delete_row_payloads": [],
+				}
 			var deletes = _parse_bsatn_row_list(reader)
 			return {
 				"variant": "PersistentTable",
@@ -445,6 +459,12 @@ static func _parse_table_update_rows(reader) -> Dictionary:
 
 static func _parse_bsatn_row_list(reader) -> Dictionary:
 	var size_hint = _parse_row_size_hint(reader)
+	if reader.parse_failed:
+		return {
+			"size_hint": size_hint,
+			"rows_data": PackedByteArray(),
+			"row_payloads": [],
+		}
 	var rows_data = reader.read_bytes()
 	return {
 		"size_hint": size_hint,
@@ -548,6 +568,8 @@ static func _parse_reducer_result(tag: int, payload: PackedByteArray, reader) ->
 			var query_set_count: int = reader.read_array_len()
 			for _i in range(query_set_count):
 				query_sets.append(_parse_query_set_update(reader))
+				if reader.parse_failed:
+					break
 		1:
 			status = "Committed"
 		2:
