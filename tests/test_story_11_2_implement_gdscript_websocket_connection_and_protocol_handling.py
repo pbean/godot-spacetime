@@ -344,3 +344,37 @@ def test_story_11_2_connection_id_hex_matches_upstream_sdk_random_shape() -> Non
         "_random_connection_id_hex must not introduce an empty-string failure branch; the upstream SDK's "
         "ConnectionId.Random() path always returns a 32-char hex id."
     )
+
+
+def test_story_11_2_handle_transaction_update_defensive_shape_checks() -> None:
+    # Cluster-A hardening: a malformed standalone TransactionUpdate frame must
+    # NOT raise a Godot runtime error from a typed cast mid-handler (which
+    # would abort the receive loop). `query_sets` must be Array-validated,
+    # each entry Dictionary-validated, and the registry lookup gated with a
+    # `qs_id < 0` check so a missing id cannot false-match a future handle.
+    content = _service_src()
+    start = content.index("func _handle_transaction_update")
+    end = content.index("\nfunc ", start + 1)
+    body = content[start:end]
+
+    # (1) `query_sets` must be Array-validated.
+    has_array_is_check = ("is Array" in body) or ("typeof(" in body and "TYPE_ARRAY" in body)
+    assert has_array_is_check, (
+        "_handle_transaction_update must validate message['query_sets'] as an Array (via "
+        "`is Array` or typeof(...) == TYPE_ARRAY) before iterating, so a malformed frame "
+        "cannot raise a runtime error that aborts the receive loop."
+    )
+
+    # (2) Each per-entry variable must be Dictionary-validated.
+    assert "is Dictionary" in body, (
+        "_handle_transaction_update must validate each bundled entry via `is Dictionary` "
+        "before reading `query_set_id` off it, rather than using a bare "
+        "`var query_set_update: Dictionary = query_set_update_variant` typed cast."
+    )
+
+    # (3) The `qs_id < 0` guard must appear near find_by_query_set_id.
+    assert "qs_id < 0" in body, (
+        "_handle_transaction_update must guard with `if qs_id < 0: continue` (or equivalent) "
+        "so a missing/negative query_set_id does not false-match a future handle that might "
+        "legitimately carry id -1. The guard text `qs_id < 0` must be present."
+    )

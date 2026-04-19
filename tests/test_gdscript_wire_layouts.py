@@ -421,3 +421,80 @@ def test_reducer_result_requires_full_packet_consumption(tmp_path: Path) -> None
     data = result["data"]
     assert data["kind"] == "ProtocolError"
     assert "ReducerResult parse drift" in data["error_message"]
+
+
+def test_zero_byte_packet_short_packet_yields_protocol_error(tmp_path: Path) -> None:
+    # A 0-byte server frame must not crash the parser. The entry guard should
+    # fail it into a ProtocolError BEFORE any BsatnReader.read_u8 call runs,
+    # so the receive loop can route it to _schedule_retry_or_disconnect.
+    godot = _require_godot()
+    empty_fixture = tmp_path / "zero_byte.bin"
+    empty_fixture.write_bytes(b"")
+    result = _invoke_harness(godot, ["parse_any", str(empty_fixture)])
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["kind"] == "ProtocolError"
+    assert "Empty ServerMessage packet" in data["error_message"]
+
+
+def test_one_byte_envelope_only_short_packet_yields_protocol_error(tmp_path: Path) -> None:
+    # A 1-byte envelope-only frame (no variant tag byte) must return
+    # ProtocolError WITHOUT invoking BsatnReader.read_u8 — read_u8 on an empty
+    # post-envelope buffer trips _fail → len(int) which raises a runtime error
+    # instead of producing a routable ProtocolError.
+    godot = _require_godot()
+    one_byte_fixture = tmp_path / "one_byte.bin"
+    one_byte_fixture.write_bytes(bytes([0x00]))
+    result = _invoke_harness(godot, ["parse_any", str(one_byte_fixture)])
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["kind"] == "ProtocolError"
+    # The short-packet entry guard must fire BEFORE the parser dispatches on
+    # the variant tag — match either the existing "Empty" wording (if the
+    # guard reuses it) or a "too short" variant.
+    err = data["error_message"]
+    assert ("Empty ServerMessage packet" in err) or ("too short" in err.lower()) or ("truncated" in err.lower()), (
+        f"Short-packet guard must emit a recognisable ProtocolError substring. got {err!r}"
+    )
+
+
+def test_unknown_row_size_hint_tag_yields_top_level_protocol_error(tmp_path: Path) -> None:
+    # A TransactionUpdate frame whose BSATN row-size-hint tag is neither 0
+    # (FixedSize) nor 1 (RowOffsets) must surface as a top-level ProtocolError,
+    # NOT as a best-effort-parsed TransactionUpdate with a "Unknown"-kind
+    # size_hint that downstream iterations would then walk on garbage bytes.
+    godot = _require_godot()
+    # Synthesise a minimal-valid TransactionUpdate frame from the ground up so
+    # the parser advances all the way into _parse_row_size_hint and hits the
+    # unknown branch. Byte layout (little-endian) observed against the pinned
+    # 2.1.0 wire in connection_protocol.gd:
+    #   envelope(u8=0x00) | variant(u8=0x04=TransactionUpdate)
+    #   query_set_count(u32=1) | query_set_id(u32=0)
+    #   table_count(u32=1) | table_name(len u32=1 | "A")
+    #   update_count(u32=1) | table_update_rows variant(u8=1=EventTable)
+    #   row_size_hint tag(u8=0x63 = 99, unknown)
+    frame = bytearray()
+    frame.append(0x00)  # envelope: None
+    frame.append(0x04)  # variant: TransactionUpdate
+    frame += (1).to_bytes(4, "little")  # query_set_count
+    frame += (0).to_bytes(4, "little")  # query_set_id
+    frame += (1).to_bytes(4, "little")  # table_count
+    frame += (1).to_bytes(4, "little")  # table_name len
+    frame += b"A"
+    frame += (1).to_bytes(4, "little")  # update_count
+    frame.append(0x01)  # table_update_rows variant: EventTable
+    frame.append(0x63)  # row_size_hint tag = 99 (unknown)
+
+    bad_hint_fixture = tmp_path / "unknown_row_size_hint.bin"
+    bad_hint_fixture.write_bytes(bytes(frame))
+    result = _invoke_harness(godot, ["parse_any", str(bad_hint_fixture)])
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["kind"] == "ProtocolError", (
+        "Unknown row-size-hint tag must surface as a top-level ProtocolError, "
+        f"not a best-effort-parsed message. got kind={data.get('kind')!r}"
+    )
+    err = data["error_message"]
+    assert "row size hint" in err.lower() or "row_size_hint" in err.lower() or "hint tag" in err.lower(), (
+        f"ProtocolError must identify the row-size-hint failure. got {err!r}"
+    )

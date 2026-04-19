@@ -485,3 +485,44 @@ def test_story_11_4_bundled_query_sets_skip_pending_replacement_handles() -> Non
         "_handle_reducer_result must continue warning when a bundled query_set_id does not map to "
         "any registered handle."
     )
+
+
+def test_story_11_4_handle_reducer_result_defensive_shape_checks() -> None:
+    # Cluster-A cluster hardening: a malformed ReducerResult frame where
+    # `query_sets` is not an Array or where a bundled entry is not a Dictionary
+    # must NOT raise a Godot runtime error mid-handler (which would abort the
+    # receive loop and suppress the surrounding reducer_call_succeeded /
+    # reducer_call_failed emission). Replace the typed casts with
+    # `is Array` / `is Dictionary` checks and gate lookup with `qs_id < 0`.
+    content = _service_src()
+    start = content.index("func _handle_reducer_result")
+    end = content.index("\nfunc ", start + 1)
+    body = content[start:end]
+
+    # (1) `query_sets` must be Array-validated before iteration.
+    has_array_is_check = ("is Array" in body) or ("typeof(" in body and "TYPE_ARRAY" in body)
+    assert has_array_is_check, (
+        "_handle_reducer_result must validate message['query_sets'] as an Array (via `is Array` "
+        "or typeof(...) == TYPE_ARRAY) instead of a bare `var query_sets: Array = ...` typed cast, "
+        "so a malformed frame with a non-Array `query_sets` value cannot raise a Godot runtime error "
+        "that aborts the reducer signal emission."
+    )
+
+    # (2) Each per-entry variable must be Dictionary-validated.
+    assert "is Dictionary" in body, (
+        "_handle_reducer_result must validate each bundled entry via `is Dictionary` before reading "
+        "`query_set_id` off it, so a non-Dictionary entry can be skipped with push_warning rather "
+        "than raising a runtime error that aborts the reducer signal emission."
+    )
+
+    # (3) The `qs_id < 0` guard must skip the registry lookup when id is missing.
+    qs_guard_ix = body.find("qs_id < 0")
+    find_ix = body.find("find_by_query_set_id")
+    assert qs_guard_ix != -1, (
+        "_handle_reducer_result must guard with `if qs_id < 0: continue` (or equivalent) before "
+        "calling _subscription_registry.find_by_query_set_id, so a missing/negative query_set_id "
+        "does not false-match a future handle that might legitimately carry id -1."
+    )
+    assert find_ix != -1 and qs_guard_ix < find_ix, (
+        "_handle_reducer_result's `qs_id < 0` guard must appear BEFORE the `find_by_query_set_id` call."
+    )
