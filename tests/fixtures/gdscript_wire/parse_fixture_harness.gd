@@ -13,6 +13,7 @@ extends SceneTree
 #   parse_subscribe_applied
 #   parse_unsubscribe_applied
 #   parse_reducer_result
+#   decompressed_payload_short
 #   encode_subscribe <request_id> <query_set_id> <queries_csv>
 #   encode_unsubscribe <request_id> <query_set_id> <flags>
 #   encode_call_reducer <request_id> <reducer_name> <args_hex>
@@ -44,6 +45,8 @@ func _init() -> void:
 			_run_parse_server_fixture(args, "UnsubscribeApplied", false)
 		"parse_reducer_result":
 			_run_parse_server_fixture(args, "ReducerResult", false)
+		"decompressed_payload_short":
+			_run_decompressed_payload_short()
 		"encode_subscribe":
 			_run_encode_subscribe(args)
 		"encode_unsubscribe":
@@ -79,6 +82,34 @@ func _run_parse_server_fixture(args: Array, expected_kind: String, session_expec
 		quit(3)
 		return
 
+	_emit_result(_flatten_message(message))
+	quit(0)
+
+
+func _run_decompressed_payload_short() -> void:
+	# Synthesise a Gzip-envelope frame whose decompressed payload is 0 bytes.
+	# Godot's `PackedByteArray.compress(COMPRESSION_GZIP)` on empty input
+	# returns an empty buffer (no gzip header) rather than a well-formed 0-byte
+	# gzip stream, so hardcode a known-good 20-byte gzip-of-empty stream
+	# instead. Bytes verified against RFC 1952:
+	#   1F 8B 08 00 00 00 00 00 00 03  header (magic, deflate, no flags, mtime,
+	#                                    xfl, os=unix)
+	#   03 00                          empty deflate final block
+	#   00 00 00 00                    CRC32 of "" = 0
+	#   00 00 00 00                    ISIZE of "" = 0
+	# The pre-round behaviour reached `BsatnReader.new(payload)` with a 0-byte
+	# payload and hit `_fail → len(int)` on the first `read_u8()` call; the
+	# post-round guard short-circuits into a ProtocolError before any reader
+	# is constructed.
+	var gzip_of_empty := PackedByteArray([
+		0x1F, 0x8B, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03,
+		0x03, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00,
+	])
+	var packet := PackedByteArray([ProtocolScript.SERVER_ENVELOPE_GZIP])
+	packet.append_array(gzip_of_empty)
+	var message: Dictionary = ProtocolScript.parse_server_message(packet, false)
 	_emit_result(_flatten_message(message))
 	quit(0)
 

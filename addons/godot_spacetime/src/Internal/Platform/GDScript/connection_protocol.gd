@@ -199,6 +199,16 @@ static func parse_server_message(packet: PackedByteArray, is_compressed: bool = 
 				packet
 			)
 
+	# Post-decompression short-payload guard: after the envelope branch assigns
+	# `payload`, the decoded buffer must be at least 1 byte so `read_u8()` can
+	# consume the ServerMessage variant tag. A Gzip/Brotli stream that
+	# decompresses to 0 bytes (observed in malformed/truncated compressed
+	# frames) would otherwise reach `BsatnReader.new(payload)` and hit
+	# `_fail → len(int)` on the first `read_u8()` call. Mirrors the raw-packet
+	# `packet.size() < 2` guard above.
+	if payload.size() < 1:
+		return _protocol_error("Decompressed ServerMessage payload too short.", -1, packet)
+
 	var reader = BsatnReaderScript.new(payload)
 	var tag := reader.read_u8()
 	match tag:
