@@ -171,8 +171,17 @@ static func parse_server_message(packet: PackedByteArray, is_compressed: bool = 
 	# In v2 the envelope byte is authoritative even when compression was
 	# requested for the whole session, so decoding always dispatches from
 	# `packet[0]` instead of forcing the legacy whole-frame gzip path.
-	if packet.is_empty():
-		return _protocol_error("Empty ServerMessage packet.", -1, packet)
+	# A valid v2 server frame is at minimum envelope(u8) + variant tag(u8) = 2
+	# bytes. The earlier `packet.is_empty()` guard let 1-byte envelope-only
+	# frames slip through into `BsatnReader.read_u8`, which tripped
+	# `_fail → len(int)` and aborted the receive loop instead of producing a
+	# routable ProtocolError for `_schedule_retry_or_disconnect`.
+	if packet.size() < 2:
+		var short_msg := (
+			"Empty ServerMessage packet." if packet.is_empty()
+			else "ServerMessage packet too short: %d byte(s), need >= 2." % packet.size()
+		)
+		return _protocol_error(short_msg, -1, packet)
 
 	var payload := packet
 	var compression_tag := packet[0]
@@ -462,7 +471,17 @@ static func _parse_row_size_hint(reader) -> Dictionary:
 				"offsets": offsets,
 			}
 		_:
+			# Observed pinned 2.1.0 wire: row-size-hint tag is either 0
+			# (FixedSize) or 1 (RowOffsets). An unknown tag means the reader
+			# has drifted; the existing `return {"kind":"Unknown"}` shape let
+			# downstream iterations (`_split_bsatn_rows`, the surrounding
+			# TransactionUpdate/ReducerResult loops) walk on garbage bytes.
+			# Mark the reader so `_finalize_parsed_message` converts the
+			# top-level result into a routable ProtocolError instead of a
+			# best-effort-parsed frame.
 			push_error("Unsupported BSATN row size hint tag %d." % hint_tag)
+			reader.parse_failed = true
+			reader.parse_error_message = "Unsupported BSATN row size hint tag %d." % hint_tag
 			return {
 				"kind": "Unknown",
 				"tag": hint_tag,
@@ -560,6 +579,16 @@ static func _parse_reducer_result(tag: int, payload: PackedByteArray, reader) ->
 
 
 static func _finalize_parsed_message(message: Dictionary, reader, tag: int, payload: PackedByteArray, context: String) -> Dictionary:
+	# Parse-failure propagation: `_parse_row_size_hint`'s unknown branch sets
+	# `reader.parse_failed` so the top-level result becomes a routable
+	# ProtocolError rather than a best-effort-parsed TransactionUpdate /
+	# ReducerResult whose downstream iterations walked on garbage bytes.
+	if reader.parse_failed:
+		return _protocol_error(
+			"%s parse failed: %s" % [context, String(reader.parse_error_message)],
+			tag,
+			payload
+		)
 	if reader.has_more():
 		return _protocol_error(
 			"%s parse drift: %d trailing byte(s) remain after decode." % [context, reader.remaining_bytes()],

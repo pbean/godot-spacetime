@@ -720,10 +720,28 @@ func _handle_transaction_update(message: Dictionary) -> void:
 	if authoritative_handle == null:
 		return
 
+	# Defensive shape-checks (cluster-A hardening): a malformed TransactionUpdate
+	# frame (non-Array `query_sets`, non-Dictionary entry, missing/negative
+	# `query_set_id`) must NOT raise a Godot runtime error from a typed cast
+	# mid-handler. The earlier `var query_set_update: Dictionary = query_set_update_variant`
+	# cast aborted the receive loop instead of skipping the bad entry.
+	var query_sets_variant = message.get("query_sets", [])
+	if not (query_sets_variant is Array):
+		push_warning("Ignoring malformed TransactionUpdate.query_sets (not an Array)")
+		return
+	var query_sets: Array = query_sets_variant
+
 	var relevant_updates: Array = []
-	for query_set_update_variant in message.get("query_sets", []):
+	for query_set_update_variant in query_sets:
+		if not (query_set_update_variant is Dictionary):
+			push_warning("Skipping non-Dictionary TransactionUpdate.query_sets entry")
+			continue
 		var query_set_update: Dictionary = query_set_update_variant
-		if int(query_set_update.get("query_set_id", -1)) == int(authoritative_handle.query_set_id):
+		var qs_id := int(query_set_update.get("query_set_id", -1))
+		if qs_id < 0:
+			push_warning("Skipping TransactionUpdate.query_sets entry with missing/negative query_set_id")
+			continue
+		if qs_id == int(authoritative_handle.query_set_id):
 			relevant_updates.append(query_set_update)
 
 	if relevant_updates.is_empty():
@@ -747,12 +765,28 @@ func _handle_reducer_result(message: Dictionary) -> void:
 	# replacement handle is registered before SubscribeApplied, yet the old handle
 	# remains authoritative until that apply event arrives. Skip pending query sets
 	# so reducer-side rows cannot leak into the live cache before replacement apply.
-	var query_sets: Array = message.get("query_sets", [])
+	# Defensive shape-checks (cluster-A hardening): a malformed ReducerResult
+	# frame (non-Array `query_sets`, non-Dictionary entry, missing/negative
+	# `query_set_id`) must NOT raise a Godot runtime error from a typed cast
+	# mid-handler — that would abort before the surrounding
+	# reducer_call_succeeded / reducer_call_failed emission below, which the
+	# caller relies on to resolve the in-flight invocation.
+	var query_sets_variant = message.get("query_sets", [])
+	if not (query_sets_variant is Array):
+		push_warning("Ignoring malformed ReducerResult.query_sets (not an Array)")
+		query_sets_variant = []
+	var query_sets: Array = query_sets_variant
 	if not query_sets.is_empty() and _authoritative_handle_id != -1:
 		var relevant: Array = []
 		for q_variant in query_sets:
+			if not (q_variant is Dictionary):
+				push_warning("Skipping non-Dictionary ReducerResult.query_sets entry")
+				continue
 			var q: Dictionary = q_variant
 			var qs_id := int(q.get("query_set_id", -1))
+			if qs_id < 0:
+				push_warning("Skipping ReducerResult.query_sets entry with missing/negative query_set_id")
+				continue
 			var handle = _subscription_registry.find_by_query_set_id(qs_id)
 			if handle == null:
 				push_warning(

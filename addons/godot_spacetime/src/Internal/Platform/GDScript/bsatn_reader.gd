@@ -2,10 +2,26 @@ class_name BsatnReader
 
 var _buf: PackedByteArray
 var _pos: int = 0
+# Parse-failure sentinel — set by higher-level parsers (e.g.
+# `connection_protocol.gd:_parse_row_size_hint`) when they hit an unknown
+# variant tag that the pinned 2.1.0 wire does not declare. The top-level
+# `_finalize_parsed_message` converts any message whose reader has this
+# flag set into a routable ProtocolError rather than a best-effort-parsed
+# frame that downstream iterations would walk on garbage bytes. The
+# BsatnReader itself does not set this — its own buffer-underrun path
+# still routes through `_fail`.
+var parse_failed: bool = false
+var parse_error_message: String = ""
 
 
 func _init(data: PackedByteArray) -> void:
 	_buf = data
+	# Reset the parse-failure sentinel on every construction so a reader
+	# instance cannot carry a stale ProtocolError across logically
+	# independent parses. Reader instances are fresh-per-packet today; this
+	# guards the invariant against a future pooled or peek-rewind caller.
+	parse_failed = false
+	parse_error_message = ""
 
 
 func _fail(message: String) -> void:
