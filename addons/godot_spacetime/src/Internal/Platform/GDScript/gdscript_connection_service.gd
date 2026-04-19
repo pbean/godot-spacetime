@@ -313,14 +313,17 @@ func invoke_reducer(reducer_name: String, args_bytes: PackedByteArray) -> String
 		"called_at": called_at,
 	}
 
-	var send_result := send_protocol_message(
-		ConnectionProtocolScript.CLIENT_MESSAGE_CALL_REDUCER,
-		func(writer) -> void:
-			writer.write_u32(request_id)
-			writer.write_u32(0)
-			writer.write_string(clean_reducer_name)
-			writer.write_bytes(args_bytes)
-	)
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+	# tests/fixtures/gdscript_wire/call_reducer_ping_insert_sent.bin):
+	#   tag(u8=3) | RequestId(u32) | Flags(u8) | Reducer(string) | Args(bytes)
+	# Delegates to `ConnectionProtocolScript.encode_call_reducer` so the wire
+	# shape matches the pinned SDK byte-for-byte.
+	if _socket == null or String(_current_status.get("state", STATE_DISCONNECTED)) != STATE_CONNECTED:
+		_pending_reducer_calls.erase(request_id)
+		push_error("invoke_reducer() failed to send the wire payload: %s" % error_string(ERR_UNAVAILABLE))
+		return ""
+	var call_payload := ConnectionProtocolScript.encode_call_reducer(request_id, clean_reducer_name, args_bytes)
+	var send_result := _socket.put_packet(call_payload)
 	if send_result != OK:
 		_pending_reducer_calls.erase(request_id)
 		push_error("invoke_reducer() failed to send the wire payload: %s" % error_string(send_result))
@@ -361,7 +364,13 @@ func _drain_packets() -> void:
 	and _socket.get_ready_state() == WebSocketPeer.STATE_OPEN \
 	and _socket.get_available_packet_count() > 0:
 		var packet := _socket.get_packet()
-		var message := ConnectionProtocolScript.parse_server_message(packet, _active_compression_mode != "None")
+		# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: every frame carries
+		# its own compression byte prefix. The session-level
+		# `_active_compression_mode` hint stays authoritative for the
+		# whole-frame-compressed legacy path (Story 11.2); the v2 parser
+		# falls back to the per-frame envelope byte when that hint says None.
+		var is_compressed := _active_compression_mode != "None"
+		var message := ConnectionProtocolScript.parse_server_message(packet, is_compressed)
 		emit_signal("protocol_message", message.duplicate(true))
 		match String(message.get("kind", "")):
 			"InitialConnection":
@@ -540,18 +549,46 @@ func _start_transport(token: String) -> int:
 		_query_token_key
 	)
 
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: the pinned SDK always
+	# appends `connection_id=<hex32>&compression=<mode>` to the subscribe URL.
+	# Without these the server still completes the WebSocket handshake but
+	# falls back to its legacy envelope which rejects SDK-shaped frames.
+	var base_url := String(_transport_request.get("url", ""))
+	var compression_label := _active_compression_mode
+	if compression_label.is_empty():
+		compression_label = "None"
+	var url_separator := "&" if base_url.find("?") != -1 else "?"
+	var v2_url := "%s%sconnection_id=%s&compression=%s" % [
+		base_url,
+		url_separator,
+		_random_connection_id_hex(),
+		compression_label,
+	]
+	_transport_request["url"] = v2_url
+
 	var socket: WebSocketPeer = _create_socket()
 	socket.supported_protocols = ConnectionProtocolScript.make_supported_protocols()
 	var headers: PackedStringArray = _transport_request.get("headers", PackedStringArray())
 	if not headers.is_empty():
 		socket.handshake_headers = headers
 
-	var connect_result := socket.connect_to_url(String(_transport_request.get("url", "")))
+	var connect_result := socket.connect_to_url(v2_url)
 	if connect_result != OK:
 		return connect_result
 
 	_socket = socket
 	return OK
+
+
+func _random_connection_id_hex() -> String:
+	# 16 random bytes (128 bits) rendered uppercase hex — matches the shape
+	# of `ConnectionId.ToString("X")` produced by the pinned SDK.
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var hex := ""
+	for _i in range(16):
+		hex += "%02X" % (rng.randi() & 0xFF)
+	return hex
 
 
 func _resolve_initial_connect_token() -> String:
@@ -686,6 +723,23 @@ func _handle_reducer_result(message: Dictionary) -> void:
 	var pending = _pending_reducer_calls.get(request_id)
 	_pending_reducer_calls.erase(request_id)
 
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: a successful ReducerResult
+	# bundles a TransactionUpdate inside its `Ok(ReducerOk { ..., TransactionUpdate })`
+	# payload rather than emitting a standalone TransactionUpdate frame. Apply the
+	# bundled rows through the cache so the row_changed signal fires before the
+	# reducer_call_succeeded signal — matching the legacy-v1 ordering contract.
+	var query_sets: Array = message.get("query_sets", [])
+	if not query_sets.is_empty() and _authoritative_handle_id != -1:
+		var authoritative_handle = _subscription_registry.try_get_handle(_authoritative_handle_id)
+		if authoritative_handle != null:
+			var relevant: Array = []
+			for q_variant in query_sets:
+				var q: Dictionary = q_variant
+				if int(q.get("query_set_id", -1)) == int(authoritative_handle.query_set_id):
+					relevant.append(q)
+			if not relevant.is_empty():
+				_emit_row_changed_events(_cache_store.apply_transaction_updates(relevant))
+
 	var invocation_id: String
 	var reducer_name: String
 	var called_at: float
@@ -767,15 +821,20 @@ func _begin_subscription(query_sqls: Array, replaced_handle_id: int = -1) -> Obj
 
 
 func _send_subscribe_request(handle) -> int:
-	return send_protocol_message(
-		ConnectionProtocolScript.CLIENT_MESSAGE_SUBSCRIBE,
-		func(writer) -> void:
-			writer.write_u32(int(handle.query_set_id))
-			writer.write_u32(int(handle.query_set_id))
-			writer.write_array_len(handle.query_sqls.size())
-			for sql_variant in handle.query_sqls:
-				writer.write_string(String(sql_variant))
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+	# tests/fixtures/gdscript_wire/subscribe_sent.bin):
+	#   tag(u8=0) | RequestId(u32) | QuerySetId(u32) | QueryStrings(array<string>)
+	# The legacy emitter wrote `query_set_id` twice and no request_id; that
+	# frame was rejected by the v2 server. Delegates to the pure static
+	# encoder so the wire test can re-derive the exact bytes.
+	if _socket == null or String(_current_status.get("state", STATE_DISCONNECTED)) != STATE_CONNECTED:
+		return ERR_UNAVAILABLE
+	var payload := ConnectionProtocolScript.encode_subscribe(
+		int(handle.query_set_id),
+		int(handle.query_set_id),
+		handle.query_sqls,
 	)
+	return _socket.put_packet(payload)
 
 
 func _send_unsubscribe_for_query_set(query_set_id: int) -> void:
@@ -785,14 +844,16 @@ func _send_unsubscribe_for_query_set(query_set_id: int) -> void:
 	if String(_current_status.get("state", STATE_DISCONNECTED)) != STATE_CONNECTED:
 		return
 
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+	# tests/fixtures/gdscript_wire/unsubscribe_sent.bin):
+	#   tag(u8=1) | RequestId(u32) | QuerySetId(u32) | Flags(u8)
+	# The legacy emitter wrote a trailing u32(0) instead of a u8; the v2
+	# server expects 10 bytes total and rejects a 13-byte unsubscribe.
 	var request_id := _reserve_request_id()
-	send_protocol_message(
-		ConnectionProtocolScript.CLIENT_MESSAGE_UNSUBSCRIBE,
-		func(writer) -> void:
-			writer.write_u32(request_id)
-			writer.write_u32(query_set_id)
-			writer.write_u32(0)
-	)
+	if _socket == null:
+		return
+	var payload := ConnectionProtocolScript.encode_unsubscribe(request_id, query_set_id)
+	_socket.put_packet(payload)
 
 
 func _validate_query_sqls(query_sqls: Array, caller_name: String) -> Array:

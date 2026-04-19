@@ -597,6 +597,20 @@ Sink-failure fallback: if a custom `ILogSink.Write` throws, `SpacetimeLog` falls
 
 ---
 
+## GDScript Wire Protocol (2.1.0)
+
+The native GDScript runtime in `addons/godot_spacetime/src/Internal/Platform/GDScript/` speaks the `v2.bsatn.spacetimedb` WebSocket subprotocol against the pinned `spacetime 2.1.0` server and the pinned upstream client SDK NuGet (tracked in `scripts/compatibility/support-baseline.json`). Byte-for-byte captures of every client and server frame exercised by the smoke suites live under `tests/fixtures/gdscript_wire/`; regenerate them with `python3 tests/fixtures/gdscript_wire/capture_wire_fixtures.py` whenever the pinned artifacts bump, and `tests/test_gdscript_wire_layouts.py` will re-derive the exact bytes and fail loudly on drift.
+
+Three wire-level divergences were observed against the pinned runtime and are load-bearing for the GDScript lane:
+
+- **`CLIENT_MESSAGE_CALL_REDUCER` variant index shifted from `2` to `3`.** The pinned `ClientMessage` enum declares `[0]Subscribe, [1]Unsubscribe, [2]OneOffQuery, [3]CallReducer, [4]CallProcedure`. Sending a reducer frame at tag `2` collides with `OneOffQuery` and the server replies with a `"no such reducer"` error. Codified in `connection_protocol.gd` as `CLIENT_MESSAGE_CALL_REDUCER := 3`.
+- **Subprotocol moved from `v1.bsatn.spacetimedb` to `v2.bsatn.spacetimedb`.** The legacy `v1` subprotocol is still accepted by the server but uses a stale field ordering (notably `InitialConnection = Identity → extra byte → Token → ConnectionId` and no compression envelope on server frames) that the pinned upstream SDK no longer emits. Switching to `v2` aligns the GDScript lane with the SDK's `InitialConnection = Identity → ConnectionId → Token` and unlocks the SDK-shaped `Subscribe` / `Unsubscribe` frames the server accepts. The handshake URL also gains `?connection_id=<hex32>&compression=<mode>` query parameters — without them the server silently fails back to the legacy envelope.
+- **Every server frame now carries a leading compression envelope byte.** `parse_server_message` inspects byte `[0]` (`0`=None, `1`=Brotli, `2`=Gzip, with Brotli canonicalising to Gzip per Story 9.1) and decompresses through `BsatnReaderScript.decompress_gzip` before reading the variant tag. Client frames remain envelope-free — only server→client traffic carries the byte.
+
+These observations are pinned by `tests/fixtures/gdscript_wire/manifest.json`, which records the exact `spacetime --version` output, module name, and `connection_id` each fixture was captured against. Any change here is a versioned refactor — do not hand-edit the `.bin` files.
+
+---
+
 ## Threading Model
 
 The SDK is single-thread by default — the supported `2.1.x` runtime serializes

@@ -69,6 +69,8 @@ func _emit_parsed(name: String, message: Dictionary) -> void:
 
 func _build_subscribe_applied_frame() -> PackedByteArray:
 	var writer = BsatnWriterScript.new()
+	# v2 server frames carry a leading envelope byte (0=None compression).
+	writer.write_u8(ProtocolScript.SERVER_ENVELOPE_NONE)
 	writer.write_u8(ProtocolScript.SERVER_MESSAGE_SUBSCRIBE_APPLIED)
 	writer.write_u32(55)
 	writer.write_u32(77)
@@ -83,6 +85,7 @@ func _build_subscribe_applied_frame() -> PackedByteArray:
 
 func _build_subscription_error_frame() -> PackedByteArray:
 	var writer = BsatnWriterScript.new()
+	writer.write_u8(ProtocolScript.SERVER_ENVELOPE_NONE)
 	writer.write_u8(ProtocolScript.SERVER_MESSAGE_SUBSCRIPTION_ERROR)
 	writer.write_u8(1)
 	writer.write_u32(55)
@@ -93,6 +96,7 @@ func _build_subscription_error_frame() -> PackedByteArray:
 
 func _build_transaction_update_frame() -> PackedByteArray:
 	var writer = BsatnWriterScript.new()
+	writer.write_u8(ProtocolScript.SERVER_ENVELOPE_NONE)
 	writer.write_u8(ProtocolScript.SERVER_MESSAGE_TRANSACTION_UPDATE)
 	writer.write_array_len(1)
 	writer.write_u32(77)

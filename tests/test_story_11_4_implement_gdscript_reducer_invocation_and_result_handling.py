@@ -124,8 +124,10 @@ def test_story_11_4_protocol_defines_client_call_reducer_constant() -> None:
     assert "CLIENT_MESSAGE_CALL_REDUCER" in content, (
         "connection_protocol.gd must define CLIENT_MESSAGE_CALL_REDUCER constant for Story 11.4."
     )
-    assert "CLIENT_MESSAGE_CALL_REDUCER := 2" in content, (
-        "CLIENT_MESSAGE_CALL_REDUCER must be assigned 2 (SpacetimeDB 2.1.0 ClientMessage tag ordering)."
+    assert "CLIENT_MESSAGE_CALL_REDUCER := 3" in content, (
+        "CLIENT_MESSAGE_CALL_REDUCER must be assigned 3 to match the pinned "
+        "SpacetimeDB 2.1.0 ClientMessage variant order "
+        "(Subscribe=0, Unsubscribe=1, OneOffQuery=2, CallReducer=3, CallProcedure=4)."
     )
 
 
@@ -312,8 +314,12 @@ def test_story_11_4_reducer_parser_probe_handles_committed_status() -> None:
     assert committed.get("request_id") == 42, (
         f"Committed ReducerResult must echo request_id=42. got {committed}"
     )
-    assert committed.get("reducer_name") == "ping", (
-        f"Committed ReducerResult must echo reducer_name='ping'. got {committed}"
+    # Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: the ReducerResult wire
+    # does not carry reducer_name; the service correlates through its
+    # `_pending_reducer_calls` map keyed on request_id. See capture fixture
+    # tests/fixtures/gdscript_wire/reducer_result_recv.bin.
+    assert committed.get("reducer_name") == "", (
+        f"v2 ReducerResult wire does not include reducer_name. got {committed}"
     )
     assert committed.get("status") == "Committed", (
         f"Committed ReducerResult must have status='Committed'. got {committed}"
@@ -333,7 +339,8 @@ def test_story_11_4_reducer_parser_probe_handles_failed_status() -> None:
     failed = parsed["reducer_result_failed"]
     assert failed.get("kind") == "ReducerResult"
     assert failed.get("request_id") == 43
-    assert failed.get("reducer_name") == "insert_thing"
+    # v2 ReducerResult wire omits reducer_name — see committed-status test.
+    assert failed.get("reducer_name") == ""
     assert failed.get("status") == "Failed"
     assert failed.get("error_message") == "validation error"
 
@@ -348,9 +355,14 @@ def test_story_11_4_reducer_parser_probe_handles_out_of_energy_status() -> None:
     out_of_energy = parsed["reducer_result_out_of_energy"]
     assert out_of_energy.get("kind") == "ReducerResult"
     assert out_of_energy.get("request_id") == 44
-    assert out_of_energy.get("reducer_name") == "expensive_op"
-    assert out_of_energy.get("status") == "OutOfEnergy"
-    assert out_of_energy.get("error_message") == ""
+    # v2 ReducerResult wire omits reducer_name.
+    assert out_of_energy.get("reducer_name") == ""
+    # The v2 SDK's declared ReducerOutcome does not include OutOfEnergy — the
+    # probe therefore encodes Err(bytes) and the parser reports status=Failed.
+    # The legacy OutOfEnergy classification survives in the service's
+    # `_handle_reducer_result` failure_category branch, which the smoke e2e
+    # test_story_11_4_gdscript_reducer_smoke_e2e still exercises.
+    assert out_of_energy.get("status") == "Failed"
 
 
 def test_story_11_4_reducer_parser_probe_handles_unknown_status() -> None:
@@ -367,9 +379,8 @@ def test_story_11_4_reducer_parser_probe_handles_unknown_status() -> None:
     assert unknown.get("request_id") == 45, (
         f"Unknown-tag ReducerResult must echo request_id=45. got {unknown}"
     )
-    assert unknown.get("reducer_name") == "future_reducer", (
-        f"Unknown-tag ReducerResult must echo reducer_name='future_reducer'. got {unknown}"
-    )
+    # v2 ReducerResult wire omits reducer_name.
+    assert unknown.get("reducer_name") == ""
     assert unknown.get("status") == "Unknown", (
         f"Unknown-tag ReducerResult must map to status='Unknown'. got {unknown}"
     )
@@ -427,8 +438,16 @@ def test_story_11_4_service_normalizes_reducer_name_before_dispatch() -> None:
         "gdscript_connection_service.gd invoke_reducer() should normalize reducer_name once before "
         "tracking or sending it, so accidental leading/trailing whitespace does not reach the wire."
     )
-    assert 'writer.write_string(clean_reducer_name)' in content, (
-        "gdscript_connection_service.gd invoke_reducer() must serialize the normalized reducer_name."
+    # The normalized name must flow into the wire encoder. After the Story
+    # G-WIRE-2.1.0-ALIGN refactor the service delegates to the pure static
+    # encoder `ConnectionProtocolScript.encode_call_reducer(request_id,
+    # clean_reducer_name, args_bytes)` so the wire fixture in
+    # tests/fixtures/gdscript_wire/call_reducer_ping_insert_sent.bin can be
+    # re-derived from a shim without a socket.
+    assert "encode_call_reducer(request_id, clean_reducer_name, args_bytes)" in content, (
+        "gdscript_connection_service.gd invoke_reducer() must pass the normalized reducer_name "
+        "into ConnectionProtocolScript.encode_call_reducer(...) so the wire fixture stays a "
+        "byte-for-byte replay of the pinned 2.1.0 encoding."
     )
 
 
