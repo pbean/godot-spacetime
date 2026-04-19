@@ -1,0 +1,28 @@
+{
+  "error_message": "",
+  "kind": "ReducerResult",
+  "query_sets": [
+    {
+      "query_set_id": 23,
+      "tables": [
+        {
+          "table_name": "smoke_test",
+          "updates": [
+            {
+              "delete_row_payloads": [],
+              "insert_row_payloads": [
+                "0100000015000000776972652d666978747572652d3837656462626432"
+              ],
+              "variant": "PersistentTable"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "reducer_name": "",
+  "request_id": 99,
+  "status": "Committed",
+  "tag": 6,
+  "timestamp_micros": 1776593072715832
+}

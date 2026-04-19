@@ -366,11 +366,11 @@ func _drain_packets() -> void:
 		var packet := _socket.get_packet()
 		# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: every frame carries
 		# its own compression byte prefix. The session-level
-		# `_active_compression_mode` hint stays authoritative for the
-		# whole-frame-compressed legacy path (Story 11.2); the v2 parser
-		# falls back to the per-frame envelope byte when that hint says None.
-		var is_compressed := _active_compression_mode != "None"
-		var message := ConnectionProtocolScript.parse_server_message(packet, is_compressed)
+		# `_active_compression_mode` hint is still consulted, but the v2 parser
+		# treats each frame's envelope byte as authoritative instead of forcing
+		# a legacy whole-frame gzip path whenever the session requested Gzip.
+		var expects_compressed := _active_compression_mode != "None"
+		var message := ConnectionProtocolScript.parse_server_message(packet, expects_compressed)
 		emit_signal("protocol_message", message.duplicate(true))
 		match String(message.get("kind", "")):
 			"InitialConnection":
@@ -383,12 +383,25 @@ func _drain_packets() -> void:
 				_handle_transaction_update(message)
 			"ReducerResult":
 				_handle_reducer_result(message)
+			"ProtocolError":
+				var parse_error := String(message.get("error_message", "protocol parse error"))
+				if String(_current_status.get("state", STATE_DISCONNECTED)) == STATE_CONNECTING:
+					_handle_connect_failure(parse_error)
+				else:
+					_schedule_retry_or_disconnect(parse_error)
 
 
 func _handle_initial_connection(message: Dictionary) -> void:
-	_session_token = String(message.get("token", ""))
-	if _token_store != null and not _session_token.is_empty():
-		_token_store.store_token(_session_token)
+	var parsed_token := String(message.get("token", ""))
+	if not parsed_token.is_empty() and not _is_structurally_valid_jwt(parsed_token):
+		push_error(
+			"InitialConnection returned a malformed token; skipping persistence and treating reconnects as anonymous."
+		)
+		_session_token = ""
+	else:
+		_session_token = parsed_token
+		if _token_store != null and not _session_token.is_empty():
+			_token_store.store_token(_session_token)
 
 	_ever_connected_this_cycle = true
 	_reconnect_policy.reset()
@@ -1005,6 +1018,31 @@ func _is_likely_auth_error(error_message: String) -> bool:
 		if lowered.find(token) != -1:
 			return true
 	return false
+
+
+func _is_structurally_valid_jwt(token: String) -> bool:
+	var parts := token.split(".")
+	if parts.size() != 3:
+		return false
+	for part_variant in parts:
+		var part := String(part_variant)
+		if part.is_empty():
+			return false
+		if not _is_base64url_segment(part):
+			return false
+	return true
+
+
+func _is_base64url_segment(segment: String) -> bool:
+	for i in range(segment.length()):
+		var code := segment.unicode_at(i)
+		var is_upper := code >= 65 and code <= 90
+		var is_lower := code >= 97 and code <= 122
+		var is_digit := code >= 48 and code <= 57
+		var is_symbol := code == 45 or code == 95
+		if not (is_upper or is_lower or is_digit or is_symbol):
+			return false
+	return true
 
 
 func _format_delay_seconds(delay_seconds: float) -> String:

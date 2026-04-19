@@ -148,6 +148,15 @@ func has_more() -> bool:
 	return _pos < _buf.size()
 
 
+func remaining_bytes() -> int:
+	return _buf.size() - _pos
+
+
+func peek_u32(relative_offset: int = 0) -> int:
+	_require_available(relative_offset + 4)
+	return _buf.decode_u32(_pos + relative_offset)
+
+
 static func decompress_gzip(data: PackedByteArray) -> PackedByteArray:
 	return data.decompress_dynamic(-1, FileAccess.COMPRESSION_GZIP)
 

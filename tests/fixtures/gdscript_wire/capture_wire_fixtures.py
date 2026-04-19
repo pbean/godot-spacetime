@@ -92,6 +92,25 @@ SERVER_TAG_NAMES = {
     SERVER_TAG_PROCEDURE_RESULT: "ProcedureResult",
 }
 
+UNOBSERVED_SERVER_MESSAGES = [
+    {
+        "kind": "OneOffQueryResult",
+        "reason": (
+            "Not emitted by the pinned smoke_test capture workflow. The native "
+            "GDScript runtime keeps this branch as raw_payload passthrough until "
+            "an authoritative fixture exists."
+        ),
+    },
+    {
+        "kind": "ProcedureResult",
+        "reason": (
+            "The smoke_test module defines no procedures, so the pinned capture "
+            "workflow cannot produce this frame. The parser keeps the branch raw "
+            "until a real capture proves its wire layout."
+        ),
+    },
+]
+
 
 def _die(msg: str, code: int = 1) -> "None":
     sys.stderr.write(f"[capture_wire_fixtures] ERROR: {msg}\n")
@@ -335,6 +354,29 @@ def main() -> int:
         })
         print(f"  got SubscribeApplied ({len(applied)} bytes)", flush=True)
 
+        # 2b. Invalid Subscribe -> SubscriptionError. This pins the live
+        # v2 replacement-failure frame shape instead of relying only on the
+        # synthetic parser probe from Story 11.3.
+        invalid_request_id = 24
+        invalid_query_set_id = 24
+        invalid_queries = ["SELECT * FROM definitely_missing_table"]
+        invalid_subscribe_frame = _build_subscribe_frame(
+            invalid_request_id,
+            invalid_query_set_id,
+            invalid_queries,
+        )
+        ws.send_binary(invalid_subscribe_frame)
+        subscription_error = _recv_frame(ws, "SubscriptionError")
+        _expect_server_variant(subscription_error, SERVER_TAG_SUBSCRIPTION_ERROR, "SubscriptionError")
+        _write_fixture("recv", "subscription_error", subscription_error, manifest, {
+            "scenario": "subscribe-invalid-query-error",
+            "request_id": invalid_request_id,
+            "query_set_id": invalid_query_set_id,
+            "queries": invalid_queries,
+            **shared_meta,
+        })
+        print(f"  got SubscriptionError ({len(subscription_error)} bytes)", flush=True)
+
         # 3. CallReducer(ping_insert, "<e2e_value>") -> ReducerResult + TransactionUpdate
         reducer_request_id = 99
         e2e_value = f"wire-fixture-{uuid.uuid4().hex[:8]}"
@@ -430,6 +472,7 @@ def main() -> int:
                 "generated_by": "tests/fixtures/gdscript_wire/capture_wire_fixtures.py",
                 "spacetime_version_line": version_line,
                 "captured_at": captured_at,
+                "unobserved_server_messages": UNOBSERVED_SERVER_MESSAGES,
                 "frames": manifest,
             },
             indent=2,

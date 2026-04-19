@@ -4,9 +4,11 @@ extends SceneTree
 #
 # Usage:
 #   godot --headless --path <project> --script res://tests/fixtures/gdscript_wire/parse_fixture_harness.gd -- \
-#     <fixture_path.bin> <mode>
+#     <mode> <fixture_path.bin>
 #
 # `mode` is one of:
+#   parse_any
+#   parse_any_session_compressed
 #   parse_initial_connection
 #   parse_subscribe_applied
 #   parse_unsubscribe_applied
@@ -30,14 +32,18 @@ func _init() -> void:
 
 	var mode := String(args[0])
 	match mode:
+		"parse_any":
+			_run_parse_server_fixture(args, "", false)
+		"parse_any_session_compressed":
+			_run_parse_server_fixture(args, "", true)
 		"parse_initial_connection":
-			_run_parse_server_fixture(args, "InitialConnection")
+			_run_parse_server_fixture(args, "InitialConnection", false)
 		"parse_subscribe_applied":
-			_run_parse_server_fixture(args, "SubscribeApplied")
+			_run_parse_server_fixture(args, "SubscribeApplied", false)
 		"parse_unsubscribe_applied":
-			_run_parse_server_fixture(args, "UnsubscribeApplied")
+			_run_parse_server_fixture(args, "UnsubscribeApplied", false)
 		"parse_reducer_result":
-			_run_parse_server_fixture(args, "ReducerResult")
+			_run_parse_server_fixture(args, "ReducerResult", false)
 		"encode_subscribe":
 			_run_encode_subscribe(args)
 		"encode_unsubscribe":
@@ -49,7 +55,7 @@ func _init() -> void:
 			quit(2)
 
 
-func _run_parse_server_fixture(args: Array, expected_kind: String) -> void:
+func _run_parse_server_fixture(args: Array, expected_kind: String, session_expects_compressed: bool) -> void:
 	if args.size() < 2:
 		_emit_error("%s requires fixture path" % args[0])
 		quit(2)
@@ -63,8 +69,8 @@ func _run_parse_server_fixture(args: Array, expected_kind: String) -> void:
 	var data := file.get_buffer(file.get_length())
 	file.close()
 
-	var message: Dictionary = ProtocolScript.parse_server_message(data, false)
-	if String(message.get("kind", "")) != expected_kind:
+	var message: Dictionary = ProtocolScript.parse_server_message(data, session_expects_compressed)
+	if not expected_kind.is_empty() and String(message.get("kind", "")) != expected_kind:
 		_emit_error("expected kind=%s, got=%s for %s" % [
 			expected_kind,
 			String(message.get("kind", "")),

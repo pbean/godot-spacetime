@@ -1,22 +1,32 @@
 {
   "generated_by": "tests/fixtures/gdscript_wire/capture_wire_fixtures.py",
   "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
-  "captured_at": "2026-04-19T09:18:08+00:00",
+  "captured_at": "2026-04-19T10:04:32+00:00",
+  "unobserved_server_messages": [
+    {
+      "kind": "OneOffQueryResult",
+      "reason": "Not emitted by the pinned smoke_test capture workflow. The native GDScript runtime keeps this branch as raw_payload passthrough until an authoritative fixture exists."
+    },
+    {
+      "kind": "ProcedureResult",
+      "reason": "The smoke_test module defines no procedures, so the pinned capture workflow cannot produce this frame. The parser keeps the branch raw until a real capture proves its wire layout."
+    }
+  ],
   "frames": [
     {
       "file": "initial_connection_recv.bin",
       "direction": "recv",
       "kind": "initial_connection",
       "length": 440,
-      "sha256": "b0418a92e0e6f773d5df6f12ad199860a9c4f099cb9c3dccee7618064cac9179",
+      "sha256": "e33cc99c835facb9977a58ee36d2d269cce198853af93b1be8a7272aa3a30dd8",
       "scenario": "fresh-anonymous-connect",
       "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
-      "module_name": "gdscript-wire-fixtures-ca81ec6cb005",
+      "module_name": "gdscript-wire-fixtures-b34540c48e47",
       "server_nickname": "local",
       "server_host": "http://127.0.0.1:3000",
       "subprotocol": "v2.bsatn.spacetimedb",
-      "captured_at": "2026-04-19T09:18:08+00:00",
-      "connection_id": "BD9CC5132FF94BFEA7B1C84DB5D84825"
+      "captured_at": "2026-04-19T10:04:32+00:00",
+      "connection_id": "CDAF8C7747F146F3BF48063A4CB0D253"
     },
     {
       "file": "subscribe_sent.bin",
@@ -31,12 +41,12 @@
         "SELECT * FROM smoke_test"
       ],
       "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
-      "module_name": "gdscript-wire-fixtures-ca81ec6cb005",
+      "module_name": "gdscript-wire-fixtures-b34540c48e47",
       "server_nickname": "local",
       "server_host": "http://127.0.0.1:3000",
       "subprotocol": "v2.bsatn.spacetimedb",
-      "captured_at": "2026-04-19T09:18:08+00:00",
-      "connection_id": "BD9CC5132FF94BFEA7B1C84DB5D84825"
+      "captured_at": "2026-04-19T10:04:32+00:00",
+      "connection_id": "CDAF8C7747F146F3BF48063A4CB0D253"
     },
     {
       "file": "subscribe_applied_recv.bin",
@@ -48,47 +58,67 @@
       "request_id": 17,
       "query_set_id": 23,
       "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
-      "module_name": "gdscript-wire-fixtures-ca81ec6cb005",
+      "module_name": "gdscript-wire-fixtures-b34540c48e47",
       "server_nickname": "local",
       "server_host": "http://127.0.0.1:3000",
       "subprotocol": "v2.bsatn.spacetimedb",
-      "captured_at": "2026-04-19T09:18:08+00:00",
-      "connection_id": "BD9CC5132FF94BFEA7B1C84DB5D84825"
+      "captured_at": "2026-04-19T10:04:32+00:00",
+      "connection_id": "CDAF8C7747F146F3BF48063A4CB0D253"
+    },
+    {
+      "file": "subscription_error_recv.bin",
+      "direction": "recv",
+      "kind": "subscription_error",
+      "length": 157,
+      "sha256": "17aedebc7954962ca0866e4a5443f4e70efb5afeae4a4e992165545fcb45c28f",
+      "scenario": "subscribe-invalid-query-error",
+      "request_id": 24,
+      "query_set_id": 24,
+      "queries": [
+        "SELECT * FROM definitely_missing_table"
+      ],
+      "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
+      "module_name": "gdscript-wire-fixtures-b34540c48e47",
+      "server_nickname": "local",
+      "server_host": "http://127.0.0.1:3000",
+      "subprotocol": "v2.bsatn.spacetimedb",
+      "captured_at": "2026-04-19T10:04:32+00:00",
+      "connection_id": "CDAF8C7747F146F3BF48063A4CB0D253"
     },
     {
       "file": "call_reducer_ping_insert_sent.bin",
       "direction": "sent",
       "kind": "call_reducer_ping_insert",
       "length": 50,
-      "sha256": "49c1fef37f40e4ce1e477fba193004ab58bea4b73d2b97a6a0a6dc8050c536d8",
+      "sha256": "e2652f08b13184fe6e7a241d33a80f131e1697a5b01ac86fb22b59bb0e45a6e1",
       "scenario": "call-reducer-ping-insert",
       "request_id": 99,
       "reducer_name": "ping_insert",
-      "args_value": "wire-fixture-729af1c7",
+      "args_value": "wire-fixture-87edbbd2",
       "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
-      "module_name": "gdscript-wire-fixtures-ca81ec6cb005",
+      "module_name": "gdscript-wire-fixtures-b34540c48e47",
       "server_nickname": "local",
       "server_host": "http://127.0.0.1:3000",
       "subprotocol": "v2.bsatn.spacetimedb",
-      "captured_at": "2026-04-19T09:18:08+00:00",
-      "connection_id": "BD9CC5132FF94BFEA7B1C84DB5D84825"
+      "captured_at": "2026-04-19T10:04:32+00:00",
+      "connection_id": "CDAF8C7747F146F3BF48063A4CB0D253"
     },
     {
       "file": "reducer_result_recv.bin",
       "direction": "recv",
       "kind": "reducer_result",
       "length": 95,
-      "sha256": "a5631d3a5f020585572d067f23094a562b956e6a823ee888f4df42bf2dfab188",
+      "sha256": "dc3d15a355bbcdcce46140231c62296fd4623cf3096968d0d11a114d148fcb22",
       "scenario": "reducer-result-ping-insert-committed",
       "request_id": 99,
       "reducer_name": "ping_insert",
       "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
-      "module_name": "gdscript-wire-fixtures-ca81ec6cb005",
+      "module_name": "gdscript-wire-fixtures-b34540c48e47",
       "server_nickname": "local",
       "server_host": "http://127.0.0.1:3000",
       "subprotocol": "v2.bsatn.spacetimedb",
-      "captured_at": "2026-04-19T09:18:08+00:00",
-      "connection_id": "BD9CC5132FF94BFEA7B1C84DB5D84825"
+      "captured_at": "2026-04-19T10:04:32+00:00",
+      "connection_id": "CDAF8C7747F146F3BF48063A4CB0D253"
     },
     {
       "file": "unsubscribe_sent.bin",
@@ -100,12 +130,12 @@
       "request_id": 101,
       "query_set_id": 23,
       "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
-      "module_name": "gdscript-wire-fixtures-ca81ec6cb005",
+      "module_name": "gdscript-wire-fixtures-b34540c48e47",
       "server_nickname": "local",
       "server_host": "http://127.0.0.1:3000",
       "subprotocol": "v2.bsatn.spacetimedb",
-      "captured_at": "2026-04-19T09:18:08+00:00",
-      "connection_id": "BD9CC5132FF94BFEA7B1C84DB5D84825"
+      "captured_at": "2026-04-19T10:04:32+00:00",
+      "connection_id": "CDAF8C7747F146F3BF48063A4CB0D253"
     },
     {
       "file": "unsubscribe_applied_recv.bin",
@@ -117,12 +147,12 @@
       "request_id": 101,
       "query_set_id": 23,
       "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
-      "module_name": "gdscript-wire-fixtures-ca81ec6cb005",
+      "module_name": "gdscript-wire-fixtures-b34540c48e47",
       "server_nickname": "local",
       "server_host": "http://127.0.0.1:3000",
       "subprotocol": "v2.bsatn.spacetimedb",
-      "captured_at": "2026-04-19T09:18:08+00:00",
-      "connection_id": "BD9CC5132FF94BFEA7B1C84DB5D84825"
+      "captured_at": "2026-04-19T10:04:32+00:00",
+      "connection_id": "CDAF8C7747F146F3BF48063A4CB0D253"
     }
   ]
 }
