@@ -464,21 +464,24 @@ def test_story_11_4_service_untracked_result_fallback() -> None:
     )
 
 
-def test_story_11_4_bundled_query_sets_dispatched_for_every_registered_id() -> None:
+def test_story_11_4_bundled_query_sets_skip_pending_replacement_handles() -> None:
     content = _service_src()
     start = content.index("func _handle_reducer_result")
     end = content.index("\nfunc ", start + 1)
     body = content[start:end]
-    # Item 6 fix (deferred-work.md 2026-04-19): the bundled TransactionUpdate
-    # inside a ReducerResult must dispatch rows for every registered subscription
-    # handle, not just the authoritative one.
+    # Mirror the upstream Unity SDK's ReducerResult -> TransactionUpdate flow,
+    # but preserve this runtime's overlap-first replacement contract: pending
+    # replacement query_set_ids are registered before SubscribeApplied and must
+    # not mutate the live cache until the apply event promotes them.
     assert "find_by_query_set_id" in body, (
-        "_handle_reducer_result must resolve bundled query_set_ids via "
-        "_subscription_registry.find_by_query_set_id so multi-subscription clients receive "
-        "every bundled update, not just the authoritative handle's."
+        "_handle_reducer_result must still resolve bundled query_set_ids via "
+        "_subscription_registry.find_by_query_set_id before applying the bundled TransactionUpdate."
     )
-    assert "authoritative_handle.query_set_id" not in body, (
-        "_handle_reducer_result must not filter bundled query_sets by the authoritative handle's "
-        "query_set_id — doing so drops row updates for every other subscribed query_set "
-        "(deferred-work.md 2026-04-19 item 6)."
+    assert "_pending_subscriptions.has(qs_id)" in body, (
+        "_handle_reducer_result must skip bundled query_sets whose handles are still pending so "
+        "overlap-first replacements cannot mutate the live cache before SubscribeApplied."
+    )
+    assert "Dropped bundled query_set update with unregistered query_set_id" in body, (
+        "_handle_reducer_result must continue warning when a bundled query_set_id does not map to "
+        "any registered handle."
     )
