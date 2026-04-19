@@ -595,12 +595,19 @@ func _start_transport(token: String) -> int:
 
 func _random_connection_id_hex() -> String:
 	# 16 random bytes (128 bits) rendered uppercase hex — matches the shape
-	# of `ConnectionId.ToString("X")` produced by the pinned SDK.
-	var rng := RandomNumberGenerator.new()
-	rng.randomize()
+	# of `ConnectionId.ToString("X")` produced by the pinned SDK. Sourced from
+	# Godot's Crypto CSPRNG (not time-seeded `RandomNumberGenerator.randomize()`)
+	# so parallel runners started in the same millisecond cannot collide.
+	var bytes := Crypto.new().generate_random_bytes(16)
+	if bytes.size() != 16:
+		push_error(
+			"Crypto.generate_random_bytes(16) returned %d bytes; expected 16. " % bytes.size() +
+			"The SpacetimeDB handshake requires a 128-bit ConnectionId."
+		)
+		return ""
 	var hex := ""
-	for _i in range(16):
-		hex += "%02X" % (rng.randi() & 0xFF)
+	for i in range(16):
+		hex += "%02X" % (bytes[i] & 0xFF)
 	return hex
 
 
@@ -741,17 +748,25 @@ func _handle_reducer_result(message: Dictionary) -> void:
 	# payload rather than emitting a standalone TransactionUpdate frame. Apply the
 	# bundled rows through the cache so the row_changed signal fires before the
 	# reducer_call_succeeded signal — matching the legacy-v1 ordering contract.
+	# Dispatch row updates for every bundled query_set that maps to a registered
+	# subscription handle (not just the authoritative one) so multi-subscription
+	# clients do not drop data. Fast path: when no subscriptions are registered
+	# (`_authoritative_handle_id == -1`), skip the dispatch block entirely —
+	# otherwise the loop would push_warning for every bundled id.
 	var query_sets: Array = message.get("query_sets", [])
 	if not query_sets.is_empty() and _authoritative_handle_id != -1:
-		var authoritative_handle = _subscription_registry.try_get_handle(_authoritative_handle_id)
-		if authoritative_handle != null:
-			var relevant: Array = []
-			for q_variant in query_sets:
-				var q: Dictionary = q_variant
-				if int(q.get("query_set_id", -1)) == int(authoritative_handle.query_set_id):
-					relevant.append(q)
-			if not relevant.is_empty():
-				_emit_row_changed_events(_cache_store.apply_transaction_updates(relevant))
+		var relevant: Array = []
+		for q_variant in query_sets:
+			var q: Dictionary = q_variant
+			var qs_id := int(q.get("query_set_id", -1))
+			if _subscription_registry.find_by_query_set_id(qs_id) != null:
+				relevant.append(q)
+			else:
+				push_warning(
+					"Dropped bundled query_set update with unregistered query_set_id %d" % qs_id
+				)
+		if not relevant.is_empty():
+			_emit_row_changed_events(_cache_store.apply_transaction_updates(relevant))
 
 	var invocation_id: String
 	var reducer_name: String
