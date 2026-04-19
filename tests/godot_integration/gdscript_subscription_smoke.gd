@@ -201,7 +201,7 @@ func _on_row_changed(event: Dictionary) -> void:
 		return
 
 	var new_row = event.get("new_row")
-	if new_row == null or String(new_row.get("value", "")) != _value:
+	if new_row == null or String(_row_value(new_row, "value")) != _value:
 		return
 
 	_emit_step("observe_row_change", {
@@ -223,24 +223,18 @@ func _on_row_changed(event: Dictionary) -> void:
 
 
 func _invoke_ping_insert() -> int:
-	var output: Array = []
-	var exit_code = OS.execute(
-		_cli_path,
-		[
-			"call",
-			"--server",
-			_server_name,
-			"--anonymous",
-			"--yes",
-			_module_name,
-			"ping_insert",
-			_value,
-		],
-		output,
-		true
-	)
-	if exit_code != 0:
-		_fail("observe_row_change", "spacetime call ping_insert failed: %s" % JSON.stringify(output))
+	# Use the native GDScript reducer lane to trigger the row insert rather
+	# than shelling out to `spacetime call`. The pytest harness runs the scene
+	# under HOME=<tempdir> which defeats the spacetime CLI's self-bootstrap
+	# lookup (`<HOME>/.local/share/spacetime/bin/current/spacetimedb-cli`),
+	# so invoking through the service is also the more robust path in CI.
+	var BsatnWriterScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/bsatn_writer.gd")
+	var writer = BsatnWriterScript.new()
+	writer.write_string(_value)
+	var args_bytes: PackedByteArray = writer.get_bytes()
+	var invocation_id: String = _service.invoke_reducer("ping_insert", args_bytes)
+	if invocation_id.is_empty():
+		_fail("observe_row_change", "native invoke_reducer(ping_insert) rejected the request synchronously")
 		return ERR_CANT_CONNECT
 	return OK
 

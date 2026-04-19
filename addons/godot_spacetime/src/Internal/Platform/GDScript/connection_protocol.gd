@@ -3,13 +3,34 @@ class_name GdscriptConnectionProtocol
 const BsatnReaderScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/bsatn_reader.gd")
 const BsatnWriterScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/bsatn_writer.gd")
 
-const SUBPROTOCOL_BSATN := "v1.bsatn.spacetimedb"
+# Subprotocol advertised during the WebSocket handshake. The pinned upstream
+# ClientSDK 2.1.0 NuGet negotiates `v2.bsatn.spacetimedb` and the pinned
+# 2.1.0 server only accepts the SDK's own BSATN encodings on this subprotocol.
+# The older `v1.bsatn.spacetimedb` remains alive on the server but uses a
+# stale field ordering (Identity → extra byte → Token → ConnectionId for
+# InitialConnection, no compression byte prefix on server frames) that differs
+# from what the pinned SDK emits — matching the SDK is mandatory for
+# Subscribe/CallReducer round-trips to succeed.
+const SUBPROTOCOL_BSATN := "v2.bsatn.spacetimedb"
 const DEFAULT_QUERY_TOKEN_KEY := "token"
 
+# ClientMessage variant indices — observed against `spacetime 2.1.0` over
+# `v2.bsatn.spacetimedb`. Order matches the SDK's `ClientMessage` declared
+# variants: `[0]Subscribe, [1]Unsubscribe, [2]OneOffQuery, [3]CallReducer,
+# [4]CallProcedure`. `CALL_REDUCER` used to be `2` on the legacy `v1` wire
+# which collided with `OneOffQuery` and produced `"no such reducer"` errors
+# whenever a reducer was invoked.
 const CLIENT_MESSAGE_SUBSCRIBE := 0
 const CLIENT_MESSAGE_UNSUBSCRIBE := 1
-const CLIENT_MESSAGE_CALL_REDUCER := 2
+const CLIENT_MESSAGE_ONE_OFF_QUERY := 2
+const CLIENT_MESSAGE_CALL_REDUCER := 3
+const CLIENT_MESSAGE_CALL_PROCEDURE := 4
 
+# ServerMessage variant indices — observed against `spacetime 2.1.0` over
+# `v2.bsatn.spacetimedb`. Order matches the SDK's `ServerMessage` declared
+# variants. Every server frame is prefixed with a compression byte (0=None,
+# 1=Brotli, 2=Gzip) before the BSATN-encoded ServerMessage — the variant
+# tag is therefore at byte[1] of the raw packet, not byte[0].
 const SERVER_MESSAGE_INITIAL_CONNECTION := 0
 const SERVER_MESSAGE_SUBSCRIBE_APPLIED := 1
 const SERVER_MESSAGE_UNSUBSCRIBE_APPLIED := 2
@@ -18,6 +39,13 @@ const SERVER_MESSAGE_TRANSACTION_UPDATE := 4
 const SERVER_MESSAGE_ONE_OFF_QUERY_RESULT := 5
 const SERVER_MESSAGE_REDUCER_RESULT := 6
 const SERVER_MESSAGE_PROCEDURE_RESULT := 7
+
+# Frame envelope byte values at the head of every server frame (0=None,
+# 1=Brotli, 2=Gzip). The decompression call itself lives in `BsatnReaderScript`
+# to keep this module free of an inline second binary-parsing path.
+const SERVER_ENVELOPE_NONE := 0
+const SERVER_ENVELOPE_BROTLI := 1
+const SERVER_ENVELOPE_GZIP := 2
 
 
 static func make_supported_protocols() -> PackedStringArray:
@@ -78,33 +106,108 @@ static func encode_client_message(tag: int, payload_writer: Callable = Callable(
 	return writer.get_bytes()
 
 
+# --- Pure static encoders — the oracle for `test_gdscript_wire_layouts.py`. ---
+# Each encoder builds a ClientMessage byte-for-byte against the pinned 2.1.0
+# wire and is invoked from `gdscript_connection_service.gd` via
+# `send_protocol_message`. Keeping them static (not service-instance methods)
+# lets the wire tests re-derive the exact bytes without stubbing a service.
+
+
+static func encode_subscribe(request_id: int, query_set_id: int, query_sqls: Array) -> PackedByteArray:
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+	# tests/fixtures/gdscript_wire/subscribe_sent.bin):
+	#
+	#   tag(u8=0) | RequestId(u32) | QuerySetId(u32) | QueryStrings(array<string>)
+	#
+	# Field order matches the pinned SDK's declared `Subscribe { RequestId,
+	# QuerySetId, QueryStrings }` struct — there is no leading reserved u32.
+	return encode_client_message(
+		CLIENT_MESSAGE_SUBSCRIBE,
+		func(writer) -> void:
+			writer.write_u32(int(request_id))
+			writer.write_u32(int(query_set_id))
+			writer.write_array_len(query_sqls.size())
+			for sql_variant in query_sqls:
+				writer.write_string(String(sql_variant))
+	)
+
+
+static func encode_unsubscribe(request_id: int, query_set_id: int, flags: int = 0) -> PackedByteArray:
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+	# tests/fixtures/gdscript_wire/unsubscribe_sent.bin):
+	#
+	#   tag(u8=1) | RequestId(u32) | QuerySetId(u32) | Flags(u8)
+	return encode_client_message(
+		CLIENT_MESSAGE_UNSUBSCRIBE,
+		func(writer) -> void:
+			writer.write_u32(int(request_id))
+			writer.write_u32(int(query_set_id))
+			writer.write_u8(int(flags))
+	)
+
+
+static func encode_call_reducer(request_id: int, reducer_name: String, args_bytes: PackedByteArray, flags: int = 0) -> PackedByteArray:
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+	# tests/fixtures/gdscript_wire/call_reducer_ping_insert_sent.bin):
+	#
+	#   tag(u8=3) | RequestId(u32) | Flags(u8) | Reducer(string) | Args(bytes)
+	return encode_client_message(
+		CLIENT_MESSAGE_CALL_REDUCER,
+		func(writer) -> void:
+			writer.write_u32(int(request_id))
+			writer.write_u8(int(flags))
+			writer.write_string(reducer_name)
+			writer.write_bytes(args_bytes)
+	)
+
+
 static func parse_server_message(packet: PackedByteArray, is_compressed: bool = false) -> Dictionary:
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: every server frame is
+	# prefixed with a compression byte (0=None, 1=Brotli, 2=Gzip). After
+	# stripping (or decompressing) the envelope, the remaining bytes are the
+	# BSATN-encoded ServerMessage whose first byte is the variant tag.
+	#
+	# `is_compressed` is retained for backward compatibility with the legacy
+	# `v1.bsatn.spacetimedb` wire where the GDScript transport tracked a
+	# separate `_active_compression_mode` flag; in v2 the envelope byte is
+	# per-frame so callers can pass `false` and let this helper dispatch.
+	if packet.is_empty():
+		return _raw_message("Unknown", -1, packet)
+
 	var payload := packet
+	var compression_tag := packet[0]
 	if is_compressed:
-		payload = BsatnReaderScript.decompress_gzip(payload)
+		# Legacy gate — `_active_compression_mode != "None"` was set globally
+		# for the whole session. Fall back to decompressing the full packet
+		# minus the envelope byte so existing callers keep working.
+		payload = BsatnReaderScript.decompress_gzip(packet.slice(1, packet.size()))
+	else:
+		match compression_tag:
+			SERVER_ENVELOPE_NONE:
+				payload = packet.slice(1, packet.size())
+			SERVER_ENVELOPE_GZIP, SERVER_ENVELOPE_BROTLI:
+				# Brotli canonicalises to Gzip on the wire per upstream.
+				payload = BsatnReaderScript.decompress_gzip(packet.slice(1, packet.size()))
+			_:
+				push_error("Unknown ServerMessage compression envelope byte 0x%02X" % compression_tag)
+				return _raw_message("Unknown", compression_tag, packet)
 
 	var reader = BsatnReaderScript.new(payload)
 	var tag := reader.read_u8()
 	match tag:
 		SERVER_MESSAGE_INITIAL_CONNECTION:
-			# Observed pinned-runtime InitialConnection wire layout:
+			# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+			# tests/fixtures/gdscript_wire/initial_connection_recv.bin):
 			#
-			#   tag(1) | Identity(32) | extra_byte(1) | Token(u32_len + utf8_bytes) | ConnectionId(16)
+			#   variant(u8=0) | Identity(32) | ConnectionId(16) | Token(string)
 			#
-			# Field order and the lone extra byte both differ from the client-side
-			# InitialConnection struct declaration (Identity -> ConnectionId ->
-			# Token with ConnectionId immediately after Identity, no intervening
-			# byte). Reading with the declared order yields a token that overlaps
-			# the JWT header by 15 bytes (starts with "iLCJ..." instead of
-			# "eyJ0...") and carries trailing binary slop from the ConnectionId
-			# bytes, which the server then rejects with HTTP 400 on any
-			# subsequent Authorization: Bearer reconnect. Until the declared
-			# struct and the live wire converge, prefer the wire order observed
-			# empirically against the pinned runtime.
+			# Matches the SDK's declared `InitialConnection { Identity,
+			# ConnectionId, Token }` struct order. The earlier legacy-v1
+			# "Identity → extra byte → Token → ConnectionId" ordering no
+			# longer applies once the subprotocol moves to v2.
 			var identity_bytes := reader.read_fixed_bytes(32)
-			reader.read_u8()
-			var token := reader.read_string()
 			var connection_id_bytes := reader.read_fixed_bytes(16)
+			var token := reader.read_string()
 			return {
 				"kind": "InitialConnection",
 				"tag": tag,
@@ -115,7 +218,7 @@ static func parse_server_message(packet: PackedByteArray, is_compressed: bool = 
 		SERVER_MESSAGE_SUBSCRIBE_APPLIED:
 			return _parse_subscribe_applied(tag, payload, reader)
 		SERVER_MESSAGE_UNSUBSCRIBE_APPLIED:
-			return _raw_message("UnsubscribeApplied", tag, payload)
+			return _parse_unsubscribe_applied(tag, payload, reader)
 		SERVER_MESSAGE_SUBSCRIPTION_ERROR:
 			return _parse_subscription_error(tag, payload, reader)
 		SERVER_MESSAGE_TRANSACTION_UPDATE:
@@ -138,6 +241,11 @@ static func fixed_width_bytes_to_hex(bytes: PackedByteArray) -> String:
 
 
 static func _parse_subscribe_applied(tag: int, payload: PackedByteArray, reader) -> Dictionary:
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+	# tests/fixtures/gdscript_wire/subscribe_applied_recv.bin):
+	#
+	#   variant(u8=1) | RequestId(u32) | QuerySetId(u32) | Rows(QueryRows)
+	#   QueryRows = Tables(Vec<SingleTableRows>)
 	return {
 		"kind": "SubscribeApplied",
 		"tag": tag,
@@ -148,7 +256,33 @@ static func _parse_subscribe_applied(tag: int, payload: PackedByteArray, reader)
 	}
 
 
+static func _parse_unsubscribe_applied(tag: int, payload: PackedByteArray, reader) -> Dictionary:
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+	# tests/fixtures/gdscript_wire/unsubscribe_applied_recv.bin):
+	#
+	#   variant(u8=2) | RequestId(u32) | QuerySetId(u32) | trailing u8 flag
+	#
+	# The 11-byte captured ack ends with a single `0x01` byte whose meaning
+	# is not documented in the SDK's `UnsubscribeApplied` struct declaration
+	# but is included here so the round-trip length (11) matches.
+	var request_id: int = reader.read_u32()
+	var query_set_id: int = reader.read_u32()
+	var trailing_flag := 0
+	if reader.has_more():
+		trailing_flag = reader.read_u8()
+	return {
+		"kind": "UnsubscribeApplied",
+		"tag": tag,
+		"request_id": request_id,
+		"query_set_id": query_set_id,
+		"trailing_flag": trailing_flag,
+		"raw_payload": payload.slice(1, payload.size()),
+	}
+
+
 static func _parse_subscription_error(tag: int, payload: PackedByteArray, reader) -> Dictionary:
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: SDK declaration is
+	# `SubscriptionError { RequestId: Option<u32>, QuerySetId, Error }`.
 	var request_id = null
 	var has_request_id = reader.read_option_tag()
 	if has_request_id:
@@ -165,6 +299,8 @@ static func _parse_subscription_error(tag: int, payload: PackedByteArray, reader
 
 
 static func _parse_transaction_update(tag: int, payload: PackedByteArray, reader) -> Dictionary:
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: SDK declaration is
+	# `TransactionUpdate { QuerySets: Vec<QuerySetUpdate> }`.
 	var query_set_count = reader.read_array_len()
 	var query_sets: Array = []
 	for _i in range(query_set_count):
@@ -312,29 +448,60 @@ static func _split_bsatn_rows(rows_data: PackedByteArray, size_hint: Dictionary)
 
 
 static func _parse_reducer_result(tag: int, payload: PackedByteArray, reader) -> Dictionary:
+	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
+	# tests/fixtures/gdscript_wire/reducer_result_recv.bin):
+	#
+	#   variant(u8=6) | RequestId(u32) | Timestamp(u64) | ReducerOutcome
+	#
+	# ReducerOutcome variants (SDK declaration order):
+	#   [0]Ok(ReducerOk { RetValue(bytes), TransactionUpdate })
+	#   [1]OkEmpty(Unit)
+	#   [2]Err(bytes)
+	#   [3]InternalError(string)
+	#
+	# The bundled TransactionUpdate inside a successful ReducerResult is what
+	# actually carries the inserted/deleted rows — the v2 server no longer
+	# emits a standalone TransactionUpdate frame alongside ReducerResult.
 	var request_id: int = reader.read_u32()
-	var _unused: int = reader.read_u64()
-	var reducer_name: String = reader.read_string()
-	var status_tag: int = reader.read_u8()
-	var status: String
+	var timestamp_micros: int = reader.read_u64()
+	var outcome_tag: int = reader.read_u8()
+	var status: String = "Unknown"
 	var error_message: String = ""
-	match status_tag:
+	var query_sets: Array = []
+	match outcome_tag:
 		0:
+			# Ok(ReducerOk { RetValue(bytes), TransactionUpdate })
 			status = "Committed"
+			var _ret_value: PackedByteArray = reader.read_bytes()
+			var query_set_count: int = reader.read_array_len()
+			for _i in range(query_set_count):
+				query_sets.append(_parse_query_set_update(reader))
 		1:
+			status = "Committed"
+		2:
+			status = "Failed"
+			var err_bytes: PackedByteArray = reader.read_bytes()
+			var err_utf8: String = err_bytes.get_string_from_utf8()
+			error_message = err_utf8 if err_utf8 != "" else err_bytes.hex_encode()
+		3:
 			status = "Failed"
 			error_message = reader.read_string()
-		2:
-			status = "OutOfEnergy"
 		_:
 			status = "Unknown"
+	# Historical API surface kept for `_handle_reducer_result` — the
+	# `reducer_name` was available in the legacy-v1 ReducerResult frame but
+	# is NOT in the v2 SDK declaration. The dispatcher correlates the result
+	# with its `_pending_reducer_calls` entry via `request_id` and pulls the
+	# name from there.
 	return {
 		"kind": "ReducerResult",
 		"tag": tag,
 		"request_id": request_id,
-		"reducer_name": reducer_name,
+		"reducer_name": "",
 		"status": status,
 		"error_message": error_message,
+		"timestamp_micros": timestamp_micros,
+		"query_sets": query_sets,
 		"raw_payload": payload.slice(1, payload.size()),
 	}
 

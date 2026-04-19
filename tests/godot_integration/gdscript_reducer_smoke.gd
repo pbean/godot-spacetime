@@ -211,12 +211,12 @@ func _prove_fault_guard() -> void:
 	_service.reducer_call_succeeded.connect(success_lambda)
 	_service.reducer_call_failed.connect(fail_lambda)
 
-	var guard_invocation_id := _service.invoke_reducer("", PackedByteArray())
+	var guard_invocation_id: String = _service.invoke_reducer("", PackedByteArray())
 
 	_service.reducer_call_succeeded.disconnect(success_lambda)
 	_service.reducer_call_failed.disconnect(fail_lambda)
 
-	var rejected_synchronously := guard_invocation_id.is_empty()
+	var rejected_synchronously: bool = guard_invocation_id.is_empty()
 	_emit_step("fault_guard_passed", {
 		"status": "ok",
 		"guard_triggered": not signal_received and rejected_synchronously,
