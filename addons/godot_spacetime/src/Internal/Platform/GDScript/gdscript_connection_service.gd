@@ -594,20 +594,14 @@ func _start_transport(token: String) -> int:
 
 
 func _random_connection_id_hex() -> String:
-	# 16 random bytes (128 bits) rendered uppercase hex — matches the shape
-	# of `ConnectionId.ToString("X")` produced by the pinned SDK. Sourced from
-	# Godot's Crypto CSPRNG (not time-seeded `RandomNumberGenerator.randomize()`)
-	# so parallel runners started in the same millisecond cannot collide.
-	var bytes := Crypto.new().generate_random_bytes(16)
-	if bytes.size() != 16:
-		push_error(
-			"Crypto.generate_random_bytes(16) returned %d bytes; expected 16. " % bytes.size() +
-			"The SpacetimeDB handshake requires a 128-bit ConnectionId."
-		)
-		return ""
+	# Mirror the upstream Unity SDK's `ConnectionId.Random()` behavior:
+	# construct 16 pseudo-random bytes with a fresh RNG instance and render them
+	# uppercase hex for the subscribe URL's `connection_id=` parameter.
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
 	var hex := ""
 	for i in range(16):
-		hex += "%02X" % (bytes[i] & 0xFF)
+		hex += "%02X" % (rng.randi() & 0xFF)
 	return hex
 
 
@@ -748,23 +742,26 @@ func _handle_reducer_result(message: Dictionary) -> void:
 	# payload rather than emitting a standalone TransactionUpdate frame. Apply the
 	# bundled rows through the cache so the row_changed signal fires before the
 	# reducer_call_succeeded signal — matching the legacy-v1 ordering contract.
-	# Dispatch row updates for every bundled query_set that maps to a registered
-	# subscription handle (not just the authoritative one) so multi-subscription
-	# clients do not drop data. Fast path: when no subscriptions are registered
-	# (`_authoritative_handle_id == -1`), skip the dispatch block entirely —
-	# otherwise the loop would push_warning for every bundled id.
+	# Mirror the upstream Unity SDK's "parse the bundled TransactionUpdate" shape,
+	# but keep this runtime's overlap-first replacement contract intact: a pending
+	# replacement handle is registered before SubscribeApplied, yet the old handle
+	# remains authoritative until that apply event arrives. Skip pending query sets
+	# so reducer-side rows cannot leak into the live cache before replacement apply.
 	var query_sets: Array = message.get("query_sets", [])
 	if not query_sets.is_empty() and _authoritative_handle_id != -1:
 		var relevant: Array = []
 		for q_variant in query_sets:
 			var q: Dictionary = q_variant
 			var qs_id := int(q.get("query_set_id", -1))
-			if _subscription_registry.find_by_query_set_id(qs_id) != null:
-				relevant.append(q)
-			else:
+			var handle = _subscription_registry.find_by_query_set_id(qs_id)
+			if handle == null:
 				push_warning(
 					"Dropped bundled query_set update with unregistered query_set_id %d" % qs_id
 				)
+			elif _pending_subscriptions.has(qs_id):
+				continue
+			else:
+				relevant.append(q)
 		if not relevant.is_empty():
 			_emit_row_changed_events(_cache_store.apply_transaction_updates(relevant))
 

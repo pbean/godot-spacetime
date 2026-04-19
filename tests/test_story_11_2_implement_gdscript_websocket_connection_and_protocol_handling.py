@@ -324,16 +324,23 @@ def test_story_11_2_single_runtime_service_owns_websocket_transport() -> None:
         )
 
 
-def test_story_11_2_connection_id_hex_uses_crypto_csprng() -> None:
+def test_story_11_2_connection_id_hex_matches_upstream_sdk_random_shape() -> None:
     content = _service_src()
     start = content.index("func _random_connection_id_hex")
     end = content.index("func ", start + 1)
     body = content[start:end]
-    assert "Crypto.new().generate_random_bytes(16)" in body, (
-        "_random_connection_id_hex must source its 16 bytes from Godot's Crypto CSPRNG so parallel runners "
-        "started in the same millisecond cannot collide (deferred-work.md 2026-04-19 item 5)."
+    assert "RandomNumberGenerator.new()" in body, (
+        "_random_connection_id_hex must mirror the upstream Unity SDK's ConnectionId.Random() shape by "
+        "allocating a fresh RNG instance for a 16-byte uppercase-hex connection id."
     )
-    assert "rng.randomize()" not in body, (
-        "_random_connection_id_hex must not fall back to time-seeded RandomNumberGenerator.randomize() — "
-        "use Crypto.new().generate_random_bytes() as the single source."
+    assert "rng.randomize()" in body, (
+        "_random_connection_id_hex must explicitly randomize the fresh RNG before rendering its 16 bytes."
+    )
+    assert "Crypto.new().generate_random_bytes(16)" not in body, (
+        "_random_connection_id_hex must follow the upstream Unity SDK's non-Crypto ConnectionId.Random() "
+        "path, not the repo's earlier GDScript-only CSPRNG variant."
+    )
+    assert 'return ""' not in body, (
+        "_random_connection_id_hex must not introduce an empty-string failure branch; the upstream SDK's "
+        "ConnectionId.Random() path always returns a 32-char hex id."
     )
