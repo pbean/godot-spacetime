@@ -720,6 +720,17 @@ func _handle_transaction_update(message: Dictionary) -> void:
 	if authoritative_handle == null:
 		return
 
+	# Defensive guard (round-2 hardening): `authoritative_handle.query_set_id`
+	# is expected to be a non-negative integer once a handle is registered, but
+	# a stale or future-refactored code path could leave the field at `-1`
+	# (the `_authoritative_handle_id` sentinel wording would match). An int
+	# comparison below with `qs_id == int(-1)` could then false-match a bundled
+	# entry whose `query_set_id` was parsed as `-1`, leaking rows through to the
+	# cache. Mirror the per-entry `qs_id < 0` guard on the authoritative side.
+	if int(authoritative_handle.query_set_id) < 0:
+		push_warning("Ignoring TransactionUpdate: authoritative handle has negative query_set_id")
+		return
+
 	# Defensive shape-checks (cluster-A hardening): a malformed TransactionUpdate
 	# frame (non-Array `query_sets`, non-Dictionary entry, missing/negative
 	# `query_set_id`) must NOT raise a Godot runtime error from a typed cast
@@ -731,22 +742,33 @@ func _handle_transaction_update(message: Dictionary) -> void:
 		return
 	var query_sets: Array = query_sets_variant
 
+	# Round-2 hardening: per-entry `push_warning` for the three data-malformed
+	# categories (non-Dictionary, missing `query_set_id`, non-integer
+	# `query_set_id`) is an adversarial-bulk symptom — a single malformed bundle
+	# with N bad entries produced N warnings. Collapse to one summary after the
+	# loop. The registry-state signals (authoritative-side guard above,
+	# `qs_id < 0` below) stay audible because they indicate state drift, not
+	# payload malformation.
+	var malformed_entry_count := 0
 	var relevant_updates: Array = []
 	for query_set_update_variant in query_sets:
 		if not (query_set_update_variant is Dictionary):
-			push_warning("Skipping non-Dictionary TransactionUpdate.query_sets entry")
+			malformed_entry_count += 1
 			continue
 		var query_set_update: Dictionary = query_set_update_variant
 		var qs_id_variant = query_set_update.get("query_set_id", -1)
 		if typeof(qs_id_variant) != TYPE_INT:
-			push_warning("Skipping TransactionUpdate.query_sets entry with non-integer query_set_id")
+			malformed_entry_count += 1
 			continue
 		var qs_id := int(qs_id_variant)
 		if qs_id < 0:
-			push_warning("Skipping TransactionUpdate.query_sets entry with missing/negative query_set_id")
+			malformed_entry_count += 1
 			continue
 		if qs_id == int(authoritative_handle.query_set_id):
 			relevant_updates.append(query_set_update)
+
+	if malformed_entry_count > 0:
+		push_warning("Skipped %d malformed entries in TransactionUpdate.query_sets" % malformed_entry_count)
 
 	if relevant_updates.is_empty():
 		return
@@ -755,7 +777,19 @@ func _handle_transaction_update(message: Dictionary) -> void:
 
 
 func _handle_reducer_result(message: Dictionary) -> void:
-	var request_id := int(message.get("request_id", -1))
+	# Round-2 hardening: `message.get("request_id", -1)` can return a
+	# Variant-shaped value (Dictionary / Array / PackedByteArray / String) when
+	# the server frame is malformed. `int(dict_or_array)` raises a Godot runtime
+	# error that aborts the receive loop; `int("abc")` silently coerces to `0`
+	# which would false-match a pending-call entry at `request_id=0` (no path
+	# today reserves id 0, but the bundled-path `query_set_id` guard closed the
+	# exact same silent-coercion class — mirror that guard here). The typeof
+	# check must run BEFORE `int()`.
+	var request_id_variant = message.get("request_id", -1)
+	if typeof(request_id_variant) != TYPE_INT:
+		push_warning("Ignoring ReducerResult: non-integer request_id")
+		return
+	var request_id := int(request_id_variant)
 	var pending = _pending_reducer_calls.get(request_id)
 	_pending_reducer_calls.erase(request_id)
 
@@ -781,19 +815,26 @@ func _handle_reducer_result(message: Dictionary) -> void:
 		query_sets_variant = []
 	var query_sets: Array = query_sets_variant
 	if not query_sets.is_empty() and _authoritative_handle_id != -1:
+		# Round-2 hardening: collapse the three data-malformed per-entry warnings
+		# (non-Dictionary, missing `query_set_id`, non-integer `query_set_id`)
+		# into a single post-loop summary. The "unregistered `query_set_id`"
+		# warning stays per-entry: it is a registry-state signal (race or drift
+		# bug between subscription lifecycle and server-emitted bundles), not an
+		# adversarial-bulk symptom.
+		var malformed_entry_count := 0
 		var relevant: Array = []
 		for q_variant in query_sets:
 			if not (q_variant is Dictionary):
-				push_warning("Skipping non-Dictionary ReducerResult.query_sets entry")
+				malformed_entry_count += 1
 				continue
 			var q: Dictionary = q_variant
 			var qs_id_variant = q.get("query_set_id", -1)
 			if typeof(qs_id_variant) != TYPE_INT:
-				push_warning("Skipping ReducerResult.query_sets entry with non-integer query_set_id")
+				malformed_entry_count += 1
 				continue
 			var qs_id := int(qs_id_variant)
 			if qs_id < 0:
-				push_warning("Skipping ReducerResult.query_sets entry with missing/negative query_set_id")
+				malformed_entry_count += 1
 				continue
 			var handle = _subscription_registry.find_by_query_set_id(qs_id)
 			if handle == null:
@@ -804,6 +845,8 @@ func _handle_reducer_result(message: Dictionary) -> void:
 				continue
 			else:
 				relevant.append(q)
+		if malformed_entry_count > 0:
+			push_warning("Skipped %d malformed entries in ReducerResult.query_sets" % malformed_entry_count)
 		if not relevant.is_empty():
 			_emit_row_changed_events(_cache_store.apply_transaction_updates(relevant))
 

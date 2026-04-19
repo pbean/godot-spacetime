@@ -33,6 +33,17 @@ func _fail(message: String) -> void:
 
 
 func _require_available(count: int) -> void:
+	# Parse-failure re-entry guard: once a higher-level parser has marked the
+	# reader with `parse_failed`, any subsequent read call — whether from the
+	# same parser forgetting an outer guard, or a downstream helper walking on
+	# already-corrupted state — must not re-enter `_fail`. `_fail` intentionally
+	# raises in release builds via `len(int)`; re-entry after a clean
+	# ProtocolError sentinel was already produced would turn a routable error
+	# into a receive-loop-aborting crash. Early-return preserves `_pos` so the
+	# surrounding `_finalize_parsed_message` path can still serialise a stable
+	# ProtocolError from the existing `parse_error_message`.
+	if parse_failed:
+		return
 	if _pos + count > _buf.size():
 		_fail("BSATN buffer underrun: need %d byte(s) at offset %d, size %d" % [count, _pos, _buf.size()])
 

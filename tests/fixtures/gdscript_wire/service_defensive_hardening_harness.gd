@@ -49,6 +49,12 @@ func _init() -> void:
 			_run_transaction_update_non_numeric_id()
 		"reducer_result_non_numeric_id":
 			_run_reducer_result_non_numeric_id()
+		"authoritative_negative_query_set_id":
+			_run_authoritative_negative_query_set_id()
+		"malformed_bundle_warning_storm_cap":
+			_run_malformed_bundle_warning_storm_cap()
+		"reducer_result_non_integer_request_id":
+			_run_reducer_result_non_integer_request_id()
 		_:
 			_emit_error("unknown mode: %s" % args[0])
 			quit(2)
@@ -135,6 +141,99 @@ func _run_reducer_result_non_numeric_id() -> void:
 		"row_changed_events": _jsonify(_row_changed_events),
 		"success_events": _jsonify(_reducer_success_events),
 		"failure_events": _jsonify(_reducer_failure_events),
+	})
+	quit(0)
+
+
+func _run_authoritative_negative_query_set_id() -> void:
+	# Stale / future-refactored sentinel case: a registered handle whose
+	# `query_set_id` is `-1`. A naive `qs_id == int(authoritative_handle.query_set_id)`
+	# comparison with a bundled entry whose `query_set_id` was also `-1` (e.g.
+	# a malformed server frame that defaulted to `-1` via `get(..., -1)`) would
+	# false-match; the authoritative-side guard must short-circuit before any
+	# bundled-entry comparison runs.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var cache = ctx["cache"]
+	var authoritative_handle = SubscriptionHandleScript.new(1, -1)
+	registry.handles_by_id[1] = authoritative_handle
+	registry.handles_by_query_set_id[-1] = authoritative_handle
+	service._authoritative_handle_id = 1
+	service._handle_transaction_update({
+		"query_sets": [
+			{
+				"query_set_id": 0,
+				"tables": [],
+			},
+		],
+	})
+	_emit_result({
+		"applied_query_set_ids": _jsonify(cache.applied_query_set_ids),
+		"row_changed_events": _jsonify(_row_changed_events),
+	})
+	quit(0)
+
+
+func _run_malformed_bundle_warning_storm_cap() -> void:
+	# Five mixed-malformed entries (2 non-Dictionary, 2 missing `query_set_id`,
+	# 1 non-integer `query_set_id`) plus one valid entry for the authoritative
+	# handle. The post-round behaviour: exactly one summary `push_warning`
+	# naming the count "5"; no per-entry warnings for the three malformed
+	# categories. The valid entry still reaches the cache.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var cache = ctx["cache"]
+	var authoritative_handle = SubscriptionHandleScript.new(1, 42)
+	registry.handles_by_id[1] = authoritative_handle
+	registry.handles_by_query_set_id[42] = authoritative_handle
+	service._authoritative_handle_id = 1
+	service._handle_transaction_update({
+		"query_sets": [
+			"not-a-dict",                             # non-Dictionary #1
+			12345,                                    # non-Dictionary #2
+			{"tables": []},                           # missing query_set_id #1
+			{"tables": [], "other": "field"},         # missing query_set_id #2
+			{"query_set_id": "abc", "tables": []},    # non-integer #1
+			{"query_set_id": 42, "tables": []},       # valid, matches authoritative
+		],
+	})
+	_emit_result({
+		"applied_query_set_ids": _jsonify(cache.applied_query_set_ids),
+		"row_changed_events": _jsonify(_row_changed_events),
+	})
+	quit(0)
+
+
+func _run_reducer_result_non_integer_request_id() -> void:
+	# Top-level `request_id` shaped as a Dictionary must not crash `int(...)`
+	# and must not silently coerce to `0` (which would false-match a pending
+	# call reserved at `request_id == 0`, had one existed). The handler must
+	# push_warning once, return early, and NOT emit a reducer-success/failure
+	# signal for the Dictionary-shaped request_id. We set up a pending call at
+	# `request_id == 0` so any silent coercion would be observable — the
+	# success/failure events stay empty to prove no match happened.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._pending_reducer_calls[0] = {
+		"invocation_id": "inv-trap-zero",
+		"reducer_name": "trap",
+		"called_at": 1.0,
+	}
+	service._handle_reducer_result({
+		"request_id": {"k": "v"},
+		"status": "Committed",
+		"query_sets": [],
+	})
+	_emit_result({
+		"row_changed_events": _jsonify(_row_changed_events),
+		"success_events": _jsonify(_reducer_success_events),
+		"failure_events": _jsonify(_reducer_failure_events),
+		"pending_still_holds_zero": service._pending_reducer_calls.has(0),
 	})
 	quit(0)
 

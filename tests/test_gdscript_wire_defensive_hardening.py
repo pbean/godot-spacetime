@@ -141,3 +141,125 @@ def test_reducer_result_non_numeric_query_set_id_is_skipped_but_success_still_em
     assert len(data["success_events"]) == 1
     assert data["success_events"][0]["reducer_name"] == "ping"
     assert data["success_events"][0]["invocation_id"] == "inv-7"
+
+
+def test_parse_decompressed_payload_short_returns_protocol_error() -> None:
+    # A Gzip-envelope frame whose decompressed payload is < 1 byte must surface
+    # as a ProtocolError BEFORE `BsatnReader.new(payload)` is invoked. Pre-round
+    # behaviour: `BsatnReader.read_u8()` on a 0-byte payload hits
+    # `_fail → len(int)` and aborts the receive loop instead of producing a
+    # routable ProtocolError.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        PARSE_HARNESS_RES,
+        ["decompressed_payload_short"],
+    )
+    assert proc.returncode == 0, (
+        f"parse harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["kind"] == "ProtocolError"
+    assert "Decompressed ServerMessage payload too short" in data["error_message"]
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "BSATN buffer underrun" not in stderr, stderr
+    assert "Assertion failed" not in stderr, stderr
+
+
+def test_service_authoritative_negative_query_set_id_returns_early() -> None:
+    # A registered authoritative handle whose `query_set_id` is negative must
+    # cause `_handle_transaction_update` to return early — no cache mutation,
+    # no `row_changed` emission, one `push_warning` naming the defense. This
+    # closes the authoritative-side stale-id match hole that the per-entry
+    # `qs_id < 0` guard already closed on the bundled side.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["authoritative_negative_query_set_id"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["applied_query_set_ids"] == []
+    assert data["row_changed_events"] == []
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "authoritative handle has negative query_set_id" in stderr, (
+        f"expected authoritative-side defense warning in stderr. got tail: {stderr[-800:]}"
+    )
+
+
+def test_service_malformed_bundle_emits_single_summary_warning() -> None:
+    # Five mixed-malformed entries + one valid entry for the authoritative
+    # handle: the post-round behaviour collapses the three data-malformed
+    # categories into one summary `push_warning` naming the count. The valid
+    # entry still reaches the cache. The previous round's per-entry warning
+    # substrings for those three categories must NOT appear in stderr.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["malformed_bundle_warning_storm_cap"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    # The valid entry still applies.
+    assert data["applied_query_set_ids"] == [42]
+    stderr = proc.stderr.decode("utf-8", "replace")
+    # Exactly one summary warning, naming the count 5.
+    summary_phrase = "Skipped 5 malformed entries in TransactionUpdate.query_sets"
+    assert stderr.count(summary_phrase) == 1, (
+        f"expected exactly one summary warning naming count=5; stderr tail: {stderr[-1200:]}"
+    )
+    # Previous-round per-entry warning substrings must not appear.
+    assert "Skipping non-Dictionary TransactionUpdate.query_sets entry" not in stderr, stderr
+    assert "Skipping TransactionUpdate.query_sets entry with non-integer query_set_id" not in stderr, stderr
+    assert "Skipping TransactionUpdate.query_sets entry with missing/negative query_set_id" not in stderr, stderr
+
+
+def test_service_reducer_result_non_integer_request_id_does_not_crash() -> None:
+    # A Dictionary-shaped top-level `request_id` must not crash the handler
+    # (via `int(dict)` raising) and must not silently coerce to `0` to
+    # false-match a pending-call entry at `request_id == 0`. The handler must
+    # push_warning once, return early, and NOT emit success/failure signals.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reducer_result_non_integer_request_id"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    # No reducer signal emitted for the trap-at-zero pending call.
+    assert data["success_events"] == []
+    assert data["failure_events"] == []
+    assert data["row_changed_events"] == []
+    # The pending call at request_id=0 must still be held (no silent coercion).
+    assert data["pending_still_holds_zero"] is True
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "non-integer request_id" in stderr, (
+        f"expected non-integer-request-id warning in stderr. got tail: {stderr[-800:]}"
+    )
+    # No Godot runtime error from a typed cast on the Dictionary.
+    assert "SCRIPT ERROR" not in stderr, stderr
