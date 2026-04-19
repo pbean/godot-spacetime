@@ -322,3 +322,18 @@ def test_story_11_2_single_runtime_service_owns_websocket_transport() -> None:
         assert "WebSocketPeer" not in content, (
             "Only gdscript_connection_service.gd should own transport concerns; helpers must stay runtime-agnostic."
         )
+
+
+def test_story_11_2_connection_id_hex_uses_crypto_csprng() -> None:
+    content = _service_src()
+    start = content.index("func _random_connection_id_hex")
+    end = content.index("func ", start + 1)
+    body = content[start:end]
+    assert "Crypto.new().generate_random_bytes(16)" in body, (
+        "_random_connection_id_hex must source its 16 bytes from Godot's Crypto CSPRNG so parallel runners "
+        "started in the same millisecond cannot collide (deferred-work.md 2026-04-19 item 5)."
+    )
+    assert "rng.randomize()" not in body, (
+        "_random_connection_id_hex must not fall back to time-seeded RandomNumberGenerator.randomize() — "
+        "use Crypto.new().generate_random_bytes() as the single source."
+    )
