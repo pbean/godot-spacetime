@@ -14,6 +14,7 @@ extends SceneTree
 #   parse_unsubscribe_applied
 #   parse_reducer_result
 #   decompressed_payload_short
+#   reader_parse_failed_reentry
 #   encode_subscribe <request_id> <query_set_id> <queries_csv>
 #   encode_unsubscribe <request_id> <query_set_id> <flags>
 #   encode_call_reducer <request_id> <reducer_name> <args_hex>
@@ -22,6 +23,7 @@ extends SceneTree
 # can capture it.
 
 const ProtocolScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd")
+const ReaderScript = preload("res://addons/godot_spacetime/src/Internal/Platform/GDScript/bsatn_reader.gd")
 
 
 func _init() -> void:
@@ -47,6 +49,8 @@ func _init() -> void:
 			_run_parse_server_fixture(args, "ReducerResult", false)
 		"decompressed_payload_short":
 			_run_decompressed_payload_short()
+		"reader_parse_failed_reentry":
+			_run_reader_parse_failed_reentry()
 		"encode_subscribe":
 			_run_encode_subscribe(args)
 		"encode_unsubscribe":
@@ -111,6 +115,30 @@ func _run_decompressed_payload_short() -> void:
 	packet.append_array(gzip_of_empty)
 	var message: Dictionary = ProtocolScript.parse_server_message(packet, false)
 	_emit_result(_flatten_message(message))
+	quit(0)
+
+
+func _run_reader_parse_failed_reentry() -> void:
+	var u8_reader = ReaderScript.new(PackedByteArray())
+	u8_reader.parse_failed = true
+	var u8_before_pos: int = int(u8_reader._pos)
+	var u8_value := u8_reader.read_u8()
+	var u8_after_pos: int = int(u8_reader._pos)
+
+	var fixed_reader = ReaderScript.new(PackedByteArray())
+	fixed_reader.parse_failed = true
+	var fixed_before_pos: int = int(fixed_reader._pos)
+	var fixed_value := fixed_reader.read_fixed_bytes(4)
+	var fixed_after_pos: int = int(fixed_reader._pos)
+
+	_emit_result({
+		"u8_before_pos": u8_before_pos,
+		"u8_after_pos": u8_after_pos,
+		"u8_value": u8_value,
+		"fixed_before_pos": fixed_before_pos,
+		"fixed_after_pos": fixed_after_pos,
+		"fixed_value_hex": fixed_value.hex_encode(),
+	})
 	quit(0)
 
 
