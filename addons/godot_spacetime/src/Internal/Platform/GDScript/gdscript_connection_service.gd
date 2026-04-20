@@ -473,8 +473,12 @@ func _update_backlog_saturation(saturated_this_tick: bool, buffered_after: int) 
 			)
 			_backlog_warning_emitted = true
 	else:
-		_consecutive_saturated_ticks = 0
-		_backlog_warning_emitted = false
+		_reset_backlog_saturation_state()
+
+
+func _reset_backlog_saturation_state() -> void:
+	_consecutive_saturated_ticks = 0
+	_backlog_warning_emitted = false
 
 
 func _handle_initial_connection(message: Dictionary) -> void:
@@ -592,6 +596,9 @@ func _schedule_retry_or_disconnect(error_message: String) -> void:
 
 		_next_retry_at_seconds = _now_seconds() + delay_seconds
 		_reset_pending_reducer_runtime()
+		# Each retry transport starts a fresh wire session. Do not carry a
+		# previous session's backlog-saturation episode across the reconnect.
+		_reset_backlog_saturation_state()
 		_dispose_socket_immediately()
 		return
 
@@ -1165,8 +1172,7 @@ func _reset_subscription_runtime() -> void:
 	# value would carry pre-reconnect backlog into the new session's
 	# accounting; clearing `_backlog_warning_emitted` re-arms the one-shot
 	# warning for the next episode.
-	_consecutive_saturated_ticks = 0
-	_backlog_warning_emitted = false
+	_reset_backlog_saturation_state()
 
 
 func _reset_pending_reducer_runtime() -> void:
