@@ -202,6 +202,19 @@ def test_subscription_handle_splits_request_id_from_query_set_id() -> None:
     )
 
 
+def test_pinned_subscribe_fixture_keeps_request_and_query_set_ids_distinct() -> None:
+    manifest = _load_manifest()
+    entry = next(
+        (frame for frame in manifest["frames"] if frame["kind"] == "subscribe"),
+        None,
+    )
+    assert entry is not None, "manifest missing subscribe entry"
+    assert int(entry["request_id"]) != int(entry["query_set_id"]), (
+        "The pinned subscribe fixture must keep request_id and query_set_id distinct so "
+        "service/runtime reviews do not silently collapse the two wire fields back together."
+    )
+
+
 def test_manifest_documents_unobserved_server_messages() -> None:
     manifest = _load_manifest()
     documented = {

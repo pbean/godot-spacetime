@@ -143,7 +143,10 @@ func unsubscribe(handle: Object) -> void:
 		return
 
 	_remove_pending_replacement_references(subscription_handle.handle_id)
-	# query_set_id == request_id by construction (_begin_subscription passes request_id as query_set_id_value)
+	# Pending subscriptions are keyed by request_id. While a subscribe is still
+	# in flight `_begin_subscription()` seeds `query_set_id` from the same
+	# value; `_handle_subscribe_applied()` may later rewrite the live handle's
+	# `query_set_id` from the server ack after the pending entry is gone.
 	_pending_subscriptions.erase(subscription_handle.query_set_id)
 	_send_unsubscribe_for_query_set(subscription_handle.query_set_id)
 	_subscription_registry.unregister(subscription_handle.handle_id)
@@ -662,6 +665,9 @@ func _handle_subscribe_applied(message: Dictionary) -> void:
 		return
 
 	_pending_subscriptions.erase(request_id)
+	var query_set_id_variant = message.get("query_set_id", null)
+	if typeof(query_set_id_variant) == TYPE_INT and int(query_set_id_variant) >= 0:
+		handle.query_set_id = int(query_set_id_variant)
 
 	var snapshot := _cache_store.build_snapshot(message.get("tables", []))
 	var row_events := _cache_store.commit_snapshot(snapshot)
@@ -911,12 +917,9 @@ func _begin_subscription(query_sqls: Array, replaced_handle_id: int = -1) -> Obj
 	var handle_id := _next_handle_id
 	_next_handle_id += 1
 
-	# On pinned 2.1.0 the server echoes `query_set_id == request_id`; we pass the
-	# reserved id into both slots so the new `handle.request_id` / `handle.query_set_id`
-	# split is additive without drifting existing wire bytes (see
-	# tests/fixtures/gdscript_wire/subscribe_sent.bin). A future server build that
-	# assigns a distinct `query_set_id` in `SubscribeApplied` can rewrite
-	# `handle.query_set_id` from the applied handler without touching `request_id`.
+	# The pending-subscription map is keyed by request_id, so seed
+	# `query_set_id` from the same value until the server's SubscribeApplied ack
+	# confirms which live query_set_id it will use for subsequent bundles.
 	var handle = SubscriptionHandleScript.new(handle_id, request_id, request_id, query_sqls)
 	_pending_subscriptions[request_id] = handle
 	_subscription_registry.register(handle)
