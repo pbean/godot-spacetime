@@ -128,7 +128,7 @@ def test_probe_godot_binary_respects_godot4_env(
     monkeypatch.setenv("GODOT4", override)
 
     def fake_run(*args: Any, **kwargs: Any) -> _FakeCompletedProcess:
-        return _FakeCompletedProcess(returncode=0, stdout="Godot Engine v4.6.2")
+        return _FakeCompletedProcess(returncode=0, stdout="4.6.2.stable.mono.custom")
 
     monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
     result = probe_godot_binary()
@@ -148,6 +148,20 @@ def test_probe_godot_binary_finds_godot_mono_on_path(
     result = probe_godot_binary()
     assert result.available
     assert result.path == path
+
+
+def test_probe_godot_binary_rejects_non_mono_godot_on_path(
+    isolated_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _make_stub_binary(isolated_path, "godot")
+
+    def fake_run(*args: Any, **kwargs: Any) -> _FakeCompletedProcess:
+        return _FakeCompletedProcess(returncode=0, stdout="4.6.2.stable.arch_linux")
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_godot_binary()
+    assert not result.available
+    assert "mono" in result.reason.lower() or ".net" in result.reason.lower()
 
 
 def test_probe_godot_binary_reports_exec_failure(

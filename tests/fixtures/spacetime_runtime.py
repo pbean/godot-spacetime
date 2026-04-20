@@ -27,8 +27,10 @@ from dataclasses import dataclass
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 DEFAULT_SPACETIME_SERVER = "local"
-# Binary name preference order. godot-mono is the test's required harness,
-# but plain `godot` is accepted when it was built with mono support.
+# Binary name preference order. godot-mono is the test's required harness.
+# Plain `godot` is only accepted when its version output identifies a Mono/.NET
+# build, so a non-C# Godot binary still yields a clean skip instead of a later
+# harness load failure.
 GODOT_BINARY_CANDIDATES = ("godot-mono", "godot4-mono", "godot", "godot4")
 BROWSER_BINARY_CANDIDATES = (
     "chromium",
@@ -99,7 +101,8 @@ def probe_godot_binary() -> ProbeResult:
 
     Accepts any of `GODOT_BINARY_CANDIDATES`. The `GODOT4` or `GODOT_BIN`
     environment variable, if set, takes precedence. Runs the resolved binary
-    with `--version --headless` to confirm it is not a broken symlink.
+    with `--version --headless` to confirm it is not a broken symlink and to
+    reject non-Mono builds that cannot host the C# integration harness.
     """
     override = os.environ.get("GODOT4") or os.environ.get("GODOT_BIN")
     candidates: tuple[str, ...]
@@ -143,6 +146,14 @@ def probe_godot_binary() -> ProbeResult:
         return ProbeResult(
             available=False,
             reason=f"{resolved} --version exited with {result.returncode}",
+        )
+    if not _looks_like_mono_godot_build(resolved, result.stdout or ""):
+        return ProbeResult(
+            available=False,
+            reason=(
+                f"{resolved} does not appear to be a Godot Mono/.NET build "
+                "required by the C# integration harness"
+            ),
         )
     return ProbeResult(available=True, path=resolved)
 
@@ -326,6 +337,18 @@ def _parse_ping_host(stdout: str) -> str:
         if idx != -1:
             return stripped[idx + len(marker):].strip()
     return ""
+
+
+def _looks_like_mono_godot_build(path: str, version_output: str) -> bool:
+    """Return whether the resolved Godot binary appears to support C#/.NET."""
+    lowered_path = os.path.basename(path).lower()
+    lowered_output = version_output.lower()
+    return (
+        "mono" in lowered_path
+        or "mono" in lowered_output
+        or ".net" in lowered_output
+        or "dotnet" in lowered_output
+    )
 
 
 def _server_nickname_configured(list_stdout: str, nickname: str) -> bool:

@@ -33,6 +33,7 @@ public partial class LifecycleSmokeRunner : Node
     private string _moduleName = "";
     private string _expectedValue = "";
     private double _stepTimeoutSeconds = 30.0;
+    private double _observeRowChangeTimeoutSeconds = 10.0;
 
     private SpacetimeClient? _client;
     private StreamWriter? _logWriter;
@@ -63,6 +64,16 @@ public partial class LifecycleSmokeRunner : Node
                     out var parsed))
             {
                 _stepTimeoutSeconds = Math.Max(1.0, parsed);
+            }
+
+            var observeTimeoutStr = System.Environment.GetEnvironmentVariable("SPACETIME_E2E_OBSERVE_TIMEOUT");
+            if (!string.IsNullOrWhiteSpace(observeTimeoutStr) && double.TryParse(
+                    observeTimeoutStr,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var observeParsed))
+            {
+                _observeRowChangeTimeoutSeconds = Math.Max(1.0, observeParsed);
             }
 
             // SPACETIME_E2E_LOG is optional — events are always echoed to stdout as
@@ -144,10 +155,24 @@ public partial class LifecycleSmokeRunner : Node
         }
 
         var now = Time.GetTicksMsec() / 1000.0;
-        if ((now - _stepStartedAt) > _stepTimeoutSeconds)
+        var timeoutSeconds = _currentStep == Step.ObserveRowChange
+            ? _observeRowChangeTimeoutSeconds
+            : _stepTimeoutSeconds;
+        if ((now - _stepStartedAt) > timeoutSeconds)
         {
-            EmitError(StepName(_currentStep),
-                $"timed out after {_stepTimeoutSeconds:F1}s waiting for step completion");
+            var timeoutSecondsText = timeoutSeconds.ToString(
+                "0.###",
+                System.Globalization.CultureInfo.InvariantCulture);
+            if (_currentStep == Step.ObserveRowChange)
+            {
+                EmitError("observe_row_change",
+                    $"timed out after {timeoutSecondsText}s (value={_expectedValue})");
+            }
+            else
+            {
+                EmitError(StepName(_currentStep),
+                    $"timed out after {timeoutSecondsText}s waiting for step completion");
+            }
             Finish(pass: false);
         }
     }
