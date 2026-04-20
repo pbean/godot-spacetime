@@ -14,6 +14,9 @@ class DummyRegistry:
 		return handles_by_id.get(handle_id)
 
 	func find_by_query_set_id(query_set_id: int) -> Object:
+		for handle in handles_by_id.values():
+			if handle != null and int(handle.query_set_id) == query_set_id:
+				return handle
 		return handles_by_query_set_id.get(query_set_id)
 
 
@@ -21,6 +24,14 @@ class DummyCacheStore:
 	extends RefCounted
 
 	var applied_query_set_ids: Array = []
+
+	func build_snapshot(query_rows: Array) -> Dictionary:
+		return {
+			"query_rows": query_rows,
+		}
+
+	func commit_snapshot(_snapshot: Dictionary) -> Array:
+		return []
 
 	func apply_transaction_updates(query_set_updates: Array) -> Array:
 		for query_set_update_variant in query_set_updates:
@@ -57,6 +68,8 @@ func _init() -> void:
 			_run_reducer_result_non_integer_request_id()
 		"request_id_persists_across_reset":
 			_run_request_id_persists_across_reset()
+		"subscribe_applied_rebinds_query_set_id":
+			_run_subscribe_applied_rebinds_query_set_id()
 		_:
 			_emit_error("unknown mode: %s" % args[0])
 			quit(2)
@@ -263,6 +276,50 @@ func _run_request_id_persists_across_reset() -> void:
 	quit(0)
 
 
+func _run_subscribe_applied_rebinds_query_set_id() -> void:
+	# The pending handle starts with `query_set_id == request_id` so the
+	# request-id keyed pending map can correlate the subscribe ack. When the
+	# server echoes a distinct live `query_set_id`, `_handle_subscribe_applied()`
+	# must copy that id onto the handle before later ReducerResult bundle lookups
+	# run through `find_by_query_set_id(...)`.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var cache = ctx["cache"]
+	var handle = SubscriptionHandleScript.new(1, 17, 17, ["SELECT * FROM smoke_test"])
+	registry.handles_by_id[1] = handle
+	service._pending_subscriptions[17] = handle
+	service._handle_subscribe_applied({
+		"request_id": 17,
+		"query_set_id": 23,
+		"tables": [],
+	})
+	service._pending_reducer_calls[99] = {
+		"invocation_id": "inv-99",
+		"reducer_name": "ping",
+		"called_at": 1.0,
+	}
+	service._handle_reducer_result({
+		"request_id": 99,
+		"status": "Committed",
+		"query_sets": [
+			{
+				"query_set_id": 23,
+				"tables": [],
+			},
+		],
+	})
+	var resolved_handle = registry.find_by_query_set_id(23)
+	_emit_result({
+		"handle_query_set_id": int(handle.query_set_id),
+		"resolved_handle_id": -1 if resolved_handle == null else int(resolved_handle.handle_id),
+		"applied_query_set_ids": _jsonify(cache.applied_query_set_ids),
+		"authoritative_handle_id": int(service._authoritative_handle_id),
+	})
+	quit(0)
+
+
 func _on_row_changed(event: Dictionary) -> void:
 	_row_changed_events.append(event.duplicate(true))
 
@@ -304,4 +361,3 @@ func _emit_error(msg: String) -> void:
 		"ok": false,
 		"error": msg,
 	}))
-

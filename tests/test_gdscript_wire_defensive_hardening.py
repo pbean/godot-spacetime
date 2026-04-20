@@ -339,6 +339,34 @@ def test_next_request_id_is_monotonic_across_reset() -> None:
     )
 
 
+def test_subscribe_applied_rebinds_query_set_id_for_later_bundle_lookups() -> None:
+    # The pending subscribe path still correlates by `request_id`, but once the
+    # server acknowledges the subscription it may address the live query set by
+    # a different `query_set_id`. The applied handler must copy that server id
+    # onto the handle before later ReducerResult / TransactionUpdate lookups run
+    # through `find_by_query_set_id(...)`.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["subscribe_applied_rebinds_query_set_id"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert int(data["handle_query_set_id"]) == 23
+    assert int(data["resolved_handle_id"]) == 1
+    assert data["applied_query_set_ids"] == [23]
+    assert int(data["authoritative_handle_id"]) == 1
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "SCRIPT ERROR" not in stderr, stderr
+
+
 def test_service_reducer_result_non_integer_request_id_does_not_crash() -> None:
     # A Dictionary-shaped top-level `request_id` must not crash the handler
     # (via `int(dict)` raising) and must not silently coerce to `0` to
