@@ -39,6 +39,18 @@ const CLOSE_REASON_ERROR := "Error"
 # spec if a real workload needs it.
 const DRAIN_PACKETS_PER_TICK: int = 128
 
+# Backlog saturation watermark. The per-tick cap (above) bounds wall time but
+# does not bound steady-state backlog: if server ingress sustains at or above
+# the cap, `_socket.get_available_packet_count()` can grow unbounded across
+# ticks while the application silently lags behind live state. When the cap
+# has been hit for BACKLOG_SATURATION_TICKS consecutive ticks AND the buffer
+# still holds more than BACKLOG_WATERMARK_PACKETS, `_drain_packets` emits a
+# single `push_warning` per saturation episode. Log-only; no telemetry surface
+# and no automatic escalation to `_schedule_retry_or_disconnect`. A future
+# spec owns escalation policy if real workload demands it.
+const BACKLOG_SATURATION_TICKS: int = 10
+const BACKLOG_WATERMARK_PACKETS: int = 512
+
 var _current_status: Dictionary = {}
 var _reconnect_policy = ReconnectPolicyScript.new()
 var _subscription_registry = SubscriptionRegistryScript.new()
@@ -71,6 +83,14 @@ var _authoritative_handle_id: int = -1
 # request_id -> {invocation_id: String, reducer_name: String, called_at: float}
 var _pending_reducer_calls: Dictionary = {}
 var _next_invocation_id: int = 1
+# Saturation-watermark runtime state. See BACKLOG_SATURATION_TICKS /
+# BACKLOG_WATERMARK_PACKETS above. `_consecutive_saturated_ticks` increments
+# when `_drain_packets` exits at the cap and resets to 0 on the first
+# below-cap tick. `_backlog_warning_emitted` de-dups the `push_warning` so one
+# episode produces exactly one warning; it clears when the counter returns
+# to 0 (recovery re-arms the next episode).
+var _consecutive_saturated_ticks: int = 0
+var _backlog_warning_emitted: bool = false
 
 const REDUCER_RECOVERY_GUIDANCE_FAILED := "Check the reducer inputs or server-side rules before retrying or showing a player-facing error."
 const REDUCER_RECOVERY_GUIDANCE_OUT_OF_ENERGY := "Back off and retry later, or tell the player the action is temporarily unavailable."
@@ -370,6 +390,24 @@ func _process_socket_state() -> void:
 			_handle_socket_closed(reason)
 
 
+# teardown-drop contract: if a dispatched handler synchronously triggers
+# `_finish_disconnect` (today only the ProtocolError arm via
+# `_handle_connect_failure` / `_schedule_retry_or_disconnect`), `_socket` is
+# nulled mid-tick and the `while _socket != null` guard exits the loop at the
+# next iteration. Any OS-buffered packets still queued — including a clean-
+# close frame that may be in flight — are dropped.
+#
+# This is the intentional behavior. Snapshot-drain (copy packets out first,
+# then dispatch from the copy) would preserve the queued packets, but the
+# outcome would then be: pre-teardown packets dispatched into post-teardown state.
+# Cleared `_pending_subscriptions`, cleared `_subscription_registry`, cleared
+# `_cache_store`: applying those packets is worse than dropping them. Once a
+# handler has decided the session is done, remaining packets belong to the
+# closed session and must not re-enter cache/subscription accounting.
+#
+# Callers needing at-least-once delivery of a specific frame before teardown
+# must flush via an explicit pre-disconnect handshake at the application
+# layer; the wire layer makes no such guarantee.
 func _drain_packets() -> void:
 	var drained := 0
 	while _socket != null \
@@ -404,6 +442,39 @@ func _drain_packets() -> void:
 					_handle_connect_failure(parse_error)
 				else:
 					_schedule_retry_or_disconnect(parse_error)
+	# Saturation-watermark accounting. The loop exited either because the
+	# buffer drained below `DRAIN_PACKETS_PER_TICK` (transient) or because the
+	# cap was hit (potential steady-state saturation). The `_socket == null`
+	# exit path (handler-induced teardown; see contract above) is treated as
+	# "not saturated" — teardown resets accounting on the next reconnect via
+	# `_reset_subscription_runtime`.
+	var saturated_this_tick := _socket != null and drained >= DRAIN_PACKETS_PER_TICK
+	var buffered_after := _socket.get_available_packet_count() if _socket != null else 0
+	_update_backlog_saturation(saturated_this_tick, buffered_after)
+
+
+# Advance the per-tick saturation state machine. Extracted from `_drain_packets`
+# so the state transitions can be exercised directly (by tests and by a future
+# caller that needs to bump accounting without actually draining packets).
+# `saturated_this_tick` must be true iff the most recent `_drain_packets`
+# iteration hit the per-tick cap AND the socket survived the tick (handler-
+# induced teardown is reported as not-saturated — see the teardown-drop
+# contract on `_drain_packets`). `buffered_after` is the OS packet backlog
+# observed after the tick drained, and is only consulted on the warn-arm.
+func _update_backlog_saturation(saturated_this_tick: bool, buffered_after: int) -> void:
+	if saturated_this_tick:
+		_consecutive_saturated_ticks += 1
+		if _consecutive_saturated_ticks >= BACKLOG_SATURATION_TICKS \
+		and not _backlog_warning_emitted \
+		and buffered_after > BACKLOG_WATERMARK_PACKETS:
+			push_warning(
+				"GDScript wire: backlog saturation — %d consecutive ticks at cap with %d packets still buffered" \
+				% [_consecutive_saturated_ticks, buffered_after]
+			)
+			_backlog_warning_emitted = true
+	else:
+		_consecutive_saturated_ticks = 0
+		_backlog_warning_emitted = false
 
 
 func _handle_initial_connection(message: Dictionary) -> void:
@@ -1089,6 +1160,13 @@ func _reset_subscription_runtime() -> void:
 	_subscription_registry.clear()
 	_cache_store.clear()
 	_reset_pending_reducer_runtime()
+	# Clear saturation-watermark state so a reconnect starts with a fresh
+	# episode window. Leaving `_consecutive_saturated_ticks` at a pre-reset
+	# value would carry pre-reconnect backlog into the new session's
+	# accounting; clearing `_backlog_warning_emitted` re-arms the one-shot
+	# warning for the next episode.
+	_consecutive_saturated_ticks = 0
+	_backlog_warning_emitted = false
 
 
 func _reset_pending_reducer_runtime() -> void:

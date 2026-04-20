@@ -688,3 +688,202 @@ def test_drain_packets_caps_per_tick_backlog() -> None:
         f"non-empty lines; got {len(intervening_non_empty_lines)} lines in between: "
         f"{intervening_non_empty_lines}"
     )
+
+
+def test_drain_packets_declares_teardown_drop_contract() -> None:
+    # `_drain_packets` must carry a preceding comment block that names the
+    # "teardown-drop contract" — handler-triggered synchronous teardown
+    # (e.g. ProtocolError → `_finish_disconnect`) drops remaining OS-buffered
+    # packets. The block must also name the rejected snapshot-drain alternative
+    # and the explicit "pre-teardown packets dispatched into post-teardown
+    # state" rationale so a future contributor cannot silently change the
+    # semantics without updating the contract.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    lines = service_src.splitlines()
+    func_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _drain_packets(")),
+        -1,
+    )
+    assert func_idx >= 0, "gdscript_connection_service.gd must define `func _drain_packets(`"
+    block_start = func_idx
+    for idx in range(func_idx - 1, -1, -1):
+        if lines[idx].startswith("#"):
+            block_start = idx
+            continue
+        break
+    assert block_start != func_idx, (
+        "`_drain_packets` must carry an immediately preceding comment block documenting "
+        "the teardown-drop contract."
+    )
+    preamble = "\n".join(lines[block_start:func_idx])
+    assert "teardown-drop contract" in preamble, (
+        "`_drain_packets` preamble must lock the exact phrase 'teardown-drop contract'. "
+        "Preamble was: " + preamble
+    )
+    assert "pre-teardown packets dispatched into post-teardown state" in preamble, (
+        "`_drain_packets` preamble must name the rejected snapshot-drain rationale verbatim "
+        "('pre-teardown packets dispatched into post-teardown state'). "
+        "Preamble was: " + preamble
+    )
+    # Must also reference `_finish_disconnect` so the contract block points at
+    # the actual teardown entry point rather than a hand-waving description.
+    assert "_finish_disconnect" in preamble, (
+        "`_drain_packets` preamble must reference `_finish_disconnect` as the teardown entry "
+        "point. Preamble was: " + preamble
+    )
+
+
+def test_drain_packets_backlog_saturation_watermark() -> None:
+    # The `_drain_packets` cap bounds per-tick wall time but not steady-state
+    # backlog. A sustained-flood watermark pins operator observability: the
+    # two thresholds (ticks + packets), the two runtime fields (counter + flag),
+    # the increment/reset sites, and the single `push_warning` emit site must
+    # all survive a silent refactor (e.g., someone removing the warn or
+    # flipping the de-dup flag's semantics to "emit-per-tick").
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    # (a) Both thresholds declared as positive-int constants.
+    ticks_match = re.search(
+        r"^const\s+BACKLOG_SATURATION_TICKS\s*:\s*int\s*=\s*(\d+)",
+        service_src,
+        re.MULTILINE,
+    )
+    assert ticks_match is not None, (
+        "gdscript_connection_service.gd must declare "
+        "`const BACKLOG_SATURATION_TICKS: int = <positive int>`."
+    )
+    assert int(ticks_match.group(1)) > 0, (
+        f"BACKLOG_SATURATION_TICKS must be positive. got {ticks_match.group(1)}"
+    )
+    watermark_match = re.search(
+        r"^const\s+BACKLOG_WATERMARK_PACKETS\s*:\s*int\s*=\s*(\d+)",
+        service_src,
+        re.MULTILINE,
+    )
+    assert watermark_match is not None, (
+        "gdscript_connection_service.gd must declare "
+        "`const BACKLOG_WATERMARK_PACKETS: int = <positive int>`."
+    )
+    watermark_value = int(watermark_match.group(1))
+    # Watermark packets must strictly exceed the per-tick cap, otherwise the
+    # "packets still buffered past the cap" semantic is incoherent (the cap
+    # itself would trip the warning on a single saturated tick).
+    cap_match = re.search(
+        r"^const\s+DRAIN_PACKETS_PER_TICK\s*:\s*int\s*=\s*(\d+)",
+        service_src,
+        re.MULTILINE,
+    )
+    assert cap_match is not None, "DRAIN_PACKETS_PER_TICK must still be declared."
+    assert watermark_value > int(cap_match.group(1)), (
+        f"BACKLOG_WATERMARK_PACKETS ({watermark_value}) must strictly exceed "
+        f"DRAIN_PACKETS_PER_TICK ({cap_match.group(1)})."
+    )
+    # (b) Both runtime fields declared with the expected default values.
+    assert re.search(
+        r"^var\s+_consecutive_saturated_ticks\s*:\s*int\s*=\s*0",
+        service_src,
+        re.MULTILINE,
+    ), "`var _consecutive_saturated_ticks: int = 0` field declaration missing."
+    assert re.search(
+        r"^var\s+_backlog_warning_emitted\s*:\s*bool\s*=\s*false",
+        service_src,
+        re.MULTILINE,
+    ), "`var _backlog_warning_emitted: bool = false` field declaration missing."
+    # (c) `_drain_packets` must hand off to the extracted state-machine helper
+    # `_update_backlog_saturation`, which owns the thresholds / counter /
+    # de-dup flag / warn-emit site. The extraction is what lets runtime tests
+    # exercise the state machine without faking WebSocketPeer.
+    lines = service_src.splitlines()
+    func_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _drain_packets(")),
+        -1,
+    )
+    assert func_idx >= 0, "`func _drain_packets(` must exist."
+    drain_body_lines: list[str] = []
+    for ln in lines[func_idx + 1 :]:
+        if ln.startswith("func "):
+            break
+        drain_body_lines.append(ln)
+    drain_body = "\n".join(drain_body_lines)
+    assert "_update_backlog_saturation(" in drain_body, (
+        "`_drain_packets` body must delegate to `_update_backlog_saturation(...)` so the "
+        "state-machine transitions are unit-testable."
+    )
+    helper_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _update_backlog_saturation(")),
+        -1,
+    )
+    assert helper_idx >= 0, (
+        "`func _update_backlog_saturation(` must exist as the extracted state-machine helper."
+    )
+    helper_body_lines: list[str] = []
+    for ln in lines[helper_idx + 1 :]:
+        if ln.startswith("func "):
+            break
+        helper_body_lines.append(ln)
+    helper_body = "\n".join(helper_body_lines)
+    assert "BACKLOG_SATURATION_TICKS" in helper_body, (
+        "`_update_backlog_saturation` body must reference BACKLOG_SATURATION_TICKS."
+    )
+    assert "BACKLOG_WATERMARK_PACKETS" in helper_body, (
+        "`_update_backlog_saturation` body must reference BACKLOG_WATERMARK_PACKETS."
+    )
+    assert "_consecutive_saturated_ticks += 1" in helper_body, (
+        "`_update_backlog_saturation` body must increment `_consecutive_saturated_ticks` "
+        "exactly once per saturated tick. Expected literal `_consecutive_saturated_ticks += 1`."
+    )
+    assert "_consecutive_saturated_ticks = 0" in helper_body, (
+        "`_update_backlog_saturation` body must reset `_consecutive_saturated_ticks = 0` "
+        "on the non-saturated branch."
+    )
+    assert "_backlog_warning_emitted = true" in helper_body, (
+        "`_update_backlog_saturation` body must set `_backlog_warning_emitted = true` on "
+        "the warn-emit branch to de-dup per-episode."
+    )
+    assert "_backlog_warning_emitted = false" in helper_body, (
+        "`_update_backlog_saturation` body must reset `_backlog_warning_emitted = false` "
+        "on the non-saturated branch so recovery re-arms the next episode."
+    )
+    push_warning_count = helper_body.count("push_warning(")
+    assert push_warning_count >= 1, (
+        "`_update_backlog_saturation` body must emit `push_warning(` at least once "
+        "(the saturation warn)."
+    )
+    # (d) `_reset_subscription_runtime` must clear both fields so a reconnect
+    # starts with a fresh saturation-accounting window.
+    reset_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _reset_subscription_runtime(")),
+        -1,
+    )
+    assert reset_idx >= 0, "`func _reset_subscription_runtime(` must exist."
+    reset_body_lines: list[str] = []
+    for ln in lines[reset_idx + 1 :]:
+        if ln.startswith("func "):
+            break
+        reset_body_lines.append(ln)
+    reset_body = "\n".join(reset_body_lines)
+    assert "_consecutive_saturated_ticks = 0" in reset_body, (
+        "`_reset_subscription_runtime` must clear `_consecutive_saturated_ticks = 0` so a "
+        "reconnect does not carry pre-reset backlog accounting into the new session."
+    )
+    assert "_backlog_warning_emitted = false" in reset_body, (
+        "`_reset_subscription_runtime` must clear `_backlog_warning_emitted = false` so a "
+        "reconnect re-arms the one-shot warning for the next episode."
+    )
