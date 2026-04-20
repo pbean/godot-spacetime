@@ -569,13 +569,11 @@ def test_unknown_row_size_hint_tag_yields_top_level_protocol_error(tmp_path: Pat
 
 
 def test_finish_disconnect_documents_emission_order_contract() -> None:
-    # `_finish_disconnect` emits `state_changed(DISCONNECTED)` first (via
-    # `_transition_to`), then `connection_closed` second. The ordering is a
-    # conscious design choice so observers reading `_current_status` inside
-    # `connection_closed` see `DISCONNECTED`. The contract has a known reentry
-    # caveat (a state_changed handler that calls `open_connection` sees the old
-    # cycle's close after the new cycle's CONNECTING) and must be documented
-    # in-source so future refactors do not silently flip the order.
+    # `_finish_disconnect` must carry an immediately preceding comment block
+    # whose wording is version-locked by the spec: it must say "state_changed
+    # first" and "connection_closed second" within 20 lines of the function,
+    # and it must also name the `open_connection` reentry caveat plus the
+    # `closed_at_unix_time` workaround.
     service_src = (
         ROOT
         / "addons"
@@ -592,20 +590,35 @@ def test_finish_disconnect_documents_emission_order_contract() -> None:
         -1,
     )
     assert func_idx >= 0, "gdscript_connection_service.gd must define `func _finish_disconnect(`"
-    # Scan up to 25 lines immediately above the function for the contract comment.
-    start = max(0, func_idx - 25)
-    preamble = "\n".join(lines[start:func_idx])
-    assert "state_changed" in preamble and "FIRST" in preamble, (
-        "`_finish_disconnect` must carry a comment block directly above it naming "
-        "`state_changed` as emitted FIRST. Preamble was: " + preamble
+    block_start = func_idx
+    for idx in range(func_idx - 1, -1, -1):
+        if lines[idx].startswith("#"):
+            block_start = idx
+            continue
+        break
+    assert block_start != func_idx, (
+        "`_finish_disconnect` must carry an immediately preceding comment block."
     )
-    assert "connection_closed" in preamble and "SECOND" in preamble, (
-        "`_finish_disconnect` must carry a comment block directly above it naming "
-        "`connection_closed` as emitted SECOND. Preamble was: " + preamble
+    assert (func_idx - block_start) <= 20, (
+        "`_finish_disconnect` contract comment must live within 20 lines of the function. "
+        f"Found {func_idx - block_start} comment lines."
+    )
+    preamble = "\n".join(lines[block_start:func_idx]).lower()
+    assert "state_changed first" in preamble, (
+        "`_finish_disconnect` must lock the exact phrase 'state_changed first'. "
+        "Preamble was: " + preamble
+    )
+    assert "connection_closed second" in preamble, (
+        "`_finish_disconnect` must lock the exact phrase 'connection_closed second'. "
+        "Preamble was: " + preamble
     )
     assert "open_connection" in preamble, (
         "`_finish_disconnect` contract comment must describe the reentry caveat involving "
         "`open_connection`. Preamble was: " + preamble
+    )
+    assert "closed_at_unix_time" in preamble, (
+        "`_finish_disconnect` contract comment must include the documented "
+        "`closed_at_unix_time` workaround. Preamble was: " + preamble
     )
 
 

@@ -535,8 +535,8 @@ func _schedule_retry_or_disconnect(error_message: String) -> void:
 
 
 # Emission-ordering contract for `_finish_disconnect`:
-#   1. `state_changed(DISCONNECTED)` fires FIRST (via `_transition_to`).
-#   2. `connection_closed(event)` fires SECOND (only when `emit_close_event`).
+#   1. state_changed first: `_transition_to` emits `DISCONNECTED` before any close event.
+#   2. connection_closed second: emitted after the state transition when `emit_close_event`.
 #
 # Why this ordering: a `state_changed(DISCONNECTED)` handler that synchronously
 # calls `open_connection(...)` triggers the new cycle's `state_changed(CONNECTING)`
