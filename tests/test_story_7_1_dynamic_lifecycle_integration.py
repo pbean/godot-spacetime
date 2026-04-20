@@ -40,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCENE_PATH = "res://tests/godot_integration/lifecycle_smoke.tscn"
 REQUIRED_STEPS = ("connect", "subscribe", "invoke_reducer", "observe_row_change")
 STEP_TIMEOUT_SECONDS = 30
+OBSERVE_ROW_CHANGE_TIMEOUT_SECONDS = 10
 TOTAL_TIMEOUT_SECONDS = 120
 
 
@@ -165,6 +166,7 @@ def test_dynamic_lifecycle_e2e() -> None:
     env["SPACETIME_E2E_MODULE"] = module_name
     env["SPACETIME_E2E_VALUE"] = e2e_value
     env["SPACETIME_E2E_STEP_TIMEOUT"] = str(STEP_TIMEOUT_SECONDS)
+    env["SPACETIME_E2E_OBSERVE_TIMEOUT"] = str(OBSERVE_ROW_CHANGE_TIMEOUT_SECONDS)
 
     start = time.monotonic()
     # The runner calls GetTree().Quit() itself after emitting a done event,
@@ -207,8 +209,26 @@ def test_dynamic_lifecycle_e2e() -> None:
         f"stderr tail: {(proc.stderr or b'').decode('utf-8', 'replace')[-600:]}"
     )
 
-    step_events = {e["name"]: e for e in events if e.get("event") == "step"}
-    done_event = next((e for e in events if e.get("event") == "done"), None)
+    step_events_in_order = [e for e in events if e.get("event") == "step"]
+    step_sequence = [e.get("name") for e in step_events_in_order]
+    assert step_sequence == list(REQUIRED_STEPS), (
+        "lifecycle runner must emit exactly one step event per lifecycle stage in strict order. "
+        f"got step_sequence={step_sequence}, events={events}"
+    )
+
+    event_sequence = [e.get("event") for e in events]
+    expected_event_sequence = ["step"] * len(REQUIRED_STEPS) + ["done"]
+    assert event_sequence == expected_event_sequence, (
+        "lifecycle runner must emit only the four step events followed by a final done event. "
+        f"got event_sequence={event_sequence}, events={events}"
+    )
+
+    step_events = {e["name"]: e for e in step_events_in_order}
+    done_events = [e for e in events if e.get("event") == "done"]
+    assert len(done_events) == 1, (
+        f"lifecycle runner must emit exactly one done event. got done_events={done_events}"
+    )
+    done_event = done_events[0]
 
     for step in REQUIRED_STEPS:
         assert step in step_events, (
@@ -242,6 +262,18 @@ def test_dynamic_lifecycle_e2e() -> None:
     assert proc.returncode == 0, (
         f"lifecycle runner exited with code {proc.returncode}. "
         f"stderr tail: {(proc.stderr or b'').decode('utf-8', 'replace')[-400:]}"
+    )
+
+
+def test_dynamic_lifecycle_runner_contains_observe_timeout_contract() -> None:
+    runner = (ROOT / "tests/godot_integration/LifecycleSmokeRunner.cs").read_text(encoding="utf-8")
+    assert "SPACETIME_E2E_OBSERVE_TIMEOUT" in runner, (
+        "LifecycleSmokeRunner.cs must expose a dedicated observe-row-change timeout env var so the "
+        "story's 10-second row-observation contract stays independent from other step budgets."
+    )
+    assert 'timed out after {timeoutSecondsText}s (value={_expectedValue})' in runner, (
+        "LifecycleSmokeRunner.cs must report observe_row_change timeouts with the expected value in the "
+        "failure reason so the first failed step is unambiguous."
     )
 
 

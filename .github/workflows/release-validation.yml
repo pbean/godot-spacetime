@@ -86,11 +86,11 @@ jobs:
             --data-dir "${SPACETIME_DATA_DIR}" \
             > /tmp/spacetime-start.log 2>&1 &
           echo "SPACETIME_PID=$!" >> "$GITHUB_ENV"
-          # Register the `local` server nickname if the fresh CLI install did not
-          # already create one. Tolerate "already exists" so this step is idempotent.
-          spacetime server add local http://127.0.0.1:3000 --yes 2>/dev/null \
-            || spacetime server set-default local 2>/dev/null \
-            || true
+          # Rebind `local` to the daemon we just started so a stale runner-level
+          # alias cannot point validation at some other SpacetimeDB server.
+          spacetime server remove local --yes 2>/dev/null || true
+          spacetime server add local http://127.0.0.1:3000 --yes >/dev/null
+          spacetime server set-default local >/dev/null 2>&1 || true
           # Wait for the daemon to accept connections. `spacetime server ping local`
           # is the same probe used by tests/fixtures/spacetime_runtime.py — if the
           # daemon is not reachable within 30s the release gate fails fast.
