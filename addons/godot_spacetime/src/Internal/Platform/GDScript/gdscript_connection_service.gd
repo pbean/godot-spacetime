@@ -911,7 +911,13 @@ func _begin_subscription(query_sqls: Array, replaced_handle_id: int = -1) -> Obj
 	var handle_id := _next_handle_id
 	_next_handle_id += 1
 
-	var handle = SubscriptionHandleScript.new(handle_id, request_id, query_sqls)
+	# On pinned 2.1.0 the server echoes `query_set_id == request_id`; we pass the
+	# reserved id into both slots so the new `handle.request_id` / `handle.query_set_id`
+	# split is additive without drifting existing wire bytes (see
+	# tests/fixtures/gdscript_wire/subscribe_sent.bin). A future server build that
+	# assigns a distinct `query_set_id` in `SubscribeApplied` can rewrite
+	# `handle.query_set_id` from the applied handler without touching `request_id`.
+	var handle = SubscriptionHandleScript.new(handle_id, request_id, request_id, query_sqls)
 	_pending_subscriptions[request_id] = handle
 	_subscription_registry.register(handle)
 
@@ -940,7 +946,7 @@ func _send_subscribe_request(handle) -> int:
 	if _socket == null or String(_current_status.get("state", STATE_DISCONNECTED)) != STATE_CONNECTED:
 		return ERR_UNAVAILABLE
 	var payload := ConnectionProtocolScript.encode_subscribe(
-		int(handle.query_set_id),
+		int(handle.request_id),
 		int(handle.query_set_id),
 		handle.query_sqls,
 	)
@@ -959,6 +965,10 @@ func _send_unsubscribe_for_query_set(query_set_id: int) -> void:
 	#   tag(u8=1) | RequestId(u32) | QuerySetId(u32) | Flags(u8)
 	# The legacy emitter wrote a trailing u32(0) instead of a u8; the v2
 	# server expects 10 bytes total and rejects a 13-byte unsubscribe.
+	# Fire-and-forget: the reserved request_id is written to the wire and
+	# intentionally discarded. There is no `_pending_unsubscribes` map and no
+	# `UnsubscribeApplied` handler today. A future correlation spec would add
+	# both together so the reserved id can be resolved when the server acks.
 	var request_id := _reserve_request_id()
 	if _socket == null:
 		return
@@ -1031,7 +1041,16 @@ func _reset_subscription_runtime() -> void:
 	_pending_subscriptions.clear()
 	_pending_replacements.clear()
 	_authoritative_handle_id = -1
-	_next_request_id = 1
+	# Intentionally do NOT reset `_next_request_id` here. The counter is
+	# monotonic for the life of this service instance so that a stale
+	# SubscribeApplied / ReducerResult still queued in the WebSocket receive
+	# buffer from a previous session cannot false-match a freshly reserved id
+	# after a disconnect/reconnect. Disposal of the service (node _exit_tree)
+	# is the only path that discards the counter. The wire encodes RequestId
+	# as u32 (see `_send_unsubscribe_for_query_set` comment below for the
+	# frame layout), so wrap happens at ~4.29e9 reservations — reachable only
+	# on a service instance that churns subscriptions/reducers for years; a
+	# wrap-guard story is tracked in `deferred-work.md`.
 	_next_handle_id = 1
 	_subscription_registry.clear()
 	_cache_store.clear()

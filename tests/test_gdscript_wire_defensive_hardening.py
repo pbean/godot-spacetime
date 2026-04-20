@@ -299,6 +299,46 @@ def test_service_malformed_bundle_emits_single_summary_warning() -> None:
     assert "Skipping TransactionUpdate.query_sets entry with missing/negative query_set_id" not in stderr, stderr
 
 
+def test_next_request_id_is_monotonic_across_reset() -> None:
+    # `_reset_subscription_runtime()` used to reset `_next_request_id` back to
+    # `1`, which let a stale SubscribeApplied / ReducerResult still queued in
+    # the WebSocket receive buffer from the prior session false-match a freshly
+    # reserved id after reconnect. The counter must now be monotonic for the
+    # life of the service instance — reserve, reset, reserve again, second id
+    # strictly greater than the first.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["request_id_persists_across_reset"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    pre_reset_ids = [int(x) for x in data["pre_reset_ids"]]
+    post_reset_id = int(data["post_reset_id"])
+    # Pre-reset ids must themselves be monotonic (sanity check on
+    # `_reserve_request_id()` itself).
+    assert pre_reset_ids == sorted(pre_reset_ids), (
+        f"pre_reset_ids must be monotonically increasing, got {pre_reset_ids}"
+    )
+    # The strict guarantee: post-reset id is greater than the LAST pre-reset
+    # id. A re-introduced `_next_request_id = 1` inside
+    # `_reset_subscription_runtime()` would produce post_reset_id=2 while
+    # pre_reset_ids[-1]=3, which fails this assertion — so the test catches a
+    # silent regression that a simple `post_reset_id > pre_reset_ids[0]` would
+    # miss (since 2 > 1).
+    assert post_reset_id > pre_reset_ids[-1], (
+        "_next_request_id must be monotonic across _reset_subscription_runtime(); "
+        f"got pre_reset_ids={pre_reset_ids}, post_reset_id={post_reset_id}"
+    )
+
+
 def test_service_reducer_result_non_integer_request_id_does_not_crash() -> None:
     # A Dictionary-shaped top-level `request_id` must not crash the handler
     # (via `int(dict)` raising) and must not silently coerce to `0` to
