@@ -148,6 +148,60 @@ def test_harness_file_exists() -> None:
     )
 
 
+def test_subscription_handle_splits_request_id_from_query_set_id() -> None:
+    # The handle's `request_id` and `query_set_id` are conceptually distinct:
+    # `request_id` correlates client->server frames; `query_set_id` is the
+    # server's addressing id for the live subscription. On pinned 2.1.0 they
+    # happen to be equal at construction, but the split must exist so a future
+    # `SubscribeApplied` handler can reassign `query_set_id` without touching
+    # `request_id`. The encode call site must read each by name — not
+    # `handle.query_set_id` twice — so the wire abstraction stays honest even
+    # when the runtime values drift apart.
+    handle_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_subscription_handle.gd"
+    ).read_text(encoding="utf-8")
+    assert "var request_id" in handle_src, (
+        "gdscript_subscription_handle.gd must declare `var request_id` as a distinct field from `query_set_id`."
+    )
+    assert "var query_set_id" in handle_src, (
+        "gdscript_subscription_handle.gd must keep the `var query_set_id` field."
+    )
+    assert (
+        "func _init(handle_id_value: int, request_id_value: int, query_set_id_value: int, query_sqls_value: Array = []) -> void:"
+        in handle_src
+    ), (
+        "gdscript_subscription_handle.gd `_init` must accept explicit handle_id, request_id, query_set_id, and query_sqls parameters in that order."
+    )
+
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    # The encode call site must read both fields by name.
+    encode_needle = (
+        "ConnectionProtocolScript.encode_subscribe(\n"
+        "\t\tint(handle.request_id),\n"
+        "\t\tint(handle.query_set_id),\n"
+    )
+    assert encode_needle in service_src, (
+        "_send_subscribe_request must pass `int(handle.request_id)` and `int(handle.query_set_id)` "
+        "as distinct arguments to encode_subscribe — not `handle.query_set_id` twice."
+    )
+
+
 def test_manifest_documents_unobserved_server_messages() -> None:
     manifest = _load_manifest()
     documented = {

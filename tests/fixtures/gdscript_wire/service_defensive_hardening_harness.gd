@@ -55,6 +55,8 @@ func _init() -> void:
 			_run_malformed_bundle_warning_storm_cap()
 		"reducer_result_non_integer_request_id":
 			_run_reducer_result_non_integer_request_id()
+		"request_id_persists_across_reset":
+			_run_request_id_persists_across_reset()
 		_:
 			_emit_error("unknown mode: %s" % args[0])
 			quit(2)
@@ -88,7 +90,7 @@ func _run_transaction_update_non_numeric_id() -> void:
 	var service = ctx["service"]
 	var registry = ctx["registry"]
 	var cache = ctx["cache"]
-	var authoritative_handle = SubscriptionHandleScript.new(1, 0)
+	var authoritative_handle = SubscriptionHandleScript.new(1, 0, 0)
 	registry.handles_by_id[1] = authoritative_handle
 	registry.handles_by_query_set_id[0] = authoritative_handle
 	service._authoritative_handle_id = 1
@@ -113,7 +115,7 @@ func _run_reducer_result_non_numeric_id() -> void:
 	var service = ctx["service"]
 	var registry = ctx["registry"]
 	var cache = ctx["cache"]
-	var authoritative_handle = SubscriptionHandleScript.new(1, 5)
+	var authoritative_handle = SubscriptionHandleScript.new(1, 5, 5)
 	registry.handles_by_id[1] = authoritative_handle
 	registry.handles_by_query_set_id[5] = authoritative_handle
 	service._authoritative_handle_id = 1
@@ -157,7 +159,7 @@ func _run_authoritative_negative_query_set_id() -> void:
 	var service = ctx["service"]
 	var registry = ctx["registry"]
 	var cache = ctx["cache"]
-	var authoritative_handle = SubscriptionHandleScript.new(1, -1)
+	var authoritative_handle = SubscriptionHandleScript.new(1, -1, -1)
 	registry.handles_by_id[1] = authoritative_handle
 	registry.handles_by_query_set_id[-1] = authoritative_handle
 	service._authoritative_handle_id = 1
@@ -187,7 +189,7 @@ func _run_malformed_bundle_warning_storm_cap() -> void:
 	var service = ctx["service"]
 	var registry = ctx["registry"]
 	var cache = ctx["cache"]
-	var authoritative_handle = SubscriptionHandleScript.new(1, 42)
+	var authoritative_handle = SubscriptionHandleScript.new(1, 42, 42)
 	registry.handles_by_id[1] = authoritative_handle
 	registry.handles_by_query_set_id[42] = authoritative_handle
 	service._authoritative_handle_id = 1
@@ -234,6 +236,29 @@ func _run_reducer_result_non_integer_request_id() -> void:
 		"success_events": _jsonify(_reducer_success_events),
 		"failure_events": _jsonify(_reducer_failure_events),
 		"pending_still_holds_zero": service._pending_reducer_calls.has(0),
+	})
+	quit(0)
+
+
+func _run_request_id_persists_across_reset() -> void:
+	# Reserve multiple ids, tear the subscription runtime down via the same
+	# path a disconnect walks, then reserve again. `post_reset_id` must be
+	# strictly greater than the LAST pre-reset id — a re-introduced
+	# `_next_request_id = 1` inside `_reset_subscription_runtime()` would emit
+	# `post_reset_id = 2` which is greater than the FIRST reserved id (1) but
+	# not greater than the last (3), so the test catches a silent regression.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var pre_reset_ids: Array = []
+	pre_reset_ids.append(service._reserve_request_id())
+	pre_reset_ids.append(service._reserve_request_id())
+	pre_reset_ids.append(service._reserve_request_id())
+	service._reset_subscription_runtime()
+	var post_reset_id: int = service._reserve_request_id()
+	_emit_result({
+		"pre_reset_ids": pre_reset_ids,
+		"post_reset_id": post_reset_id,
 	})
 	quit(0)
 
