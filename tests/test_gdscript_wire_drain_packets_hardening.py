@@ -8,19 +8,22 @@ WebSocketPeer. The static-contract layer lives in `test_gdscript_wire_layouts.py
 (landmark strings, const declarations, field declarations, reset-site wiring);
 this module provides the behavioral layer.
 
-The teardown-drop contract itself is primarily enforced by the preamble
-landmark test and the structural shape of `_update_backlog_saturation`'s
-not-saturated branch. The `teardown_treated_as_not_saturated` mode below pins
-the state-machine side of that contract: whatever call site enters the helper
-with `saturated_this_tick == false` collapses the episode regardless of prior
-counter, which is how `_drain_packets` reports a handler-induced teardown
-(`_socket == null`) into the accounting.
+The saturation modes drive `_update_backlog_saturation()` directly, while the
+teardown mode runs `_drain_packets()` end-to-end against a throwaway local
+WebSocket server so the mid-drain disconnect/drop contract is pinned against
+the real loop.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import socket
+import struct
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -31,6 +34,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EVENT_PREFIX = "WIRE-HARNESS "
 HARNESS_TIMEOUT_SECONDS = 40
 HARNESS_RES = "res://tests/fixtures/gdscript_wire/service_drain_packets_harness.gd"
+BACKLOG_WARNING_PREFIX = "GDScript wire: backlog saturation"
+_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 
 def _require_godot() -> str:
@@ -40,25 +45,38 @@ def _require_godot() -> str:
     return godot.path
 
 
-def _run_harness(mode: str) -> dict:
+def _run_harness_process(
+    mode: str,
+    extra_args: list[str] | None = None,
+) -> subprocess.CompletedProcess[bytes]:
     godot_path = _require_godot()
-    proc = subprocess.run(
-        [
-            godot_path,
-            "--headless",
-            "--path",
-            str(ROOT),
-            "--script",
-            HARNESS_RES,
-            "--",
-            mode,
-        ],
+    argv = [
+        godot_path,
+        "--headless",
+        "--path",
+        str(ROOT),
+        "--script",
+        HARNESS_RES,
+        "--",
+        mode,
+    ]
+    if extra_args:
+        argv.extend(extra_args)
+    return subprocess.run(
+        argv,
         capture_output=True,
         timeout=HARNESS_TIMEOUT_SECONDS,
         cwd=str(ROOT),
     )
+
+
+def _parse_harness_result(proc: subprocess.CompletedProcess[bytes], mode: str) -> dict:
     stdout = proc.stdout.decode("utf-8", "replace")
     stderr = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == 0, (
+        f"harness exited {proc.returncode} for mode={mode!r}\n"
+        f"stdout:\n{stdout}\nstderr:\n{stderr}"
+    )
     for line in stdout.splitlines():
         idx = line.find(EVENT_PREFIX)
         if idx == -1:
@@ -74,11 +92,117 @@ def _run_harness(mode: str) -> dict:
     )
 
 
+def _run_harness(mode: str) -> dict:
+    return _parse_harness_result(_run_harness_process(mode), mode)
+
+
 def _unwrap(result: dict, mode: str) -> dict:
     assert result.get("ok") is True, (
         f"harness mode={mode!r} reported failure: {result.get('error', '<missing>')}"
     )
     return result["data"]
+
+
+def _build_initial_connection_frame(token: str) -> bytes:
+    token_bytes = token.encode("utf-8")
+    identity = bytes(range(32))
+    connection_id = bytes(0xA0 + i for i in range(16))
+    return (
+        bytes([0, 0])
+        + identity
+        + connection_id
+        + struct.pack("<I", len(token_bytes))
+        + token_bytes
+    )
+
+
+def _encode_binary_frame(payload: bytes) -> bytes:
+    size = len(payload)
+    if size < 126:
+        header = bytes([0x82, size])
+    elif size < 65536:
+        header = bytes([0x82, 126]) + struct.pack("!H", size)
+    else:
+        header = bytes([0x82, 127]) + struct.pack("!Q", size)
+    return header + payload
+
+
+class _FixtureWebSocketServer:
+    def __init__(self, payloads: list[bytes]) -> None:
+        self._payloads = payloads
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.bind(("127.0.0.1", 0))
+        self._sock.listen(1)
+        self._sock.settimeout(5)
+        self.port = int(self._sock.getsockname()[1])
+        self._thread = threading.Thread(target=self._serve_once, daemon=True)
+        self.error: Exception | None = None
+
+    def __enter__(self) -> _FixtureWebSocketServer:
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        try:
+            self._sock.close()
+        finally:
+            self._thread.join(timeout=2)
+        if self.error is not None and exc is None:
+            raise AssertionError(f"fixture websocket server failed: {self.error}") from self.error
+
+    def _serve_once(self) -> None:
+        conn: socket.socket | None = None
+        try:
+            conn, _addr = self._sock.accept()
+            conn.settimeout(5)
+            request = b""
+            while b"\r\n\r\n" not in request:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    raise RuntimeError("client closed during websocket handshake")
+                request += chunk
+            headers = self._parse_headers(request)
+            key = headers.get("sec-websocket-key", "")
+            if not key:
+                raise RuntimeError("missing Sec-WebSocket-Key in handshake")
+            accept = base64.b64encode(
+                hashlib.sha1((key + _WS_GUID).encode("ascii")).digest()
+            ).decode("ascii")
+            response_lines = [
+                "HTTP/1.1 101 Switching Protocols",
+                "Upgrade: websocket",
+                "Connection: Upgrade",
+                f"Sec-WebSocket-Accept: {accept}",
+            ]
+            protocols = headers.get("sec-websocket-protocol", "")
+            if "v2.bsatn.spacetimedb" in protocols:
+                response_lines.append("Sec-WebSocket-Protocol: v2.bsatn.spacetimedb")
+            conn.sendall(("\r\n".join(response_lines) + "\r\n\r\n").encode("ascii"))
+            time.sleep(0.05)
+            for payload in self._payloads:
+                conn.sendall(_encode_binary_frame(payload))
+            time.sleep(0.2)
+        except Exception as exc:  # pragma: no cover - exercised via harness failure
+            self.error = exc
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _parse_headers(request: bytes) -> dict[str, str]:
+        lines = request.decode("latin1").split("\r\n")
+        headers: dict[str, str] = {}
+        for line in lines[1:]:
+            if not line:
+                break
+            name, sep, value = line.partition(":")
+            if not sep:
+                continue
+            headers[name.strip().lower()] = value.strip()
+        return headers
 
 
 def test_transient_saturation_emits_no_warning() -> None:
@@ -109,8 +233,9 @@ def test_transient_saturation_emits_no_warning() -> None:
 
 
 def test_sustained_saturation_emits_exactly_one_warning_per_episode() -> None:
+    proc = _run_harness_process("sustained_saturation_single_warning")
     data = _unwrap(
-        _run_harness("sustained_saturation_single_warning"),
+        _parse_harness_result(proc, "sustained_saturation_single_warning"),
         "sustained_saturation_single_warning",
     )
     threshold = int(data["threshold"])
@@ -138,10 +263,19 @@ def test_sustained_saturation_emits_exactly_one_warning_per_episode() -> None:
             )
     assert bool(data["final_emitted"]) is True
     assert int(data["final_counter"]) == len(history)
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert stderr.count(BACKLOG_WARNING_PREFIX) == 1, (
+        "sustained saturation must emit exactly one push_warning per episode; "
+        f"stderr tail: {stderr[-1200:]}"
+    )
 
 
 def test_recovery_re_arms_de_dup_flag_for_next_episode() -> None:
-    data = _unwrap(_run_harness("recovery_re_arms_de_dup_flag"), "recovery_re_arms_de_dup_flag")
+    proc = _run_harness_process("recovery_re_arms_de_dup_flag")
+    data = _unwrap(
+        _parse_harness_result(proc, "recovery_re_arms_de_dup_flag"),
+        "recovery_re_arms_de_dup_flag",
+    )
     episode1 = data["episode1"]
     post_recovery = data["post_recovery"]
     episode2 = data["episode2"]
@@ -160,6 +294,11 @@ def test_recovery_re_arms_de_dup_flag_for_next_episode() -> None:
     # de-dup-flag-stuck regression. The `post_recovery` assertion above closes
     # that gap.
     assert episode2["emitted"] is True
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert stderr.count(BACKLOG_WARNING_PREFIX) == 2, (
+        "recovery must re-arm the next episode so the warning emits once per "
+        f"episode. stderr tail: {stderr[-1200:]}"
+    )
 
 
 def test_below_watermark_suppresses_warning_even_at_threshold() -> None:
@@ -192,6 +331,24 @@ def test_reset_subscription_runtime_clears_saturation_state() -> None:
     )
 
 
+def test_retry_disconnect_clears_saturation_state_before_next_transport() -> None:
+    data = _unwrap(
+        _run_harness("retry_disconnect_clears_saturation_state"),
+        "retry_disconnect_clears_saturation_state",
+    )
+    assert data["current_state"] == "Degraded"
+    assert int(data["counter"]) == 0, (
+        "retry scheduling must clear `_consecutive_saturated_ticks` so the next "
+        f"transport starts a fresh episode. got counter={data['counter']}"
+    )
+    assert bool(data["emitted"]) is False, (
+        "retry scheduling must clear `_backlog_warning_emitted` so the next "
+        f"episode can emit a fresh warning. got emitted={data['emitted']}"
+    )
+    assert bool(data["socket_cleared"]) is True
+    assert float(data["next_retry_at_seconds"]) >= 0.0
+
+
 def test_teardown_tick_treated_as_not_saturated() -> None:
     data = _unwrap(
         _run_harness("teardown_treated_as_not_saturated"),
@@ -205,3 +362,38 @@ def test_teardown_tick_treated_as_not_saturated() -> None:
         f"got {data['post_teardown_counter']}"
     )
     assert bool(data["post_teardown_emitted"]) is False
+
+
+def test_mid_drain_teardown_drops_remaining_packets_and_disconnects_cleanly() -> None:
+    payloads = [
+        _build_initial_connection_frame("first"),
+        b"\x00",
+        _build_initial_connection_frame("third"),
+        _build_initial_connection_frame("fourth"),
+    ]
+    with _FixtureWebSocketServer(payloads) as server:
+        proc = _run_harness_process(
+            "mid_drain_teardown_disconnects_and_drops_remaining_packets",
+            [str(server.port)],
+        )
+        data = _unwrap(
+            _parse_harness_result(proc, "mid_drain_teardown_disconnects_and_drops_remaining_packets"),
+            "mid_drain_teardown_disconnects_and_drops_remaining_packets",
+        )
+    assert data["protocol_kinds"] == ["InitialConnection", "ProtocolError"], (
+        "mid-drain teardown harness must dispatch the first valid frame and the "
+        f"second ProtocolError frame before disconnect. got {data['protocol_kinds']}"
+    )
+    assert int(data["initial_connection_messages"]) == 1
+    assert bool(data["reached_disconnected"]) is True, (
+        "service must reach STATE_DISCONNECTED after the mid-drain ProtocolError. "
+        f"got reached_disconnected={data['reached_disconnected']}"
+    )
+    assert bool(data["socket_cleared"]) is True
+    assert data["current_state"] == "Disconnected", (
+        "mid-drain teardown must leave the service in STATE_DISCONNECTED. "
+        f"got {data['current_state']}"
+    )
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "SCRIPT ERROR" not in stderr, stderr
+    assert "Assertion failed" not in stderr, stderr

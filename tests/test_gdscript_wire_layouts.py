@@ -849,22 +849,38 @@ def test_drain_packets_backlog_saturation_watermark() -> None:
         "`_update_backlog_saturation` body must increment `_consecutive_saturated_ticks` "
         "exactly once per saturated tick. Expected literal `_consecutive_saturated_ticks += 1`."
     )
-    assert "_consecutive_saturated_ticks = 0" in helper_body, (
-        "`_update_backlog_saturation` body must reset `_consecutive_saturated_ticks = 0` "
-        "on the non-saturated branch."
+    assert "_reset_backlog_saturation_state()" in helper_body, (
+        "`_update_backlog_saturation` body must reset the episode on the non-saturated "
+        "branch via `_reset_backlog_saturation_state()`."
     )
     assert "_backlog_warning_emitted = true" in helper_body, (
         "`_update_backlog_saturation` body must set `_backlog_warning_emitted = true` on "
         "the warn-emit branch to de-dup per-episode."
     )
-    assert "_backlog_warning_emitted = false" in helper_body, (
-        "`_update_backlog_saturation` body must reset `_backlog_warning_emitted = false` "
-        "on the non-saturated branch so recovery re-arms the next episode."
-    )
     push_warning_count = helper_body.count("push_warning(")
     assert push_warning_count >= 1, (
         "`_update_backlog_saturation` body must emit `push_warning(` at least once "
         "(the saturation warn)."
+    )
+    reset_helper_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _reset_backlog_saturation_state(")),
+        -1,
+    )
+    assert reset_helper_idx >= 0, (
+        "`func _reset_backlog_saturation_state(` must exist so disconnect/retry paths can "
+        "clear saturation accounting without duplicating the field-reset logic."
+    )
+    reset_helper_body_lines: list[str] = []
+    for ln in lines[reset_helper_idx + 1 :]:
+        if ln.startswith("func "):
+            break
+        reset_helper_body_lines.append(ln)
+    reset_helper_body = "\n".join(reset_helper_body_lines)
+    assert "_consecutive_saturated_ticks = 0" in reset_helper_body, (
+        "`_reset_backlog_saturation_state` must clear `_consecutive_saturated_ticks = 0`."
+    )
+    assert "_backlog_warning_emitted = false" in reset_helper_body, (
+        "`_reset_backlog_saturation_state` must clear `_backlog_warning_emitted = false`."
     )
     # (d) `_reset_subscription_runtime` must clear both fields so a reconnect
     # starts with a fresh saturation-accounting window.
@@ -879,11 +895,23 @@ def test_drain_packets_backlog_saturation_watermark() -> None:
             break
         reset_body_lines.append(ln)
     reset_body = "\n".join(reset_body_lines)
-    assert "_consecutive_saturated_ticks = 0" in reset_body, (
-        "`_reset_subscription_runtime` must clear `_consecutive_saturated_ticks = 0` so a "
-        "reconnect does not carry pre-reset backlog accounting into the new session."
+    assert "_reset_backlog_saturation_state()" in reset_body, (
+        "`_reset_subscription_runtime` must clear saturation accounting via "
+        "`_reset_backlog_saturation_state()` so a reconnect does not carry pre-reset "
+        "backlog accounting into the new session."
     )
-    assert "_backlog_warning_emitted = false" in reset_body, (
-        "`_reset_subscription_runtime` must clear `_backlog_warning_emitted = false` so a "
-        "reconnect re-arms the one-shot warning for the next episode."
+    schedule_retry_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _schedule_retry_or_disconnect(")),
+        -1,
+    )
+    assert schedule_retry_idx >= 0, "`func _schedule_retry_or_disconnect(` must exist."
+    schedule_retry_body_lines: list[str] = []
+    for ln in lines[schedule_retry_idx + 1 :]:
+        if ln.startswith("func "):
+            break
+        schedule_retry_body_lines.append(ln)
+    schedule_retry_body = "\n".join(schedule_retry_body_lines)
+    assert "_reset_backlog_saturation_state()" in schedule_retry_body, (
+        "`_schedule_retry_or_disconnect` must clear backlog saturation state on the retry "
+        "branch so a degraded reconnect starts a fresh episode window."
     )
