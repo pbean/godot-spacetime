@@ -4,6 +4,7 @@ Runtime coverage for GDScript wire defensive hardening.
 
 from __future__ import annotations
 
+import gzip
 import json
 import subprocess
 from pathlib import Path
@@ -77,6 +78,15 @@ def _write_unknown_row_size_hint_fixture(tmp_path: Path) -> Path:
     frame.append(0x01)  # table_update_rows variant: EventTable
     frame.append(0x63)  # row_size_hint tag = 99 (unknown)
     fixture_path = tmp_path / "unknown_row_size_hint.bin"
+    fixture_path.write_bytes(bytes(frame))
+    return fixture_path
+
+
+def _write_gzip_enveloped_fixture(tmp_path: Path, payload: bytes, name: str) -> Path:
+    frame = bytearray()
+    frame.append(0x02)  # envelope: Gzip
+    frame += gzip.compress(payload, mtime=0)
+    fixture_path = tmp_path / name
     fixture_path.write_bytes(bytes(frame))
     return fixture_path
 
@@ -168,6 +178,63 @@ def test_parse_decompressed_payload_short_returns_protocol_error() -> None:
     stderr = proc.stderr.decode("utf-8", "replace")
     assert "BSATN buffer underrun" not in stderr, stderr
     assert "Assertion failed" not in stderr, stderr
+
+
+def test_parse_decompressed_tag_only_payload_returns_protocol_error(tmp_path: Path) -> None:
+    # A compressed payload that decompresses to only the ServerMessage tag byte
+    # must be rejected before any typed parser can run. Pre-patch behaviour:
+    # the tag routed into `_parse_subscribe_applied`, which hit `read_u32()`
+    # underruns and fabricated a bogus zero-valued message.
+    godot = _require_godot()
+    fixture_path = _write_gzip_enveloped_fixture(
+        tmp_path,
+        bytes([0x01]),  # SubscribeApplied tag only
+        "decompressed_tag_only.bin",
+    )
+    proc = _run_harness_process(godot, PARSE_HARNESS_RES, ["parse_any", str(fixture_path)])
+    assert proc.returncode == 0, (
+        f"parse harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["kind"] == "ProtocolError"
+    assert "payload too short" in data["error_message"]
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "BSATN buffer underrun" not in stderr, stderr
+    assert "SCRIPT ERROR" not in stderr, stderr
+    assert "decode_u32" not in stderr, stderr
+
+
+def test_reader_parse_failed_reentry_preserves_state() -> None:
+    # Once `parse_failed` is latched, low-level reader helpers must return
+    # typed zero/empty defaults without decoding or moving `_pos`.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        PARSE_HARNESS_RES,
+        ["reader_parse_failed_reentry"],
+    )
+    assert proc.returncode == 0, (
+        f"parse harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["u8_before_pos"] == 0
+    assert data["u8_after_pos"] == 0
+    assert data["u8_value"] == 0
+    assert data["fixed_before_pos"] == 0
+    assert data["fixed_after_pos"] == 0
+    assert data["fixed_value_hex"] == ""
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "BSATN buffer underrun" not in stderr, stderr
+    assert "SCRIPT ERROR" not in stderr, stderr
+    assert "decode_u8" not in stderr, stderr
 
 
 def test_service_authoritative_negative_query_set_id_returns_early() -> None:

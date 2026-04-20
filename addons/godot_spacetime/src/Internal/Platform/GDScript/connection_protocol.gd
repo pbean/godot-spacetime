@@ -48,6 +48,14 @@ const SERVER_ENVELOPE_BROTLI := 1
 const SERVER_ENVELOPE_GZIP := 2
 
 
+static func _structured_server_message_requires_body(tag: int) -> bool:
+	match tag:
+		SERVER_MESSAGE_INITIAL_CONNECTION, SERVER_MESSAGE_SUBSCRIBE_APPLIED, SERVER_MESSAGE_UNSUBSCRIBE_APPLIED, SERVER_MESSAGE_SUBSCRIPTION_ERROR, SERVER_MESSAGE_TRANSACTION_UPDATE, SERVER_MESSAGE_REDUCER_RESULT:
+			return true
+		_:
+			return false
+
+
 static func make_supported_protocols() -> PackedStringArray:
 	return PackedStringArray([SUBPROTOCOL_BSATN])
 
@@ -208,6 +216,12 @@ static func parse_server_message(packet: PackedByteArray, is_compressed: bool = 
 	# `packet.size() < 2` guard above.
 	if payload.size() < 1:
 		return _protocol_error("Decompressed ServerMessage payload too short.", -1, packet)
+	# A tag-only payload is still malformed for every currently-structured
+	# ServerMessage variant. Reject it before any typed parser can walk into
+	# `read_u32()` / `read_string()` and fabricate zero values after `_fail`.
+	var tag_only := int(payload[0])
+	if payload.size() == 1 and _structured_server_message_requires_body(tag_only):
+		return _protocol_error("ServerMessage payload too short for variant tag %d." % tag_only, tag_only, packet)
 
 	var reader = BsatnReaderScript.new(payload)
 	var tag := reader.read_u8()

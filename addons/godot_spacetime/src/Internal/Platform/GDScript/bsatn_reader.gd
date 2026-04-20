@@ -49,6 +49,8 @@ func _require_available(count: int) -> void:
 
 
 func read_bool() -> bool:
+	if parse_failed:
+		return false
 	_require_available(1)
 	var offset := _pos
 	var v := _buf.decode_u8(_pos)
@@ -62,6 +64,8 @@ func read_bool() -> bool:
 
 
 func read_u8() -> int:
+	if parse_failed:
+		return 0
 	_require_available(1)
 	var v := _buf.decode_u8(_pos)
 	_pos += 1
@@ -69,6 +73,8 @@ func read_u8() -> int:
 
 
 func read_i8() -> int:
+	if parse_failed:
+		return 0
 	_require_available(1)
 	var v := _buf.decode_s8(_pos)
 	_pos += 1
@@ -76,6 +82,8 @@ func read_i8() -> int:
 
 
 func read_u16() -> int:
+	if parse_failed:
+		return 0
 	_require_available(2)
 	var v := _buf.decode_u16(_pos)
 	_pos += 2
@@ -83,6 +91,8 @@ func read_u16() -> int:
 
 
 func read_i16() -> int:
+	if parse_failed:
+		return 0
 	_require_available(2)
 	var v := _buf.decode_s16(_pos)
 	_pos += 2
@@ -90,6 +100,8 @@ func read_i16() -> int:
 
 
 func read_u32() -> int:
+	if parse_failed:
+		return 0
 	_require_available(4)
 	var v := _buf.decode_u32(_pos)
 	_pos += 4
@@ -97,6 +109,8 @@ func read_u32() -> int:
 
 
 func read_i32() -> int:
+	if parse_failed:
+		return 0
 	_require_available(4)
 	var v := _buf.decode_s32(_pos)
 	_pos += 4
@@ -104,6 +118,8 @@ func read_i32() -> int:
 
 
 func read_u64() -> int:
+	if parse_failed:
+		return 0
 	_require_available(8)
 	var v := _buf.decode_u64(_pos)
 	_pos += 8
@@ -111,6 +127,8 @@ func read_u64() -> int:
 
 
 func read_i64() -> int:
+	if parse_failed:
+		return 0
 	_require_available(8)
 	var v := _buf.decode_s64(_pos)
 	_pos += 8
@@ -118,6 +136,8 @@ func read_i64() -> int:
 
 
 func read_f32() -> float:
+	if parse_failed:
+		return 0.0
 	_require_available(4)
 	var v := _buf.decode_float(_pos)
 	_pos += 4
@@ -125,6 +145,8 @@ func read_f32() -> float:
 
 
 func read_f64() -> float:
+	if parse_failed:
+		return 0.0
 	_require_available(8)
 	var v := _buf.decode_double(_pos)
 	_pos += 8
@@ -132,6 +154,8 @@ func read_f64() -> float:
 
 
 func read_string() -> String:
+	if parse_failed:
+		return ""
 	var n := read_u32()
 	_require_available(n)
 	var s := _buf.slice(_pos, _pos + n).get_string_from_utf8()
@@ -140,6 +164,8 @@ func read_string() -> String:
 
 
 func read_bytes() -> PackedByteArray:
+	if parse_failed:
+		return PackedByteArray()
 	var n := read_u32()
 	_require_available(n)
 	var b := _buf.slice(_pos, _pos + n)
@@ -148,6 +174,8 @@ func read_bytes() -> PackedByteArray:
 
 
 func read_fixed_bytes(count: int) -> PackedByteArray:
+	if parse_failed:
+		return PackedByteArray()
 	_require_available(count)
 	var b := _buf.slice(_pos, _pos + count)
 	_pos += count
@@ -155,6 +183,8 @@ func read_fixed_bytes(count: int) -> PackedByteArray:
 
 
 func read_option_tag() -> bool:
+	if parse_failed:
+		return false
 	_require_available(1)
 	var offset := _pos
 	var tag := _buf.decode_u8(_pos)
@@ -180,6 +210,8 @@ func remaining_bytes() -> int:
 
 
 func peek_u32(relative_offset: int = 0) -> int:
+	if parse_failed:
+		return 0
 	_require_available(relative_offset + 4)
 	return _buf.decode_u32(_pos + relative_offset)
 
