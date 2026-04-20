@@ -31,6 +31,14 @@ const AUTH_TOKEN_EXPIRED := "TokenExpired"
 const CLOSE_REASON_CLEAN := "Clean"
 const CLOSE_REASON_ERROR := "Error"
 
+# Cap on packets processed per `_drain_packets` invocation (one `_process` tick).
+# At 60 Hz this yields ~7680 packets/sec drained, comfortably above pinned 2.1.0
+# server per-second rates while keeping per-tick wall time bounded. A backlog
+# larger than the cap (reconnect against a live table, adversarial flood) drains
+# across subsequent ticks instead of freezing the main thread. Tune via a future
+# spec if a real workload needs it.
+const DRAIN_PACKETS_PER_TICK: int = 128
+
 var _current_status: Dictionary = {}
 var _reconnect_policy = ReconnectPolicyScript.new()
 var _subscription_registry = SubscriptionRegistryScript.new()
@@ -363,9 +371,13 @@ func _process_socket_state() -> void:
 
 
 func _drain_packets() -> void:
+	var drained := 0
 	while _socket != null \
 	and _socket.get_ready_state() == WebSocketPeer.STATE_OPEN \
 	and _socket.get_available_packet_count() > 0:
+		if drained >= DRAIN_PACKETS_PER_TICK:
+			break
+		drained += 1
 		var packet := _socket.get_packet()
 		# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: every frame carries
 		# its own compression byte prefix. The session-level
@@ -522,6 +534,25 @@ func _schedule_retry_or_disconnect(error_message: String) -> void:
 	)
 
 
+# Emission-ordering contract for `_finish_disconnect`:
+#   1. `state_changed(DISCONNECTED)` fires FIRST (via `_transition_to`).
+#   2. `connection_closed(event)` fires SECOND (only when `emit_close_event`).
+#
+# Why this ordering: a `state_changed(DISCONNECTED)` handler that synchronously
+# calls `open_connection(...)` triggers the new cycle's `state_changed(CONNECTING)`
+# from inside the old cycle's teardown. The old cycle's `connection_closed` then
+# lands AFTER the new cycle's `CONNECTING` — visible to observers as a spurious
+# close during the reconnect. Flipping the order (emit close FIRST, then the
+# state transition) would let the close handler itself re-enter `open_connection`
+# while `_current_status` still reads a stale pre-disconnect value, which is
+# worse. Keeping state-first makes the terminal state unambiguous and pushes
+# the reentry wart into an explicit, documented corner.
+#
+# Workarounds for callers affected by the old-cycle-close-during-new-cycle
+# ordering: (a) defer the reconnect to the `connection_closed` handler instead
+# of `state_changed`, or (b) gate on `event.closed_at_unix_time` to recognize
+# the event as belonging to the completed cycle. Flipping the emission order
+# is intentionally rejected — see this spec's Ask First rule.
 func _finish_disconnect(
 	description: String,
 	auth_state: String,
