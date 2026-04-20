@@ -18,6 +18,7 @@ when `spacetime --version` or `SpacetimeDB.ClientSDK` NuGet changes.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -564,4 +565,113 @@ def test_unknown_row_size_hint_tag_yields_top_level_protocol_error(tmp_path: Pat
     err = data["error_message"]
     assert "row size hint" in err.lower() or "row_size_hint" in err.lower() or "hint tag" in err.lower(), (
         f"ProtocolError must identify the row-size-hint failure. got {err!r}"
+    )
+
+
+def test_finish_disconnect_documents_emission_order_contract() -> None:
+    # `_finish_disconnect` emits `state_changed(DISCONNECTED)` first (via
+    # `_transition_to`), then `connection_closed` second. The ordering is a
+    # conscious design choice so observers reading `_current_status` inside
+    # `connection_closed` see `DISCONNECTED`. The contract has a known reentry
+    # caveat (a state_changed handler that calls `open_connection` sees the old
+    # cycle's close after the new cycle's CONNECTING) and must be documented
+    # in-source so future refactors do not silently flip the order.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    lines = service_src.splitlines()
+    func_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _finish_disconnect(")),
+        -1,
+    )
+    assert func_idx >= 0, "gdscript_connection_service.gd must define `func _finish_disconnect(`"
+    # Scan up to 25 lines immediately above the function for the contract comment.
+    start = max(0, func_idx - 25)
+    preamble = "\n".join(lines[start:func_idx])
+    assert "state_changed" in preamble and "FIRST" in preamble, (
+        "`_finish_disconnect` must carry a comment block directly above it naming "
+        "`state_changed` as emitted FIRST. Preamble was: " + preamble
+    )
+    assert "connection_closed" in preamble and "SECOND" in preamble, (
+        "`_finish_disconnect` must carry a comment block directly above it naming "
+        "`connection_closed` as emitted SECOND. Preamble was: " + preamble
+    )
+    assert "open_connection" in preamble, (
+        "`_finish_disconnect` contract comment must describe the reentry caveat involving "
+        "`open_connection`. Preamble was: " + preamble
+    )
+
+
+def test_drain_packets_caps_per_tick_backlog() -> None:
+    # `_drain_packets` previously had no cap; a reconnect against a live table
+    # with a large backlog froze the main thread. The cap keeps per-tick wall
+    # time bounded and lets remaining packets drain on subsequent ticks. Pin
+    # both the constant declaration and the loop-level `break` so a silent
+    # regression (e.g., someone removing the break under the belief the cap is
+    # "too conservative") fails the test.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    # (a) Constant declared with a positive int value.
+    const_match = re.search(
+        r"^const\s+DRAIN_PACKETS_PER_TICK\s*:\s*int\s*=\s*(\d+)",
+        service_src,
+        re.MULTILINE,
+    )
+    assert const_match is not None, (
+        "gdscript_connection_service.gd must declare `const DRAIN_PACKETS_PER_TICK: int = <positive int>`."
+    )
+    assert int(const_match.group(1)) > 0, (
+        f"DRAIN_PACKETS_PER_TICK must be positive. got {const_match.group(1)}"
+    )
+    # (b) `_drain_packets` body references the constant AND contains a `break`.
+    lines = service_src.splitlines()
+    func_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _drain_packets(")),
+        -1,
+    )
+    assert func_idx >= 0, "gdscript_connection_service.gd must define `func _drain_packets(`"
+    # Collect the function body up to the next top-level `func ` (start of next function).
+    body_lines: list[str] = []
+    for ln in lines[func_idx + 1 :]:
+        if ln.startswith("func "):
+            break
+        body_lines.append(ln)
+    body = "\n".join(body_lines)
+    const_idx = body.find("DRAIN_PACKETS_PER_TICK")
+    assert const_idx >= 0, (
+        "`_drain_packets` body must reference the DRAIN_PACKETS_PER_TICK constant."
+    )
+    # The `break` that exits the loop at the cap must appear AFTER the
+    # DRAIN_PACKETS_PER_TICK reference AND within a few lines of it — otherwise
+    # a future refactor that removes the cap's break but adds an unrelated
+    # break elsewhere in the function body would still pass. Require the break
+    # in the same logical block: within 3 non-empty lines after the constant
+    # reference.
+    tail = body[const_idx:]
+    break_match = re.search(r"^\s+break\b", tail, re.MULTILINE)
+    assert break_match is not None, (
+        "`_drain_packets` body must contain a `break` statement that follows the "
+        "DRAIN_PACKETS_PER_TICK reference and exits the loop at the cap."
+    )
+    intervening = tail[: break_match.start()]
+    intervening_non_empty_lines = [ln for ln in intervening.splitlines() if ln.strip()]
+    assert len(intervening_non_empty_lines) <= 3, (
+        "The cap's `break` must follow the DRAIN_PACKETS_PER_TICK reference within 3 "
+        f"non-empty lines; got {len(intervening_non_empty_lines)} lines in between: "
+        f"{intervening_non_empty_lines}"
     )
