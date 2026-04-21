@@ -49,6 +49,8 @@ func _init() -> void:
 			_run_parse_server_fixture(args, "ReducerResult", false)
 		"decompressed_payload_short":
 			_run_decompressed_payload_short()
+		"corrupt_gzip_envelope_no_magic":
+			_run_corrupt_gzip_envelope_no_magic()
 		"reader_parse_failed_reentry":
 			_run_reader_parse_failed_reentry()
 		"encode_subscribe":
@@ -113,6 +115,26 @@ func _run_decompressed_payload_short() -> void:
 	])
 	var packet := PackedByteArray([ProtocolScript.SERVER_ENVELOPE_GZIP])
 	packet.append_array(gzip_of_empty)
+	var message: Dictionary = ProtocolScript.parse_server_message(packet, false)
+	_emit_result(_flatten_message(message))
+	quit(0)
+
+
+func _run_corrupt_gzip_envelope_no_magic() -> void:
+	# Synthesise a Gzip-envelope frame whose body does NOT start with the gzip
+	# magic bytes (0x1F 0x8B). Pre-spec behaviour: `decompress_gzip` returned an
+	# empty `PackedByteArray` on decode failure, which collapsed into the same
+	# "Decompressed ServerMessage payload too short" protocol error as a
+	# well-formed gzip-of-empty stream. Post-spec: the call-site magic probe
+	# surfaces this as a distinct "Corrupt compressed envelope: missing gzip
+	# magic bytes" protocol error, separable in operator logs from the
+	# valid-envelope-empty case.
+	var packet := PackedByteArray([ProtocolScript.SERVER_ENVELOPE_GZIP])
+	# Body: 16 bytes of non-gzip-shaped data. First two bytes are NOT 0x1F 0x8B.
+	packet.append_array(PackedByteArray([
+		0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+		0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+	]))
 	var message: Dictionary = ProtocolScript.parse_server_message(packet, false)
 	_emit_result(_flatten_message(message))
 	quit(0)

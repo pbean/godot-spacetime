@@ -198,7 +198,22 @@ static func parse_server_message(packet: PackedByteArray, is_compressed: bool = 
 			payload = packet.slice(1, packet.size())
 		SERVER_ENVELOPE_GZIP, SERVER_ENVELOPE_BROTLI:
 			# Brotli canonicalises to Gzip on the wire per upstream.
-			payload = BsatnReaderScript.decompress_gzip(packet.slice(1, packet.size()))
+			var compressed_payload := packet.slice(1, packet.size())
+			# Probe for gzip magic bytes (`1F 8B`) before handing the buffer to
+			# `decompress_gzip`. That helper returns an empty `PackedByteArray`
+			# on decode failure, which is indistinguishable at the post-
+			# decompression size check from a well-formed stream that happens
+			# to decompress to zero bytes. Routing corrupt envelopes through a
+			# distinct protocol error gives operators a separable failure
+			# signal. Magic-byte check covers the corrupt / truncated /
+			# wrong-encoding cases at the call-site layer; the existing
+			# `payload.size() < 1` guard below continues to cover the
+			# well-formed-but-empty case.
+			if compressed_payload.size() < 2 \
+			or compressed_payload[0] != 0x1F \
+			or compressed_payload[1] != 0x8B:
+				return _protocol_error("Corrupt compressed envelope: missing gzip magic bytes.", -1, packet)
+			payload = BsatnReaderScript.decompress_gzip(compressed_payload)
 		_:
 			var session_hint := "session expects compressed frames" if is_compressed else "session accepts uncompressed frames"
 			return _protocol_error(

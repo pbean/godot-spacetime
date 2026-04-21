@@ -1014,3 +1014,97 @@ def test_drain_packets_backlog_saturation_watermark() -> None:
         "`_schedule_retry_or_disconnect` must clear backlog saturation state on the retry "
         "branch so a degraded reconnect starts a fresh episode window."
     )
+
+
+def test_max_bundled_query_sets_cap_declared_and_used_by_both_handlers() -> None:
+    # Defensive cap on per-tick bundled `query_sets` iteration. Must be
+    # declared as a positive-int constant and referenced by both
+    # `_handle_transaction_update` and `_handle_reducer_result` so an
+    # adversarial 100k-entry bundle cannot spin the main thread.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    cap_match = re.search(
+        r"^const\s+MAX_BUNDLED_QUERY_SETS\s*:\s*int\s*=\s*(\d+)",
+        service_src,
+        re.MULTILINE,
+    )
+    assert cap_match is not None, (
+        "gdscript_connection_service.gd must declare "
+        "`const MAX_BUNDLED_QUERY_SETS: int = <positive int>` so bundle iteration is bounded."
+    )
+    assert int(cap_match.group(1)) > 0, (
+        f"MAX_BUNDLED_QUERY_SETS must be positive. got {cap_match.group(1)}"
+    )
+
+    lines = service_src.splitlines()
+
+    def _body_for(func_prefix: str) -> str:
+        idx = next((i for i, ln in enumerate(lines) if ln.startswith(func_prefix)), -1)
+        assert idx >= 0, f"{func_prefix!r} must exist."
+        body: list[str] = []
+        for ln in lines[idx + 1 :]:
+            if ln.startswith("func "):
+                break
+            body.append(ln)
+        return "\n".join(body)
+
+    transaction_update_body = _body_for("func _handle_transaction_update(")
+    assert "MAX_BUNDLED_QUERY_SETS" in transaction_update_body, (
+        "`_handle_transaction_update` body must reference MAX_BUNDLED_QUERY_SETS to bound "
+        "bundle iteration."
+    )
+    assert "Clamping TransactionUpdate.query_sets" in transaction_update_body, (
+        "`_handle_transaction_update` body must emit the `Clamping TransactionUpdate.query_sets` "
+        "summary warning when the raw bundle exceeds the cap."
+    )
+
+    reducer_result_body = _body_for("func _handle_reducer_result(")
+    assert "MAX_BUNDLED_QUERY_SETS" in reducer_result_body, (
+        "`_handle_reducer_result` body must reference MAX_BUNDLED_QUERY_SETS to bound "
+        "bundle iteration."
+    )
+    assert "Clamping ReducerResult.query_sets" in reducer_result_body, (
+        "`_handle_reducer_result` body must emit the `Clamping ReducerResult.query_sets` "
+        "summary warning when the raw bundle exceeds the cap."
+    )
+
+
+def test_corrupt_gzip_envelope_produces_distinct_protocol_error_landmark() -> None:
+    # The call-site gzip-magic probe in `parse_server_message` must route
+    # envelopes missing the `1F 8B` magic to a distinct protocol error,
+    # separable in operator logs from the valid-envelope-empty-result case.
+    protocol_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "connection_protocol.gd"
+    ).read_text(encoding="utf-8")
+    corrupt_count = protocol_src.count("Corrupt compressed envelope: missing gzip magic bytes.")
+    assert corrupt_count == 1, (
+        "connection_protocol.gd must declare the corrupt-envelope protocol error exactly "
+        f"once (in the gzip-magic-probe branch). got {corrupt_count} occurrences."
+    )
+    # Gzip magic-byte probe must use the canonical first two bytes (1F 8B).
+    assert "0x1F" in protocol_src and "0x8B" in protocol_src, (
+        "connection_protocol.gd must probe for the gzip magic bytes 0x1F 0x8B before "
+        "invoking `decompress_gzip` so a corrupt envelope routes to the distinct "
+        "protocol error rather than collapsing into the valid-envelope-empty path."
+    )
+    # The existing "Decompressed ... too short" error string must remain as a
+    # separate landmark — reserved for the valid-envelope-empty case.
+    assert "Decompressed ServerMessage payload too short." in protocol_src, (
+        "connection_protocol.gd must preserve the `Decompressed ServerMessage payload too "
+        "short.` landmark for the valid-envelope-empty failure mode."
+    )
