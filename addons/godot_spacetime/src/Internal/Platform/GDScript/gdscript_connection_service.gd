@@ -95,6 +95,12 @@ var _next_handle_id: int = 1
 var _pending_subscriptions: Dictionary = {}
 # new_handle_id -> old_handle_id
 var _pending_replacements: Dictionary = {}
+# request_id -> query_set_id — populated when `_send_unsubscribe_for_query_set`
+# reserves an id and puts a valid unsubscribe frame on the wire. The
+# `UnsubscribeApplied` handler erases the entry when the server acks. Prevents
+# reserved request_ids from accumulating without correlation now that
+# `_next_request_id` is monotonic across reconnects.
+var _pending_unsubscribes: Dictionary = {}
 var _authoritative_handle_id: int = -1
 # request_id -> {invocation_id: String, reducer_name: String, called_at: float}
 var _pending_reducer_calls: Dictionary = {}
@@ -462,6 +468,8 @@ func _drain_packets() -> void:
 				_handle_initial_connection(message)
 			"SubscribeApplied":
 				_handle_subscribe_applied(message)
+			"UnsubscribeApplied":
+				_handle_unsubscribe_applied(message)
 			"SubscriptionError":
 				_handle_subscription_error(message)
 			"TransactionUpdate":
@@ -1173,6 +1181,27 @@ func _send_subscribe_request(handle) -> int:
 	return _socket.put_packet(payload)
 
 
+# Correlate a server-emitted `UnsubscribeApplied` with the matching in-flight
+# unsubscribe reservation. Internal-only: the only observable effect is the
+# `_pending_unsubscribes` entry being erased so the reserved request_id does
+# not accumulate under the monotonic-counter contract. A future spec can add
+# a typed public signal if a consumer need surfaces.
+func _handle_unsubscribe_applied(message: Dictionary) -> void:
+	var request_id_variant = message.get("request_id", -1)
+	if typeof(request_id_variant) != TYPE_INT:
+		push_warning("Ignoring UnsubscribeApplied: non-integer request_id")
+		return
+	var request_id := int(request_id_variant)
+	if not _pending_unsubscribes.has(request_id):
+		# Late / stale frame. Under the monotonic counter, this can only happen
+		# after `_reset_subscription_runtime` cleared the map — the frame is
+		# from a prior session's in-flight unsubscribe. Silent no-op: the frame
+		# cannot false-match a live entry and there is no consumer waiting on
+		# resolution.
+		return
+	_pending_unsubscribes.erase(request_id)
+
+
 func _send_unsubscribe_for_query_set(query_set_id: int) -> void:
 	if query_set_id < 0:
 		return
@@ -1180,18 +1209,31 @@ func _send_unsubscribe_for_query_set(query_set_id: int) -> void:
 	if String(_current_status.get("state", STATE_DISCONNECTED)) != STATE_CONNECTED:
 		return
 
+	# Null-socket check BEFORE the id reservation below — a vanishing socket
+	# between the state check and the wire emit must not burn an id. Under the
+	# monotonic-counter contract from the parent spec, a burned id accumulates
+	# for the life of the service instance and contributes to the eventual u32
+	# wrap. The remaining `put_packet` window below still carries a smaller
+	# socket-vanish race, tracked separately under shared-state thread-safety.
+	if _socket == null:
+		return
+
 	# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb (see
 	# tests/fixtures/gdscript_wire/unsubscribe_sent.bin):
 	#   tag(u8=1) | RequestId(u32) | QuerySetId(u32) | Flags(u8)
 	# The legacy emitter wrote a trailing u32(0) instead of a u8; the v2
 	# server expects 10 bytes total and rejects a 13-byte unsubscribe.
-	# Fire-and-forget: the reserved request_id is written to the wire and
-	# intentionally discarded. There is no `_pending_unsubscribes` map and no
-	# `UnsubscribeApplied` handler today. A future correlation spec would add
-	# both together so the reserved id can be resolved when the server acks.
 	var request_id := _reserve_request_id()
+	# Post-reserve null-socket re-check. The u32 wrap-guard inside
+	# `_reserve_request_id` fires `_schedule_retry_or_disconnect` synchronously,
+	# which disposes the socket. Without this re-check, the subsequent
+	# `_socket.put_packet` would crash on null at the exact boundary (~4.29e9
+	# reservations). `invoke_reducer` and `_send_subscribe_request` already
+	# carry equivalent post-reserve null-socket checks; this matches that
+	# pattern for the unsubscribe path.
 	if _socket == null:
 		return
+	_pending_unsubscribes[request_id] = query_set_id
 	var payload := ConnectionProtocolScript.encode_unsubscribe(request_id, query_set_id)
 	_socket.put_packet(payload)
 
@@ -1213,6 +1255,21 @@ func _validate_query_sqls(query_sqls: Array, caller_name: String) -> Array:
 
 
 func _reserve_request_id() -> int:
+	# Wrap-guard: the wire encodes RequestId as u32. When the monotonic counter
+	# reaches `0xFFFFFFFF` (the last valid u32), the current reservation still
+	# fits but the NEXT one would wrap on the wire and risk false-matching a
+	# pending entry reserved near the counter's start. At that point the session
+	# has reserved ~4.29 billion ids — unreachable on any realistic workload,
+	# but force teardown here so the wire never sees a wrapped id. The
+	# subsequent `_schedule_retry_or_disconnect` clears `_pending_*` state; the
+	# returned `0xFFFFFFFF` is still wire-valid and cannot false-match anything
+	# issued earlier by this counter (which never reached it).
+	if _next_request_id >= 0xFFFFFFFF:
+		push_error(
+			"GDScript wire: _next_request_id exhausted at u32 boundary " \
+			+ "(%d reservations on this service instance). Forcing disconnect." % _next_request_id
+		)
+		_schedule_retry_or_disconnect("request_id counter exhausted at u32 boundary")
 	var request_id := _next_request_id
 	_next_request_id += 1
 	return request_id
@@ -1258,8 +1315,27 @@ func _emit_row_changed_events(row_events: Array) -> void:
 
 
 func _reset_subscription_runtime() -> void:
+	# Synthetic failure events for any in-flight subscribe whose SubscribeApplied
+	# / SubscriptionError could no longer arrive on this session. Fire BEFORE
+	# clearing the map so callers waiting on a terminal event for their subscribe
+	# observe one. Emitted on the teardown path only (not on routine server-sent
+	# SubscriptionError, which takes the dedicated handler).
+	for pending_request_id in _pending_subscriptions.keys():
+		var pending_handle = _pending_subscriptions.get(pending_request_id)
+		if pending_handle == null:
+			continue
+		emit_signal("subscription_failed", {
+			"handle_id": int(pending_handle.handle_id),
+			"error_message": "Connection lost before SubscribeApplied was observed.",
+			"failed_at_unix_time": Time.get_unix_time_from_system(),
+		})
 	_pending_subscriptions.clear()
 	_pending_replacements.clear()
+	# Clear pending unsubscribes symmetrically with pending subscribes — the
+	# server cannot ack them on this session. No synthetic signal is emitted
+	# because unsubscribes are fire-and-forget from the caller's perspective
+	# (see Ask First on a future typed unsubscribe_applied signal).
+	_pending_unsubscribes.clear()
 	_authoritative_handle_id = -1
 	# Intentionally do NOT reset `_next_request_id` here. The counter is
 	# monotonic for the life of this service instance so that a stale

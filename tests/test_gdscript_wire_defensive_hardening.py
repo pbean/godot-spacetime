@@ -539,3 +539,136 @@ def test_bundle_truncation_cap_reducer_result_processes_cap_prefix_and_emits_one
         f"ReducerResult truncation summary must report the exact skipped-count phrase. "
         f"stderr tail: {stderr[-1200:]}"
     )
+
+
+def test_reserve_request_id_wraps_at_u32_boundary_forces_disconnect() -> None:
+    # The monotonic counter hits the u32 wire-encoding boundary (`0xFFFFFFFF`)
+    # only after ~4.29 billion reservations. The wrap-guard must push_error
+    # AND schedule a retry/disconnect so the wire never sees a wrapped id that
+    # could false-match a pending entry from near the counter's start.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reserve_request_id_wraps_forces_disconnect"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    # Returned id is the last valid u32 — wire-valid even though the session
+    # is being torn down.
+    assert int(data["returned_id"]) == 0xFFFFFFFF
+    assert int(data["next_request_id_after"]) == 0x100000000
+    # Retry path transitions state to Degraded and disposes the socket.
+    assert data["current_state"] == "Degraded", (
+        "wrap-guard must route through `_schedule_retry_or_disconnect`, which "
+        f"transitions to Degraded; got {data['current_state']}"
+    )
+    assert bool(data["socket_cleared"]) is True
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "u32 boundary" in stderr, (
+        f"wrap-guard must emit a push_error containing 'u32 boundary'. stderr tail: {stderr[-1200:]}"
+    )
+
+
+def test_unsubscribe_null_socket_does_not_burn_request_id() -> None:
+    # If `_socket == null` at the moment of unsubscribe (state still reports
+    # CONNECTED due to concurrent teardown), the new null-socket check BEFORE
+    # `_reserve_request_id()` must keep the counter unchanged. Monotonicity
+    # means burned ids accumulate, so this guards against long-lived services
+    # prematurely approaching the u32 wrap.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["unsubscribe_null_socket_does_not_burn_request_id"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert int(data["next_request_id_before"]) == int(data["next_request_id_after"]), (
+        f"null-socket unsubscribe must NOT burn a request_id; "
+        f"before={data['next_request_id_before']} after={data['next_request_id_after']}"
+    )
+    assert int(data["pending_unsubscribes_size"]) == 0, (
+        "null-socket unsubscribe must not populate `_pending_unsubscribes`; "
+        f"got size={data['pending_unsubscribes_size']}"
+    )
+
+
+def test_unsubscribe_applied_erases_pending_entry_and_no_ops_on_stale_id() -> None:
+    # `_handle_unsubscribe_applied` must look up the reserved request_id in
+    # `_pending_unsubscribes` and erase the matching entry. A stale /
+    # unmatched request_id (e.g. a frame from a prior session surfaced after
+    # reset) must silently no-op.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["unsubscribe_applied_erases_pending_entry"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    # After the matched frame: size dropped from 2 to 1 (entry 17 erased),
+    # entry 42 still present.
+    assert int(data["size_after_match"]) == 1
+    assert bool(data["still_has_42"]) is True
+    # After the stale frame: size unchanged, no error pushed.
+    assert int(data["size_after_stale"]) == 1
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "SCRIPT ERROR" not in stderr, stderr
+    assert "non-integer request_id" not in stderr, (
+        "stale UnsubscribeApplied (integer request_id, just unknown) must not trigger "
+        f"the non-integer warning. stderr tail: {stderr[-1200:]}"
+    )
+
+
+def test_reset_subscription_runtime_emits_synthetic_failure_for_pending_subscribes() -> None:
+    # On teardown, callers waiting for a terminal event on their in-flight
+    # subscribe must observe one. `_reset_subscription_runtime` now emits a
+    # synthetic `subscription_failed` event per pending entry BEFORE clearing
+    # the map. Pending unsubscribes are cleared silently (Ask First scoped out
+    # of this spec).
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reset_subscription_runtime_emits_synthetic_failure"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    events = data["subscription_failed_events"]
+    assert len(events) == 1, (
+        f"reset with one pending subscribe must emit exactly one subscription_failed; got {len(events)}"
+    )
+    event = events[0]
+    assert int(event["handle_id"]) == 42
+    assert "Connection lost before SubscribeApplied" in str(event["error_message"]), (
+        f"synthetic failure must cite the connection-lost reason verbatim; got {event['error_message']!r}"
+    )
+    assert "failed_at_unix_time" in event
+    # Both pending maps must be empty after reset.
+    assert int(data["pending_subscriptions_size_after"]) == 0
+    assert int(data["pending_unsubscribes_size_after"]) == 0
