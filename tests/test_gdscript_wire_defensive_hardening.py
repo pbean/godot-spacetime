@@ -398,3 +398,144 @@ def test_service_reducer_result_non_integer_request_id_does_not_crash() -> None:
     )
     # No Godot runtime error from a typed cast on the Dictionary.
     assert "SCRIPT ERROR" not in stderr, stderr
+
+
+def test_parse_corrupt_gzip_envelope_without_magic_bytes_returns_distinct_protocol_error() -> None:
+    # A Gzip-envelope frame whose body does NOT start with `1F 8B` must route
+    # to the new "Corrupt compressed envelope: missing gzip magic bytes"
+    # protocol error, distinct from the "Decompressed ServerMessage payload
+    # too short" error reserved for valid-envelope-empty-result cases.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        PARSE_HARNESS_RES,
+        ["corrupt_gzip_envelope_no_magic"],
+    )
+    assert proc.returncode == 0, (
+        f"parse harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["kind"] == "ProtocolError"
+    assert "Corrupt compressed envelope: missing gzip magic bytes" in data["error_message"], (
+        "corrupt envelope must surface the new distinct protocol error; got "
+        f"{data['error_message']!r}"
+    )
+    # Reserved error string for the valid-envelope-empty-result case must NOT appear.
+    assert "Decompressed ServerMessage payload too short" not in data["error_message"], (
+        "corrupt envelope must NOT collapse into the valid-envelope-empty error; got "
+        f"{data['error_message']!r}"
+    )
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "BSATN buffer underrun" not in stderr, stderr
+    assert "SCRIPT ERROR" not in stderr, stderr
+
+
+def test_bundle_truncation_cap_transaction_update_processes_cap_prefix_and_emits_one_summary() -> None:
+    # Send MAX_BUNDLED_QUERY_SETS + 100 entries through the TransactionUpdate
+    # handler, all matching the authoritative handle. The cap must truncate to
+    # exactly the first MAX_BUNDLED_QUERY_SETS entries and emit exactly one
+    # summary `push_warning` containing "Clamping" and the overflow count.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["bundle_truncation_cap_transaction_update"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    cap = int(data["cap"])
+    overflow = int(data["overflow"])
+    total_entries = int(data["total_entries"])
+    assert cap > 0 and overflow > 0
+    assert total_entries == cap + overflow
+    assert int(data["applied_count"]) == cap, (
+        "TransactionUpdate handler must process exactly MAX_BUNDLED_QUERY_SETS entries "
+        f"under truncation; got applied={data['applied_count']}, cap={cap}"
+    )
+    stderr = proc.stderr.decode("utf-8", "replace")
+    clamping_count = stderr.count("Clamping TransactionUpdate.query_sets")
+    assert clamping_count == 1, (
+        "truncation must emit exactly one summary warning for the TransactionUpdate "
+        f"path; got {clamping_count}. stderr tail: {stderr[-1200:]}"
+    )
+    assert f"skipped {overflow} additional entries" in stderr, (
+        f"truncation summary warning must report the exact skipped-count phrase "
+        f"`skipped {overflow} additional entries`; a format-arg swap (e.g. printing "
+        f"the cap value in the skipped slot) must fail this test. stderr tail: {stderr[-1200:]}"
+    )
+
+
+def test_bundle_at_cap_processes_all_entries_and_emits_no_truncation_warning() -> None:
+    # AC4: at-cap (`bundle_size == MAX_BUNDLED_QUERY_SETS`) must process every
+    # entry and NOT emit a truncation summary warning. The gate uses strict
+    # `>`, so at-cap is the boundary case that proves the strictness.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["bundle_at_cap_emits_no_warning"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    at_cap = int(data["at_cap"])
+    assert at_cap > 0
+    assert int(data["applied_count"]) == at_cap, (
+        "at-cap bundle must process every entry (bundle_size == cap); "
+        f"got applied={data['applied_count']}, cap={at_cap}"
+    )
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "Clamping TransactionUpdate.query_sets" not in stderr, (
+        "at-cap boundary must NOT emit the truncation summary warning — the gate is "
+        f"strict `>`. stderr tail: {stderr[-1200:]}"
+    )
+
+
+def test_bundle_truncation_cap_reducer_result_processes_cap_prefix_and_emits_one_summary() -> None:
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["bundle_truncation_cap_reducer_result"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    cap = int(data["cap"])
+    overflow = int(data["overflow"])
+    assert int(data["applied_count"]) == cap, (
+        "ReducerResult handler must process exactly MAX_BUNDLED_QUERY_SETS entries "
+        f"under truncation; got applied={data['applied_count']}, cap={cap}"
+    )
+    # reducer_call_succeeded must still fire after the truncation.
+    assert len(data["success_events"]) == 1
+    stderr = proc.stderr.decode("utf-8", "replace")
+    clamping_count = stderr.count("Clamping ReducerResult.query_sets")
+    assert clamping_count == 1, (
+        "truncation must emit exactly one summary warning for the ReducerResult "
+        f"path; got {clamping_count}. stderr tail: {stderr[-1200:]}"
+    )
+    assert f"skipped {overflow} additional entries" in stderr, (
+        f"ReducerResult truncation summary must report the exact skipped-count phrase. "
+        f"stderr tail: {stderr[-1200:]}"
+    )

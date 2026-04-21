@@ -57,6 +57,15 @@ const BACKLOG_WATERMARK_PACKETS: int = 512
 # per-tick cap. Within-episode `_consecutive_saturated_ticks` semantics are
 # unchanged; hysteresis gates only the flag re-arm.
 const BACKLOG_RECOVERY_TICKS: int = 10
+# Defensive cap on the per-tick size of bundled `query_sets` Arrays delivered
+# inside `ReducerResult` and `TransactionUpdate` frames. Legitimate bundles on
+# the pinned 2.1.0 server stay well under this; an adversarial or buggy server
+# delivering 100k entries would otherwise spin the main thread through every
+# iteration. Truncation is defensive-only: the cap emits a single summary
+# `push_warning` and processes the capped prefix — no `_protocol_error` or
+# `_schedule_retry_or_disconnect` escalation. Escalation policy is application-
+# specific and out of scope for this defensive bound.
+const MAX_BUNDLED_QUERY_SETS: int = 1024
 
 var _current_status: Dictionary = {}
 var _reconnect_policy = ReconnectPolicyScript.new()
@@ -931,6 +940,19 @@ func _handle_transaction_update(message: Dictionary) -> void:
 		return
 	var query_sets: Array = query_sets_variant
 
+	# Defensive cap (MAX_BUNDLED_QUERY_SETS): an adversarial bundle with tens of
+	# thousands of entries would otherwise spin the main thread through every
+	# iteration. Truncate to the cap; emit a single summary warning if the raw
+	# bundle exceeded it. The existing per-entry typing guards still run — the
+	# cap is an outer bound, not a substitute for the inner defensive parsing.
+	var bundle_size := query_sets.size()
+	var processed_count: int = min(bundle_size, MAX_BUNDLED_QUERY_SETS)
+	if bundle_size > MAX_BUNDLED_QUERY_SETS:
+		push_warning(
+			"Clamping TransactionUpdate.query_sets at %d entries; skipped %d additional entries" \
+			% [MAX_BUNDLED_QUERY_SETS, bundle_size - MAX_BUNDLED_QUERY_SETS]
+		)
+
 	# Round-2 hardening: per-entry `push_warning` for the three data-malformed
 	# categories (non-Dictionary, missing `query_set_id`, non-integer
 	# `query_set_id`) is an adversarial-bulk symptom — a single malformed bundle
@@ -940,7 +962,8 @@ func _handle_transaction_update(message: Dictionary) -> void:
 	# payload malformation.
 	var malformed_entry_count := 0
 	var relevant_updates: Array = []
-	for query_set_update_variant in query_sets:
+	for idx in range(processed_count):
+		var query_set_update_variant = query_sets[idx]
 		if not (query_set_update_variant is Dictionary):
 			malformed_entry_count += 1
 			continue
@@ -1004,6 +1027,16 @@ func _handle_reducer_result(message: Dictionary) -> void:
 		query_sets_variant = []
 	var query_sets: Array = query_sets_variant
 	if not query_sets.is_empty() and _authoritative_handle_id != -1:
+		# Defensive cap (MAX_BUNDLED_QUERY_SETS): bound the per-tick iteration
+		# on an adversarial bundle. Legitimate server bundles stay well under
+		# 1024 entries on pinned 2.1.0.
+		var bundle_size := query_sets.size()
+		var processed_count: int = min(bundle_size, MAX_BUNDLED_QUERY_SETS)
+		if bundle_size > MAX_BUNDLED_QUERY_SETS:
+			push_warning(
+				"Clamping ReducerResult.query_sets at %d entries; skipped %d additional entries" \
+				% [MAX_BUNDLED_QUERY_SETS, bundle_size - MAX_BUNDLED_QUERY_SETS]
+			)
 		# Round-2 hardening: collapse the three data-malformed per-entry warnings
 		# (non-Dictionary, missing `query_set_id`, non-integer `query_set_id`)
 		# into a single post-loop summary. The "unregistered `query_set_id`"
@@ -1012,7 +1045,8 @@ func _handle_reducer_result(message: Dictionary) -> void:
 		# adversarial-bulk symptom.
 		var malformed_entry_count := 0
 		var relevant: Array = []
-		for q_variant in query_sets:
+		for idx in range(processed_count):
+			var q_variant = query_sets[idx]
 			if not (q_variant is Dictionary):
 				malformed_entry_count += 1
 				continue

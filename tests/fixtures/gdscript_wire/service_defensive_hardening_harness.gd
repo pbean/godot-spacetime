@@ -64,6 +64,12 @@ func _init() -> void:
 			_run_authoritative_negative_query_set_id()
 		"malformed_bundle_warning_storm_cap":
 			_run_malformed_bundle_warning_storm_cap()
+		"bundle_truncation_cap_transaction_update":
+			_run_bundle_truncation_cap_transaction_update()
+		"bundle_truncation_cap_reducer_result":
+			_run_bundle_truncation_cap_reducer_result()
+		"bundle_at_cap_emits_no_warning":
+			_run_bundle_at_cap_emits_no_warning()
 		"reducer_result_non_integer_request_id":
 			_run_reducer_result_non_integer_request_id()
 		"request_id_persists_across_reset":
@@ -219,6 +225,120 @@ func _run_malformed_bundle_warning_storm_cap() -> void:
 	_emit_result({
 		"applied_query_set_ids": _jsonify(cache.applied_query_set_ids),
 		"row_changed_events": _jsonify(_row_changed_events),
+	})
+	quit(0)
+
+
+func _run_bundle_truncation_cap_transaction_update() -> void:
+	# Send `MAX_BUNDLED_QUERY_SETS + 100` entries — all matching the
+	# authoritative handle so they would ALL be applied absent the cap. The
+	# truncation must process exactly the first MAX_BUNDLED_QUERY_SETS entries
+	# and emit exactly one summary warning containing `"Clamping"`.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var cache = ctx["cache"]
+	var authoritative_handle = SubscriptionHandleScript.new(1, 77, 77)
+	registry.handles_by_id[1] = authoritative_handle
+	registry.handles_by_query_set_id[77] = authoritative_handle
+	service._authoritative_handle_id = 1
+	var overflow: int = 100
+	var total_entries: int = ServiceScript.MAX_BUNDLED_QUERY_SETS + overflow
+	var query_sets: Array = []
+	query_sets.resize(total_entries)
+	for i in range(total_entries):
+		query_sets[i] = {
+			"query_set_id": 77,
+			"tables": [],
+			"tick": i,
+		}
+	service._handle_transaction_update({
+		"query_sets": query_sets,
+	})
+	_emit_result({
+		"total_entries": total_entries,
+		"cap": ServiceScript.MAX_BUNDLED_QUERY_SETS,
+		"overflow": overflow,
+		"applied_count": cache.applied_query_set_ids.size(),
+	})
+	quit(0)
+
+
+func _run_bundle_truncation_cap_reducer_result() -> void:
+	# Same truncation contract on the ReducerResult path. Register one handle so
+	# every capped entry applies through the cache; emit the summary warning
+	# exactly once.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var cache = ctx["cache"]
+	var authoritative_handle = SubscriptionHandleScript.new(1, 9, 9)
+	registry.handles_by_id[1] = authoritative_handle
+	registry.handles_by_query_set_id[9] = authoritative_handle
+	service._authoritative_handle_id = 1
+	service._pending_reducer_calls[11] = {
+		"invocation_id": "inv-11",
+		"reducer_name": "bulk_apply",
+		"called_at": 1.0,
+	}
+	var overflow: int = 100
+	var total_entries: int = ServiceScript.MAX_BUNDLED_QUERY_SETS + overflow
+	var query_sets: Array = []
+	query_sets.resize(total_entries)
+	for i in range(total_entries):
+		query_sets[i] = {
+			"query_set_id": 9,
+			"tables": [],
+			"tick": i,
+		}
+	service._handle_reducer_result({
+		"request_id": 11,
+		"status": "Committed",
+		"reducer_name": "bulk_apply",
+		"query_sets": query_sets,
+	})
+	_emit_result({
+		"total_entries": total_entries,
+		"cap": ServiceScript.MAX_BUNDLED_QUERY_SETS,
+		"overflow": overflow,
+		"applied_count": cache.applied_query_set_ids.size(),
+		"success_events": _jsonify(_reducer_success_events),
+	})
+	quit(0)
+
+
+func _run_bundle_at_cap_emits_no_warning() -> void:
+	# Bundle size exactly equal to the cap: all entries processed, zero
+	# truncation warning. The `bundle_size > MAX_BUNDLED_QUERY_SETS` gate uses
+	# strict `>`, so at-cap is the boundary that must NOT emit. Uses the
+	# TransactionUpdate path as a single representative lane (the two handlers
+	# share the gate shape).
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var cache = ctx["cache"]
+	var authoritative_handle = SubscriptionHandleScript.new(1, 88, 88)
+	registry.handles_by_id[1] = authoritative_handle
+	registry.handles_by_query_set_id[88] = authoritative_handle
+	service._authoritative_handle_id = 1
+	var at_cap: int = ServiceScript.MAX_BUNDLED_QUERY_SETS
+	var query_sets: Array = []
+	query_sets.resize(at_cap)
+	for i in range(at_cap):
+		query_sets[i] = {
+			"query_set_id": 88,
+			"tables": [],
+			"tick": i,
+		}
+	service._handle_transaction_update({
+		"query_sets": query_sets,
+	})
+	_emit_result({
+		"at_cap": at_cap,
+		"applied_count": cache.applied_query_set_ids.size(),
 	})
 	quit(0)
 
