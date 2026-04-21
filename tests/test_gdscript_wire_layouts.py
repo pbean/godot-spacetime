@@ -1245,3 +1245,178 @@ def test_correlation_hygiene_round_2_landmarks_and_ordering() -> None:
         "branch because a degraded retry starts a fresh wire session without replaying "
         "subscriptions."
     )
+
+
+def test_reset_subscription_runtime_reentrance_guard_is_pinned() -> None:
+    # Commit `5f8ff78` added `_resetting_subscription_runtime` as an entry guard
+    # so a `subscription_failed` handler that synchronously re-enters
+    # `_reset_subscription_runtime` (e.g. via `open_connection()`) returns
+    # silently instead of corrupting the outer call's iteration. Two structural
+    # rules protect the contract:
+    #   (1) the guard flag is declared at field scope and bookends the function
+    #       (top-of-body early-return + `= true`, last-statement `= false`);
+    #   (2) both emission loops build their iteration arrays
+    #       (`pending_old_handle_ids`, `pending_subscription_handles`) textually
+    #       before the first `emit_signal("subscription_failed"` so a reentrant
+    #       `unsubscribe()` cannot skip a queued synthetic emission by clearing
+    #       the pending map mid-iteration.
+    # This test pins the shipped shape. A silent regression that deletes the
+    # guard, reorders the bookends, or moves an emission above the snapshot
+    # declarations fails here instead of in production.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+
+    # (1a) Field declaration — exactly one `var _resetting_subscription_runtime: bool = false`
+    # at field scope (start-of-line, no indentation — GDScript field decls live
+    # outside any function block). Trailing inline comment is tolerated.
+    def _strip_trailing_comment(ln: str) -> str:
+        # GDScript comments are introduced by `#` outside strings. The service
+        # file does not use `#` in field-scope string literals, so a simple
+        # split suffices for this regex pre-pass.
+        return ln.split("#", 1)[0].rstrip()
+    field_matches = [
+        ln for ln in service_src.splitlines()
+        if re.match(
+            r"^var\s+_resetting_subscription_runtime\s*:\s*bool\s*=\s*false\s*$",
+            _strip_trailing_comment(ln),
+        )
+    ]
+    assert len(field_matches) == 1, (
+        "gdscript_connection_service.gd must declare exactly one field-scope "
+        "`var _resetting_subscription_runtime: bool = false` to carry the reentrance "
+        f"guard state across a full teardown. Found {len(field_matches)} matches."
+    )
+
+    # (1b) Isolate the function body — from `func _reset_subscription_runtime(`
+    # through the next top-level declaration (`func `, `class `, or
+    # decorator-terminated block) so pollution from adjacent definitions cannot
+    # corrupt the body-scoped assertions below.
+    lines = service_src.splitlines()
+    func_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _reset_subscription_runtime(")),
+        -1,
+    )
+    assert func_idx >= 0, (
+        "gdscript_connection_service.gd must define `func _reset_subscription_runtime(`."
+    )
+    body_lines: list[str] = []
+    for ln in lines[func_idx + 1 :]:
+        # Top-level terminators: any line that begins at column 0 with a GDScript
+        # top-level keyword or decorator — none of these can appear inside a
+        # function body because function bodies are tab-indented.
+        if ln.startswith(("func ", "class ", "static ", "@")):
+            break
+        body_lines.append(ln)
+
+    def _non_trivial(ln: str) -> bool:
+        stripped = ln.strip()
+        return bool(stripped) and not stripped.startswith("#")
+
+    non_trivial = [ln for ln in body_lines if _non_trivial(ln)]
+    assert len(non_trivial) >= 3, (
+        "`_reset_subscription_runtime` body must contain at least the three guard "
+        "statements (early-return, set=true, set=false) plus state-mutation code. "
+        f"Found only {len(non_trivial)} non-trivial statements."
+    )
+
+    # (1c) First three non-trivial statements are the early-return guard and the
+    # `= true` flip. The early-return spans two lines (`if …:` then `return`);
+    # the `= true` flip follows. Each must sit at exactly one tab of indentation
+    # (GDScript function-body scope) so a future refactor that wraps the guard
+    # inside an `if some_condition:` is rejected — an unconditional guard is the
+    # whole point.
+    def _body_indent(ln: str) -> str:
+        return ln[: len(ln) - len(ln.lstrip())]
+    first_three = [ln.strip() for ln in non_trivial[:3]]
+    first_three_indents = [_body_indent(ln) for ln in non_trivial[:3]]
+    assert first_three[0] == "if _resetting_subscription_runtime:", (
+        "`_reset_subscription_runtime` body must begin with "
+        "`if _resetting_subscription_runtime:` as its first non-comment statement. "
+        f"Got: {first_three[0]!r}"
+    )
+    assert first_three_indents[0] == "\t", (
+        "`if _resetting_subscription_runtime:` must sit at exactly one tab of "
+        "indentation (unconditional function-body scope). Got indent: "
+        f"{first_three_indents[0]!r}"
+    )
+    assert first_three[1] == "return", (
+        "`_reset_subscription_runtime` body's early-return guard must be `return` "
+        f"on the line immediately following the `if`. Got: {first_three[1]!r}"
+    )
+    assert first_three_indents[1] == "\t\t", (
+        "The `return` inside the entry guard must sit at two tabs (inside the "
+        "`if` block). Got indent: " + repr(first_three_indents[1])
+    )
+    assert first_three[2] == "_resetting_subscription_runtime = true", (
+        "`_reset_subscription_runtime` body must set "
+        "`_resetting_subscription_runtime = true` immediately after the early-return "
+        f"guard. Got: {first_three[2]!r}"
+    )
+    assert first_three_indents[2] == "\t", (
+        "`_resetting_subscription_runtime = true` must sit at exactly one tab — a "
+        "nested conditional would let the guard leak. Got indent: "
+        f"{first_three_indents[2]!r}"
+    )
+
+    # (1d) Last non-trivial statement is the bookend reset, at one tab of
+    # indentation (unconditional function-body scope).
+    assert non_trivial[-1].strip() == "_resetting_subscription_runtime = false", (
+        "`_reset_subscription_runtime` body's LAST non-comment statement must be "
+        "`_resetting_subscription_runtime = false` so the guard is cleared even if "
+        "earlier state-mutation code raised (GDScript's lack of `defer` means the "
+        "bookend only holds if it is unconditionally the final statement). "
+        f"Got: {non_trivial[-1].strip()!r}"
+    )
+    assert _body_indent(non_trivial[-1]) == "\t", (
+        "The bookend `_resetting_subscription_runtime = false` must sit at exactly "
+        "one tab — a nested conditional would let the guard leak on the skip path. "
+        f"Got indent: {_body_indent(non_trivial[-1])!r}"
+    )
+
+    # (2) Snapshot ordering — each emission loop must be preceded by its own
+    # snapshot-array declaration. The old-handle loop (fires first) consumes
+    # `pending_old_handle_ids` from `_pending_replacements.values()`; the
+    # subscription loop (fires second) consumes `pending_subscription_handles`
+    # from `_pending_subscriptions.values()`. A regression that moves either
+    # snapshot below its emission loop fails here.
+    body = "\n".join(body_lines)
+    old_snap_idx = body.find("pending_old_handle_ids: Array = []")
+    sub_snap_idx = body.find("pending_subscription_handles: Array = []")
+    first_emit_idx = body.find('emit_signal("subscription_failed"')
+    assert first_emit_idx >= 0, (
+        "`_reset_subscription_runtime` body must emit `subscription_failed` synthetically."
+    )
+    second_emit_idx = body.find('emit_signal("subscription_failed"', first_emit_idx + 1)
+    assert second_emit_idx >= 0, (
+        "`_reset_subscription_runtime` body must emit `subscription_failed` twice — "
+        "once per replacement-handle loop, once per pending-subscription loop."
+    )
+    assert old_snap_idx >= 0, (
+        "`_reset_subscription_runtime` body must declare "
+        "`var pending_old_handle_ids: Array = []` to snapshot "
+        "`_pending_replacements.values()` before emission."
+    )
+    assert sub_snap_idx >= 0, (
+        "`_reset_subscription_runtime` body must declare "
+        "`var pending_subscription_handles: Array = []` to snapshot "
+        "`_pending_subscriptions.values()` before emission."
+    )
+    assert old_snap_idx < first_emit_idx, (
+        "`pending_old_handle_ids` snapshot must precede the FIRST "
+        "`emit_signal(\"subscription_failed\", ...)` call. "
+        f"snapshot at {old_snap_idx}, first emit at {first_emit_idx}."
+    )
+    assert sub_snap_idx < second_emit_idx, (
+        "`pending_subscription_handles` snapshot must precede the SECOND "
+        "`emit_signal(\"subscription_failed\", ...)` call (the pending-subscription "
+        "emission loop). "
+        f"snapshot at {sub_snap_idx}, second emit at {second_emit_idx}."
+    )

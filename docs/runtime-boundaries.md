@@ -609,6 +609,28 @@ Three wire-level divergences were observed against the pinned runtime and are lo
 
 These observations are pinned by `tests/fixtures/gdscript_wire/manifest.json`, which records the exact `spacetime --version` output, module name, and `connection_id` each fixture was captured against. The same manifest also documents the still-unobserved `OneOffQueryResult` and `ProcedureResult` branches that remain raw until an authoritative capture exists. Any change here is a versioned refactor — do not hand-edit the `.bin` files.
 
+### Reentrance guard — GDScript teardown emission
+
+`_reset_subscription_runtime` in `gdscript_connection_service.gd` runs from
+`_schedule_retry_or_disconnect` and `_finish_disconnect` and emits synthetic
+`subscription_failed` events for every pending replacement and pending
+subscribe before clearing the pending maps. A `subscription_failed` handler
+that synchronously calls `open_connection()` — or any path that re-enters
+`_reset_subscription_runtime` — must not be allowed to interleave with the
+outer emission loops. Two structural rules enforce this:
+
+- **Entry guard.** The function starts with `if _resetting_subscription_runtime: return`, sets `_resetting_subscription_runtime = true` before any state mutation, and restores `false` as its last statement. A re-entrant call returns silently; the outer call owns the full teardown.
+- **Pre-emission snapshots.** Both loops build local arrays (`pending_old_handle_ids` from `_pending_replacements.values()`, `pending_subscription_handles` from `_pending_subscriptions.values()`) textually before the first `emit_signal("subscription_failed", ...)`. A reentrant `unsubscribe()` that clears those maps mid-iteration cannot cause a queued synthetic emission to be skipped.
+
+The sibling handlers `_handle_subscription_error` and `_handle_subscribe_applied`
+do **not** carry the same guard, and must not gain one without explicit review.
+Both fully complete state mutation (erase from `_pending_subscriptions`,
+unregister from the registry, close the handle) BEFORE emitting their
+respective signals; a synchronous reentrant call that reaches the same
+`request_id` finds the pending map already cleared and short-circuits at the
+`null` check. Cargo-culting the `_reset_subscription_runtime` guard into
+those functions would add dead ceremony.
+
 ---
 
 ## Threading Model
