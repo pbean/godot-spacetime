@@ -1108,3 +1108,120 @@ def test_corrupt_gzip_envelope_produces_distinct_protocol_error_landmark() -> No
         "connection_protocol.gd must preserve the `Decompressed ServerMessage payload too "
         "short.` landmark for the valid-envelope-empty failure mode."
     )
+
+
+def test_correlation_hygiene_round_2_landmarks_and_ordering() -> None:
+    # Slice 5 contract: four correlation-hygiene items must be structurally
+    # present — wrap-guard, null-socket-before-reserve ordering, pending-
+    # unsubscribes map + handler + drain-loop arm, synthetic-failure loop in
+    # reset before the pending-subscriptions clear.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+
+    # Item 4: `_pending_unsubscribes` field declared with the expected default.
+    assert re.search(
+        r"^var\s+_pending_unsubscribes\s*:\s*Dictionary\s*=\s*\{\}",
+        service_src,
+        re.MULTILINE,
+    ), (
+        "gdscript_connection_service.gd must declare "
+        "`var _pending_unsubscribes: Dictionary = {}` as the correlation map for "
+        "in-flight unsubscribe request_ids."
+    )
+
+    lines = service_src.splitlines()
+
+    def _body_for(func_prefix: str) -> str:
+        idx = next((i for i, ln in enumerate(lines) if ln.startswith(func_prefix)), -1)
+        assert idx >= 0, f"{func_prefix!r} must exist."
+        body: list[str] = []
+        for ln in lines[idx + 1 :]:
+            if ln.startswith("func "):
+                break
+            body.append(ln)
+        return "\n".join(body)
+
+    # Item 1: wrap-guard inside `_reserve_request_id`.
+    reserve_body = _body_for("func _reserve_request_id(")
+    assert "0xFFFFFFFF" in reserve_body, (
+        "`_reserve_request_id` body must reference `0xFFFFFFFF` to gate the u32 "
+        "wire-encoding wrap boundary."
+    )
+    assert "_schedule_retry_or_disconnect" in reserve_body, (
+        "`_reserve_request_id` body must call `_schedule_retry_or_disconnect` on wrap "
+        "so the session tears down before the wire sees a wrapped id."
+    )
+
+    # Item 2: null-socket check BEFORE `_reserve_request_id()` in
+    # `_send_unsubscribe_for_query_set`. Ordering landmark: the `_socket == null`
+    # substring must appear before the `_reserve_request_id(` substring in the
+    # function body.
+    unsub_body = _body_for("func _send_unsubscribe_for_query_set(")
+    null_check_idx = unsub_body.find("_socket == null")
+    reserve_call_idx = unsub_body.find("_reserve_request_id(")
+    assert null_check_idx >= 0, (
+        "`_send_unsubscribe_for_query_set` body must check `_socket == null`."
+    )
+    assert reserve_call_idx >= 0, (
+        "`_send_unsubscribe_for_query_set` body must call `_reserve_request_id(`."
+    )
+    assert null_check_idx < reserve_call_idx, (
+        "`_send_unsubscribe_for_query_set` must check `_socket == null` BEFORE calling "
+        "`_reserve_request_id(` so a vanishing socket does not burn a request_id under "
+        "the monotonic-counter contract."
+    )
+    assert "_pending_unsubscribes[request_id]" in unsub_body, (
+        "`_send_unsubscribe_for_query_set` body must populate "
+        "`_pending_unsubscribes[request_id] = query_set_id` so a later "
+        "`UnsubscribeApplied` can correlate."
+    )
+
+    # Item 4: `_handle_unsubscribe_applied` handler function exists with a
+    # body that erases from `_pending_unsubscribes`.
+    handle_unsub_body = _body_for("func _handle_unsubscribe_applied(")
+    assert "_pending_unsubscribes.erase(" in handle_unsub_body, (
+        "`_handle_unsubscribe_applied` body must erase the matching `request_id` entry "
+        "from `_pending_unsubscribes` on correlation."
+    )
+
+    # Item 4: `_drain_packets` match statement dispatches UnsubscribeApplied.
+    drain_body = _body_for("func _drain_packets(")
+    assert '"UnsubscribeApplied":' in drain_body and "_handle_unsubscribe_applied(" in drain_body, (
+        "`_drain_packets` match statement must dispatch `\"UnsubscribeApplied\"` to "
+        "`_handle_unsubscribe_applied(message)`."
+    )
+
+    # Item 3: synthetic-failure loop in `_reset_subscription_runtime` — the
+    # `subscription_failed` emission must appear BEFORE `_pending_subscriptions.clear()`.
+    reset_body = _body_for("func _reset_subscription_runtime(")
+    emit_idx = reset_body.find('emit_signal("subscription_failed"')
+    clear_idx = reset_body.find("_pending_subscriptions.clear()")
+    assert emit_idx >= 0, (
+        "`_reset_subscription_runtime` body must emit `subscription_failed` synthetically "
+        "on teardown so callers observe a terminal event for in-flight subscribes."
+    )
+    assert clear_idx >= 0, (
+        "`_reset_subscription_runtime` body must still clear `_pending_subscriptions`."
+    )
+    assert emit_idx < clear_idx, (
+        "`_reset_subscription_runtime` must emit the synthetic `subscription_failed` "
+        "BEFORE clearing `_pending_subscriptions` — clearing first would leave the "
+        "iteration source empty and the emission a no-op."
+    )
+    assert "_pending_unsubscribes.clear()" in reset_body, (
+        "`_reset_subscription_runtime` must also clear `_pending_unsubscribes` "
+        "symmetrically with `_pending_subscriptions`."
+    )
+    assert "Connection lost before SubscribeApplied" in reset_body, (
+        "`_reset_subscription_runtime` must cite the connection-lost reason verbatim "
+        "in the synthetic failure's `error_message` so callers can distinguish it from "
+        "server-sent `SubscriptionError` frames."
+    )

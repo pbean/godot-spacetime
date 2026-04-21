@@ -20,6 +20,22 @@ class DummyRegistry:
 		return handles_by_query_set_id.get(query_set_id)
 
 
+class DummyReconnectPolicy:
+	extends RefCounted
+
+	var max_attempts: int = 3
+
+	func try_begin_retry() -> Dictionary:
+		return {
+			"ok": true,
+			"attempt_number": 1,
+			"delay_seconds": 0.25,
+		}
+
+	func reset() -> void:
+		pass
+
+
 class DummyCacheStore:
 	extends RefCounted
 
@@ -46,6 +62,7 @@ class DummyCacheStore:
 var _row_changed_events: Array = []
 var _reducer_success_events: Array = []
 var _reducer_failure_events: Array = []
+var _subscription_failed_events: Array = []
 
 
 func _init() -> void:
@@ -70,6 +87,14 @@ func _init() -> void:
 			_run_bundle_truncation_cap_reducer_result()
 		"bundle_at_cap_emits_no_warning":
 			_run_bundle_at_cap_emits_no_warning()
+		"reserve_request_id_wraps_forces_disconnect":
+			_run_reserve_request_id_wraps_forces_disconnect()
+		"unsubscribe_null_socket_does_not_burn_request_id":
+			_run_unsubscribe_null_socket_does_not_burn_request_id()
+		"unsubscribe_applied_erases_pending_entry":
+			_run_unsubscribe_applied_erases_pending_entry()
+		"reset_subscription_runtime_emits_synthetic_failure":
+			_run_reset_subscription_runtime_emits_synthetic_failure()
 		"reducer_result_non_integer_request_id":
 			_run_reducer_result_non_integer_request_id()
 		"request_id_persists_across_reset":
@@ -90,6 +115,7 @@ func _new_service_context() -> Dictionary:
 	service.row_changed.connect(_on_row_changed)
 	service.reducer_call_succeeded.connect(_on_reducer_succeeded)
 	service.reducer_call_failed.connect(_on_reducer_failed)
+	service.subscription_failed.connect(_on_subscription_failed)
 	return {
 		"service": service,
 		"registry": registry,
@@ -101,6 +127,7 @@ func _reset_events() -> void:
 	_row_changed_events.clear()
 	_reducer_success_events.clear()
 	_reducer_failure_events.clear()
+	_subscription_failed_events.clear()
 
 
 func _run_transaction_update_non_numeric_id() -> void:
@@ -440,6 +467,105 @@ func _run_subscribe_applied_rebinds_query_set_id() -> void:
 	quit(0)
 
 
+func _run_reserve_request_id_wraps_forces_disconnect() -> void:
+	# Seed `_next_request_id` at the u32 boundary (`0xFFFFFFFF`). Calling
+	# `_reserve_request_id()` must push an error and schedule a retry/disconnect
+	# (because the NEXT reservation would wrap on the wire and could false-match
+	# a pending entry from the counter's start). The returned value is still the
+	# last valid u32; the subsequent disconnect tears down `_pending_*` state so
+	# the potentially-doomed value cannot false-match.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._current_status = service._make_status(
+		ServiceScript.STATE_CONNECTED,
+		"CONNECTED — harness transport",
+		ServiceScript.AUTH_NONE
+	)
+	service._reconnect_policy = DummyReconnectPolicy.new()
+	service._socket = WebSocketPeer.new()
+	service._next_request_id = 0xFFFFFFFF
+	var returned_id: int = service._reserve_request_id()
+	_emit_result({
+		"returned_id": returned_id,
+		"next_request_id_after": int(service._next_request_id),
+		"current_state": String(service._current_status.get("state", "")),
+		"socket_cleared": service._socket == null,
+	})
+	quit(0)
+
+
+func _run_unsubscribe_null_socket_does_not_burn_request_id() -> void:
+	# State is CONNECTED but `_socket == null` (observed when a handler nulled
+	# the socket synchronously). The new null-socket check BEFORE
+	# `_reserve_request_id()` must keep the counter unchanged and the pending
+	# map empty.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._current_status = service._make_status(
+		ServiceScript.STATE_CONNECTED,
+		"CONNECTED — harness transport",
+		ServiceScript.AUTH_NONE
+	)
+	service._socket = null
+	var before: int = int(service._next_request_id)
+	service._send_unsubscribe_for_query_set(5)
+	var after: int = int(service._next_request_id)
+	_emit_result({
+		"next_request_id_before": before,
+		"next_request_id_after": after,
+		"pending_unsubscribes_size": (service._pending_unsubscribes as Dictionary).size(),
+	})
+	quit(0)
+
+
+func _run_unsubscribe_applied_erases_pending_entry() -> void:
+	# Seed `_pending_unsubscribes` with a known entry; dispatch a matching
+	# `UnsubscribeApplied` frame; observe the entry erased. Also cover the
+	# late/stale case where the request_id does not match any pending entry —
+	# the handler must silently no-op (not push_error, not crash).
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._pending_unsubscribes[17] = 5
+	service._pending_unsubscribes[42] = 9
+	service._handle_unsubscribe_applied({"kind": "UnsubscribeApplied", "request_id": 17})
+	var size_after_match: int = (service._pending_unsubscribes as Dictionary).size()
+	var still_has_42: bool = (service._pending_unsubscribes as Dictionary).has(42)
+	# Stale / unknown request_id — must silently no-op.
+	service._handle_unsubscribe_applied({"kind": "UnsubscribeApplied", "request_id": 999})
+	var size_after_stale: int = (service._pending_unsubscribes as Dictionary).size()
+	_emit_result({
+		"size_after_match": size_after_match,
+		"still_has_42": still_has_42,
+		"size_after_stale": size_after_stale,
+	})
+	quit(0)
+
+
+func _run_reset_subscription_runtime_emits_synthetic_failure() -> void:
+	# Seed `_pending_subscriptions` with a handle so `_reset_subscription_runtime`
+	# can observe a pending entry. Call the reset; the new synthetic-failure
+	# loop must emit a `subscription_failed` signal with the handle_id of the
+	# pending entry BEFORE clearing the map.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var pending_handle = SubscriptionHandleScript.new(42, 11, 11)
+	service._pending_subscriptions[11] = pending_handle
+	# Also seed a pending unsubscribe to verify it gets cleared WITHOUT a
+	# synthetic signal (Ask First scoped that out).
+	service._pending_unsubscribes[88] = 7
+	service._reset_subscription_runtime()
+	_emit_result({
+		"subscription_failed_events": _jsonify(_subscription_failed_events),
+		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
+		"pending_unsubscribes_size_after": (service._pending_unsubscribes as Dictionary).size(),
+	})
+	quit(0)
+
+
 func _on_row_changed(event: Dictionary) -> void:
 	_row_changed_events.append(event.duplicate(true))
 
@@ -450,6 +576,10 @@ func _on_reducer_succeeded(event: Dictionary) -> void:
 
 func _on_reducer_failed(event: Dictionary) -> void:
 	_reducer_failure_events.append(event.duplicate(true))
+
+
+func _on_subscription_failed(event: Dictionary) -> void:
+	_subscription_failed_events.append(event.duplicate(true))
 
 
 func _jsonify(v: Variant) -> Variant:
