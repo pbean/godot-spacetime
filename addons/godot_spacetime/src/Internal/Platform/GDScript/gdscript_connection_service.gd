@@ -1335,6 +1335,26 @@ func _reset_subscription_runtime() -> void:
 	# clearing the map so callers waiting on a terminal event for their subscribe
 	# observe one. Emitted on the teardown path only (not on routine server-sent
 	# SubscriptionError, which takes the dedicated handler).
+	#
+	# The `_pending_replacements.values()` loop fires first so callers tracking a
+	# pre-replacement handle across a teardown observe a terminal event for the
+	# OLD handle — symmetric with `_handle_subscription_error` leaving the old
+	# handle live on the server-error path. Dedupe guards against any future
+	# relaxation of the `_pending_replacements` value-uniqueness invariant.
+	var emitted_old_handle_ids: Dictionary = {}
+	for pending_new_handle_id_variant in _pending_replacements.keys():
+		var old_handle_id := int(_pending_replacements[pending_new_handle_id_variant])
+		if emitted_old_handle_ids.has(old_handle_id):
+			continue
+		emitted_old_handle_ids[old_handle_id] = true
+		var old_handle = _subscription_registry.try_get_handle(old_handle_id)
+		if old_handle != null and old_handle.has_method("close"):
+			old_handle.close()
+		emit_signal("subscription_failed", {
+			"handle_id": old_handle_id,
+			"error_message": "Connection lost before replacement subscription was confirmed; pre-replacement handle terminated.",
+			"failed_at_unix_time": Time.get_unix_time_from_system(),
+		})
 	for pending_request_id in _pending_subscriptions.keys():
 		var pending_handle = _pending_subscriptions.get(pending_request_id)
 		if pending_handle == null:

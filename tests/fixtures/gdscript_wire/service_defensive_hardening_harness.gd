@@ -97,6 +97,10 @@ func _init() -> void:
 			_run_unsubscribe_applied_erases_pending_entry()
 		"reset_subscription_runtime_emits_synthetic_failure":
 			_run_reset_subscription_runtime_emits_synthetic_failure()
+		"reset_subscription_runtime_fails_pending_replacement_old_handle":
+			_run_reset_subscription_runtime_fails_pending_replacement_old_handle()
+		"reset_subscription_runtime_missing_old_handle_does_not_crash":
+			_run_reset_subscription_runtime_missing_old_handle_does_not_crash()
 		"retry_teardown_resets_subscription_runtime":
 			_run_retry_teardown_resets_subscription_runtime()
 		"reducer_result_non_integer_request_id":
@@ -595,6 +599,52 @@ func _run_reset_subscription_runtime_emits_synthetic_failure() -> void:
 		"handle_status_after": String(pending_handle.status),
 		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
 		"pending_unsubscribes_size_after": (service._pending_unsubscribes as Dictionary).size(),
+	})
+	quit(0)
+
+
+func _run_reset_subscription_runtime_fails_pending_replacement_old_handle() -> void:
+	# Seed both `_pending_subscriptions` (new handle id=43) AND
+	# `_pending_replacements[43] = 42` with the old handle registered. Teardown
+	# must emit a synthetic `subscription_failed` for the OLD handle FIRST (from
+	# the new `_pending_replacements.values()` loop) and then for the NEW handle
+	# (from the existing `_pending_subscriptions` iteration).
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var old_handle = SubscriptionHandleScript.new(42, 7, 7)
+	registry.handles_by_id[42] = old_handle
+	registry.handles_by_query_set_id[7] = old_handle
+	var new_handle = SubscriptionHandleScript.new(43, 11, 11)
+	service._pending_subscriptions[11] = new_handle
+	service._pending_replacements[43] = 42
+	service._reset_subscription_runtime()
+	_emit_result({
+		"subscription_failed_events": _jsonify(_subscription_failed_events),
+		"old_handle_status_after": String(old_handle.status),
+		"new_handle_status_after": String(new_handle.status),
+		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
+		"pending_replacements_size_after": (service._pending_replacements as Dictionary).size(),
+	})
+	quit(0)
+
+
+func _run_reset_subscription_runtime_missing_old_handle_does_not_crash() -> void:
+	# Edge: `_pending_replacements[43] = 42` but id=42 is NOT registered (e.g.
+	# racing superseded path already unregistered it). Teardown must still emit
+	# the synthetic failure for id=42, skip the `close()` call (no handle to
+	# close), and not crash. No pending-subscribe entry in this scenario — the
+	# `_pending_replacements` entry alone drives emission.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._pending_replacements[43] = 42
+	service._reset_subscription_runtime()
+	_emit_result({
+		"subscription_failed_events": _jsonify(_subscription_failed_events),
+		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
+		"pending_replacements_size_after": (service._pending_replacements as Dictionary).size(),
 	})
 	quit(0)
 

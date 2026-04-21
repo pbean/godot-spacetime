@@ -699,6 +699,81 @@ def test_reset_subscription_runtime_emits_synthetic_failure_for_pending_subscrib
     assert int(data["pending_unsubscribes_size_after"]) == 0
 
 
+def test_reset_subscription_runtime_fails_pending_replacement_old_handle() -> None:
+    # When teardown hits mid-replacement, `_reset_subscription_runtime` must emit a
+    # synthetic `subscription_failed` for the OLD handle referenced by
+    # `_pending_replacements.values()` BEFORE clearing the map — callers tracking the
+    # pre-replacement handle across a teardown would otherwise observe asymmetric
+    # semantics vs. the server-error path. Old-handle emission fires first, then the
+    # new-handle emission from the existing `_pending_subscriptions` iteration.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reset_subscription_runtime_fails_pending_replacement_old_handle"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    events = data["subscription_failed_events"]
+    assert len(events) == 2, (
+        f"teardown mid-replacement must emit exactly two subscription_failed signals "
+        f"(old handle then new handle); got {len(events)}: {events!r}"
+    )
+    # Old handle fires first.
+    assert int(events[0]["handle_id"]) == 42, (
+        f"first synthetic failure must name the OLD handle id (42); got {events[0]!r}"
+    )
+    assert "pre-replacement" in str(events[0]["error_message"]).lower(), (
+        f"old-handle payload must distinguish the replacement case; got {events[0]['error_message']!r}"
+    )
+    assert "failed_at_unix_time" in events[0]
+    # New handle fires second via the existing `_pending_subscriptions` loop.
+    assert int(events[1]["handle_id"]) == 43, (
+        f"second synthetic failure must name the NEW handle id (43); got {events[1]!r}"
+    )
+    assert "Connection lost before SubscribeApplied" in str(events[1]["error_message"]), (
+        f"new-handle payload must match the existing pending-subscribe message; got {events[1]['error_message']!r}"
+    )
+    # Both handles must be transitioned to Closed.
+    assert data["old_handle_status_after"] == "Closed"
+    assert data["new_handle_status_after"] == "Closed"
+    # Both pending maps cleared.
+    assert int(data["pending_subscriptions_size_after"]) == 0
+    assert int(data["pending_replacements_size_after"]) == 0
+
+
+def test_reset_subscription_runtime_handles_missing_old_handle_gracefully() -> None:
+    # Edge: `_pending_replacements[43] = 42` but id=42 was already unregistered
+    # mid-flight (racing superseded path). The synthetic failure for id=42 still
+    # fires and no crash occurs — `try_get_handle` returns null and the emission
+    # skips the `close()` call.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reset_subscription_runtime_missing_old_handle_does_not_crash"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    events = data["subscription_failed_events"]
+    # Only the old-handle synthetic fires (no pending subscribe for the new handle
+    # in this scenario — the `_pending_replacements` entry alone drives emission).
+    assert len(events) == 1
+    assert int(events[0]["handle_id"]) == 42
+
+
 def test_retry_teardown_resets_subscription_runtime_and_fails_pending_subscribe() -> None:
     # Degraded retry creates a new wire session without replaying subscriptions.
     # It must therefore clear old subscription runtime immediately, not wait
