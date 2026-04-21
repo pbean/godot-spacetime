@@ -772,6 +772,59 @@ def test_reset_subscription_runtime_handles_missing_old_handle_gracefully() -> N
     # in this scenario — the `_pending_replacements` entry alone drives emission).
     assert len(events) == 1
     assert int(events[0]["handle_id"]) == 42
+    assert int(data["pending_subscriptions_size_after"]) == 0
+    assert int(data["pending_replacements_size_after"]) == 0
+
+
+def test_reset_subscription_runtime_dedupes_duplicate_replacement_old_handles() -> None:
+    # Defensive edge: duplicate old-handle ids in `_pending_replacements.values()`
+    # must not double-emit a synthetic terminal event.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reset_subscription_runtime_dedupes_duplicate_replacement_old_handles"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    events = data["subscription_failed_events"]
+    assert len(events) == 1
+    assert int(events[0]["handle_id"]) == 42
+    assert data["old_handle_status_after"] == "Closed"
+    assert int(data["pending_replacements_size_after"]) == 0
+
+
+def test_reset_subscription_runtime_reentrant_old_failure_still_fails_new_handle() -> None:
+    # A synchronous old-handle failure listener can mutate pending maps by
+    # unsubscribing the replacement handle. Reset must still emit the new-handle
+    # terminal failure from a pre-emission snapshot.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reset_subscription_runtime_reentrant_old_failure_still_fails_new_handle"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    events = data["subscription_failed_events"]
+    assert int(data["reentrant_unsubscribe_count"]) == 1
+    assert [int(event["handle_id"]) for event in events] == [42, 43]
+    assert data["old_handle_status_after"] == "Closed"
+    assert data["new_handle_status_after"] == "Closed"
+    assert int(data["pending_subscriptions_size_after"]) == 0
+    assert int(data["pending_replacements_size_after"]) == 0
 
 
 def test_retry_teardown_resets_subscription_runtime_and_fails_pending_subscribe() -> None:

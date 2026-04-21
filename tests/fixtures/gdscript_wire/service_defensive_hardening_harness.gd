@@ -19,6 +19,24 @@ class DummyRegistry:
 				return handle
 		return handles_by_query_set_id.get(query_set_id)
 
+	func unregister(handle_id: int) -> Dictionary:
+		if not handles_by_id.has(handle_id):
+			return {}
+		var handle = handles_by_id[handle_id]
+		handles_by_id.erase(handle_id)
+		if handle != null:
+			handles_by_query_set_id.erase(int(handle.query_set_id))
+		return {
+			"handle": handle,
+		}
+
+	func clear() -> void:
+		for handle in handles_by_id.values():
+			if handle != null and handle.has_method("close"):
+				handle.close()
+		handles_by_id.clear()
+		handles_by_query_set_id.clear()
+
 
 class DummyReconnectPolicy:
 	extends RefCounted
@@ -63,6 +81,7 @@ var _row_changed_events: Array = []
 var _reducer_success_events: Array = []
 var _reducer_failure_events: Array = []
 var _subscription_failed_events: Array = []
+var _reentrant_unsubscribe_count: int = 0
 
 
 func _init() -> void:
@@ -101,6 +120,10 @@ func _init() -> void:
 			_run_reset_subscription_runtime_fails_pending_replacement_old_handle()
 		"reset_subscription_runtime_missing_old_handle_does_not_crash":
 			_run_reset_subscription_runtime_missing_old_handle_does_not_crash()
+		"reset_subscription_runtime_dedupes_duplicate_replacement_old_handles":
+			_run_reset_subscription_runtime_dedupes_duplicate_replacement_old_handles()
+		"reset_subscription_runtime_reentrant_old_failure_still_fails_new_handle":
+			_run_reset_subscription_runtime_reentrant_old_failure_still_fails_new_handle()
 		"retry_teardown_resets_subscription_runtime":
 			_run_retry_teardown_resets_subscription_runtime()
 		"reducer_result_non_integer_request_id":
@@ -136,6 +159,7 @@ func _reset_events() -> void:
 	_reducer_success_events.clear()
 	_reducer_failure_events.clear()
 	_subscription_failed_events.clear()
+	_reentrant_unsubscribe_count = 0
 
 
 func _run_transaction_update_non_numeric_id() -> void:
@@ -649,6 +673,58 @@ func _run_reset_subscription_runtime_missing_old_handle_does_not_crash() -> void
 	quit(0)
 
 
+func _run_reset_subscription_runtime_dedupes_duplicate_replacement_old_handles() -> void:
+	# Defensive edge: not constructible through the public API today, but the reset
+	# path promises at-most-once synthetic failure per old handle id.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var old_handle = SubscriptionHandleScript.new(42, 7, 7)
+	registry.handles_by_id[42] = old_handle
+	registry.handles_by_query_set_id[7] = old_handle
+	service._pending_replacements[43] = 42
+	service._pending_replacements[44] = 42
+	service._reset_subscription_runtime()
+	_emit_result({
+		"subscription_failed_events": _jsonify(_subscription_failed_events),
+		"old_handle_status_after": String(old_handle.status),
+		"pending_replacements_size_after": (service._pending_replacements as Dictionary).size(),
+	})
+	quit(0)
+
+
+func _run_reset_subscription_runtime_reentrant_old_failure_still_fails_new_handle() -> void:
+	# Reentrant listener: after the old-handle synthetic failure, synchronously
+	# unsubscribe the replacement handle. Reset still must emit the new-handle
+	# terminal failure from its pre-emission snapshot.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var old_handle = SubscriptionHandleScript.new(42, 7, 7)
+	registry.handles_by_id[42] = old_handle
+	registry.handles_by_query_set_id[7] = old_handle
+	var new_handle = SubscriptionHandleScript.new(43, 11, 11)
+	registry.handles_by_id[43] = new_handle
+	registry.handles_by_query_set_id[11] = new_handle
+	service._pending_subscriptions[11] = new_handle
+	service._pending_replacements[43] = 42
+	service.subscription_failed.connect(
+		_on_subscription_failed_reentrant_unsubscribe.bind(service, new_handle)
+	)
+	service._reset_subscription_runtime()
+	_emit_result({
+		"subscription_failed_events": _jsonify(_subscription_failed_events),
+		"reentrant_unsubscribe_count": _reentrant_unsubscribe_count,
+		"old_handle_status_after": String(old_handle.status),
+		"new_handle_status_after": String(new_handle.status),
+		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
+		"pending_replacements_size_after": (service._pending_replacements as Dictionary).size(),
+	})
+	quit(0)
+
+
 func _run_retry_teardown_resets_subscription_runtime() -> void:
 	# Degraded retry starts a fresh wire session; this service does not replay
 	# subscriptions across that session boundary. Retry scheduling must therefore
@@ -692,6 +768,13 @@ func _on_reducer_failed(event: Dictionary) -> void:
 
 func _on_subscription_failed(event: Dictionary) -> void:
 	_subscription_failed_events.append(event.duplicate(true))
+
+
+func _on_subscription_failed_reentrant_unsubscribe(event: Dictionary, service: Object, handle: Object) -> void:
+	if int(event.get("handle_id", -1)) != 42:
+		return
+	_reentrant_unsubscribe_count += 1
+	service.unsubscribe(handle)
 
 
 func _jsonify(v: Variant) -> Variant:

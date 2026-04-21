@@ -101,6 +101,7 @@ var _pending_replacements: Dictionary = {}
 # reserved request_ids from accumulating without correlation now that
 # `_next_request_id` is monotonic across reconnects.
 var _pending_unsubscribes: Dictionary = {}
+var _resetting_subscription_runtime: bool = false
 var _authoritative_handle_id: int = -1
 # request_id -> {invocation_id: String, reducer_name: String, called_at: float}
 var _pending_reducer_calls: Dictionary = {}
@@ -1330,6 +1331,10 @@ func _emit_row_changed_events(row_events: Array) -> void:
 
 
 func _reset_subscription_runtime() -> void:
+	if _resetting_subscription_runtime:
+		return
+	_resetting_subscription_runtime = true
+
 	# Synthetic failure events for any in-flight subscribe whose SubscribeApplied
 	# / SubscriptionError could no longer arrive on this session. Fire BEFORE
 	# clearing the map so callers waiting on a terminal event for their subscribe
@@ -1341,12 +1346,22 @@ func _reset_subscription_runtime() -> void:
 	# OLD handle — symmetric with `_handle_subscription_error` leaving the old
 	# handle live on the server-error path. Dedupe guards against any future
 	# relaxation of the `_pending_replacements` value-uniqueness invariant.
+	var pending_old_handle_ids: Array = []
 	var emitted_old_handle_ids: Dictionary = {}
-	for pending_new_handle_id_variant in _pending_replacements.keys():
-		var old_handle_id := int(_pending_replacements[pending_new_handle_id_variant])
+	for old_handle_id_variant in _pending_replacements.values():
+		var old_handle_id := int(old_handle_id_variant)
 		if emitted_old_handle_ids.has(old_handle_id):
 			continue
 		emitted_old_handle_ids[old_handle_id] = true
+		pending_old_handle_ids.append(old_handle_id)
+
+	var pending_subscription_handles: Array = []
+	for pending_handle in _pending_subscriptions.values():
+		if pending_handle != null:
+			pending_subscription_handles.append(pending_handle)
+
+	for old_handle_id_variant in pending_old_handle_ids:
+		var old_handle_id := int(old_handle_id_variant)
 		var old_handle = _subscription_registry.try_get_handle(old_handle_id)
 		if old_handle != null and old_handle.has_method("close"):
 			old_handle.close()
@@ -1355,10 +1370,7 @@ func _reset_subscription_runtime() -> void:
 			"error_message": "Connection lost before replacement subscription was confirmed; pre-replacement handle terminated.",
 			"failed_at_unix_time": Time.get_unix_time_from_system(),
 		})
-	for pending_request_id in _pending_subscriptions.keys():
-		var pending_handle = _pending_subscriptions.get(pending_request_id)
-		if pending_handle == null:
-			continue
+	for pending_handle in pending_subscription_handles:
 		if pending_handle.has_method("close"):
 			pending_handle.close()
 		emit_signal("subscription_failed", {
@@ -1394,6 +1406,7 @@ func _reset_subscription_runtime() -> void:
 	# accounting; clearing `_backlog_warning_emitted` re-arms the one-shot
 	# warning for the next episode.
 	_reset_backlog_saturation_state()
+	_resetting_subscription_runtime = false
 
 
 func _reset_pending_reducer_runtime() -> void:
