@@ -50,6 +50,13 @@ const DRAIN_PACKETS_PER_TICK: int = 128
 # spec owns escalation policy if real workload demands it.
 const BACKLOG_SATURATION_TICKS: int = 10
 const BACKLOG_WATERMARK_PACKETS: int = 512
+# Recovery hysteresis. `_backlog_warning_emitted` only clears after this many
+# consecutive below-cap ticks, symmetric to BACKLOG_SATURATION_TICKS on entry.
+# A single recovery tick no longer re-arms the dedup flag — prevents warning
+# spam under a flapping workload oscillating just above / just below the
+# per-tick cap. Within-episode `_consecutive_saturated_ticks` semantics are
+# unchanged; hysteresis gates only the flag re-arm.
+const BACKLOG_RECOVERY_TICKS: int = 10
 
 var _current_status: Dictionary = {}
 var _reconnect_policy = ReconnectPolicyScript.new()
@@ -91,6 +98,9 @@ var _next_invocation_id: int = 1
 # to 0 (recovery re-arms the next episode).
 var _consecutive_saturated_ticks: int = 0
 var _backlog_warning_emitted: bool = false
+# Hysteresis counter for the dedup-flag re-arm. Increments on each below-cap
+# tick; the flag clears only when it reaches BACKLOG_RECOVERY_TICKS.
+var _consecutive_below_cap_ticks: int = 0
 
 const REDUCER_RECOVERY_GUIDANCE_FAILED := "Check the reducer inputs or server-side rules before retrying or showing a player-facing error."
 const REDUCER_RECOVERY_GUIDANCE_OUT_OF_ENERGY := "Back off and retry later, or tell the player the action is temporarily unavailable."
@@ -415,6 +425,19 @@ func _drain_packets() -> void:
 	and _socket.get_available_packet_count() > 0:
 		if drained >= DRAIN_PACKETS_PER_TICK:
 			break
+		# Snapshot `_consecutive_saturated_ticks` AND `_backlog_warning_emitted`
+		# BEFORE dispatching a packet that may synchronously tear down the
+		# session. Every teardown arm (`_schedule_retry_or_disconnect` directly,
+		# `_finish_disconnect` via `_reset_subscription_runtime`) clears both
+		# the counter AND the dedup flag as part of teardown, so the post-loop
+		# `_update_backlog_saturation` observes zeroed state. The snapshots
+		# preserve both values for `_check_and_emit_pre_teardown_flush` — the
+		# counter decides whether the in-flight episode crossed the flush floor,
+		# and the pre-dispatch flag decides whether an earlier warn-threshold
+		# already emitted (which must suppress the flush to keep the per-session
+		# one-warning contract).
+		var saturated_ticks_before_dispatch := _consecutive_saturated_ticks
+		var warning_emitted_before_dispatch := _backlog_warning_emitted
 		drained += 1
 		var packet := _socket.get_packet()
 		# Observed spacetime 2.1.0 / v2.bsatn.spacetimedb: every frame carries
@@ -442,6 +465,11 @@ func _drain_packets() -> void:
 					_handle_connect_failure(parse_error)
 				else:
 					_schedule_retry_or_disconnect(parse_error)
+		# If the handler synchronously tore down the session, emit the one-shot
+		# pre-teardown flush warning using the pre-dispatch snapshots. The
+		# subsequent `_update_backlog_saturation` call sees post-reset state and
+		# cannot observe the saturation symptom that triggered teardown.
+		_check_and_emit_pre_teardown_flush(saturated_ticks_before_dispatch, warning_emitted_before_dispatch)
 	# Saturation-watermark accounting. The loop exited either because the
 	# buffer drained below `DRAIN_PACKETS_PER_TICK` (transient) or because the
 	# cap was hit (potential steady-state saturation). The `_socket == null`
@@ -453,6 +481,39 @@ func _drain_packets() -> void:
 	_update_backlog_saturation(saturated_this_tick, buffered_after)
 
 
+# Fire the one-shot pre-teardown flush `push_warning` if a packet handler
+# synchronously nulled `_socket` while the backlog had reached at least
+# half-threshold. Called from inside `_drain_packets` after every packet
+# dispatch — the snapshot survives `_reset_backlog_saturation_state()` which
+# every teardown arm invokes before control returns to the drain loop.
+#
+# Extracted so the flush contract is directly testable from the existing
+# harness without a fake WebSocketPeer: set `_socket = null`, call with chosen
+# snapshot values, observe the state transition and `push_warning` emission.
+# The pre-dispatch flag snapshot (not the live flag) gates the dedup — teardown
+# resets the live flag to false, but an earlier warn-threshold warning in the
+# same session must still suppress the flush.
+func _check_and_emit_pre_teardown_flush(saturated_ticks_before_dispatch: int, warning_emitted_before_dispatch: bool) -> void:
+	if _socket == null \
+	and not warning_emitted_before_dispatch \
+	and saturated_ticks_before_dispatch >= BACKLOG_SATURATION_TICKS / 2:
+		push_warning(
+			"GDScript wire: backlog saturation symptom at teardown — %d consecutive ticks at cap before close" \
+			% saturated_ticks_before_dispatch
+		)
+		# Intentionally no flag mutation here. The teardown path has already
+		# cleared `_backlog_warning_emitted` via `_reset_backlog_saturation_state()`
+		# (either directly in `_schedule_retry_or_disconnect` or transitively via
+		# `_reset_subscription_runtime` in `_finish_disconnect`). Setting the flag
+		# again from this branch would bleed "a warning was emitted" state across
+		# the degraded-reconnect cycle: the DEGRADED retry path does not run
+		# another reset before `_start_transport` creates the next socket, so the
+		# flag would survive and suppress the first legitimate warn-threshold
+		# warning in the NEW session. Within-session dedup is unnecessary because
+		# `_socket == null` blocks further `_drain_packets` iterations, so the
+		# flush helper can only fire once per session regardless.
+
+
 # Advance the per-tick saturation state machine. Extracted from `_drain_packets`
 # so the state transitions can be exercised directly (by tests and by a future
 # caller that needs to bump accounting without actually draining packets).
@@ -461,8 +522,13 @@ func _drain_packets() -> void:
 # induced teardown is reported as not-saturated — see the teardown-drop
 # contract on `_drain_packets`). `buffered_after` is the OS packet backlog
 # observed after the tick drained, and is only consulted on the warn-arm.
+# Pre-teardown flush emission lives in `_check_and_emit_pre_teardown_flush`
+# inside `_drain_packets`, not here — see the spec's Design Notes for why.
 func _update_backlog_saturation(saturated_this_tick: bool, buffered_after: int) -> void:
 	if saturated_this_tick:
+		# A saturated tick resets the hysteresis counter — any recovery run
+		# has to start over before the dedup flag can re-arm.
+		_consecutive_below_cap_ticks = 0
 		_consecutive_saturated_ticks += 1
 		if _consecutive_saturated_ticks >= BACKLOG_SATURATION_TICKS \
 		and not _backlog_warning_emitted \
@@ -473,12 +539,20 @@ func _update_backlog_saturation(saturated_this_tick: bool, buffered_after: int) 
 			)
 			_backlog_warning_emitted = true
 	else:
-		_reset_backlog_saturation_state()
+		# Within-episode counter zeros on every below-cap tick (unchanged).
+		_consecutive_saturated_ticks = 0
+		# Hysteresis. Dedup flag clears only after BACKLOG_RECOVERY_TICKS
+		# consecutive below-cap ticks — a single flap does not re-arm.
+		_consecutive_below_cap_ticks += 1
+		if _consecutive_below_cap_ticks >= BACKLOG_RECOVERY_TICKS:
+			_backlog_warning_emitted = false
+			_consecutive_below_cap_ticks = 0
 
 
 func _reset_backlog_saturation_state() -> void:
 	_consecutive_saturated_ticks = 0
 	_backlog_warning_emitted = false
+	_consecutive_below_cap_ticks = 0
 
 
 func _handle_initial_connection(message: Dictionary) -> void:

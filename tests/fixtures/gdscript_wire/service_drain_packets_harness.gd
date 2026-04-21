@@ -55,6 +55,16 @@ func _init() -> void:
 			_run_retry_disconnect_clears_saturation_state()
 		"teardown_treated_as_not_saturated":
 			_run_teardown_treated_as_not_saturated()
+		"pre_teardown_flush_fires_above_half_threshold":
+			_run_pre_teardown_flush_fires_above_half_threshold()
+		"pre_teardown_flush_suppressed_below_half":
+			_run_pre_teardown_flush_suppressed_below_half()
+		"pre_teardown_flush_suppressed_when_already_emitted":
+			_run_pre_teardown_flush_suppressed_when_already_emitted()
+		"hysteresis_single_recovery_does_not_rearm":
+			_run_hysteresis_single_recovery_does_not_rearm()
+		"hysteresis_n_recoveries_rearm":
+			_run_hysteresis_n_recoveries_rearm()
 		"mid_drain_teardown_disconnects_and_drops_remaining_packets":
 			_run_mid_drain_teardown_disconnects_and_drops_remaining_packets()
 		_:
@@ -117,7 +127,10 @@ func _run_recovery_re_arms_de_dup_flag() -> void:
 		service._update_backlog_saturation(true, ServiceScript.BACKLOG_WATERMARK_PACKETS + 1024)
 	var episode1_counter := int(service._consecutive_saturated_ticks)
 	var episode1_emitted := bool(service._backlog_warning_emitted)
-	service._update_backlog_saturation(false, 0)
+	# BACKLOG_RECOVERY_TICKS consecutive below-cap ticks are required to re-arm
+	# the dedup flag under the hysteresis gate added by the saturation-polish spec.
+	for _i in range(ServiceScript.BACKLOG_RECOVERY_TICKS):
+		service._update_backlog_saturation(false, 0)
 	var post_recovery_counter := int(service._consecutive_saturated_ticks)
 	var post_recovery_emitted := bool(service._backlog_warning_emitted)
 	for _i in range(ServiceScript.BACKLOG_SATURATION_TICKS):
@@ -128,6 +141,99 @@ func _run_recovery_re_arms_de_dup_flag() -> void:
 		"episode1": {"counter": episode1_counter, "emitted": episode1_emitted},
 		"post_recovery": {"counter": post_recovery_counter, "emitted": post_recovery_emitted},
 		"episode2": {"counter": episode2_counter, "emitted": episode2_emitted},
+	})
+	quit(0)
+
+
+func _run_pre_teardown_flush_fires_above_half_threshold() -> void:
+	var service = ServiceScript.new()
+	# Seed the dispatch-time snapshot at half-threshold + 1 — above the floor
+	# but below the warn threshold. Null the socket to simulate a handler that
+	# already tore down the session. Pre-dispatch flag is false (no prior warn).
+	# The flush helper intentionally does not mutate `_backlog_warning_emitted`
+	# (see the helper's comment on cross-session bleed), so the post-call live
+	# flag stays whatever the teardown reset already set (false in this case).
+	var snapshot: int = ServiceScript.BACKLOG_SATURATION_TICKS / 2 + 1
+	service._socket = null
+	service._check_and_emit_pre_teardown_flush(snapshot, false)
+	_emit_result({
+		"snapshot": snapshot,
+		"live_flag": bool(service._backlog_warning_emitted),
+	})
+	quit(0)
+
+
+func _run_pre_teardown_flush_suppressed_below_half() -> void:
+	var service = ServiceScript.new()
+	# Snapshot below the half-threshold floor — flush must not fire.
+	var snapshot: int = max(0, ServiceScript.BACKLOG_SATURATION_TICKS / 2 - 1)
+	service._socket = null
+	service._check_and_emit_pre_teardown_flush(snapshot, false)
+	_emit_result({
+		"snapshot": snapshot,
+		"emitted": bool(service._backlog_warning_emitted),
+	})
+	quit(0)
+
+
+func _run_pre_teardown_flush_suppressed_when_already_emitted() -> void:
+	var service = ServiceScript.new()
+	# Snapshot well above the floor, but the pre-dispatch flag snapshot is true
+	# — the threshold warning fired earlier in the same session, so the flush
+	# must suppress to keep the per-session one-warning contract.
+	var snapshot: int = ServiceScript.BACKLOG_SATURATION_TICKS + 2
+	service._socket = null
+	service._check_and_emit_pre_teardown_flush(snapshot, true)
+	_emit_result({
+		"snapshot": snapshot,
+		"emitted": bool(service._backlog_warning_emitted),
+	})
+	quit(0)
+
+
+func _run_hysteresis_single_recovery_does_not_rearm() -> void:
+	var service = ServiceScript.new()
+	for _i in range(ServiceScript.BACKLOG_SATURATION_TICKS):
+		service._update_backlog_saturation(true, ServiceScript.BACKLOG_WATERMARK_PACKETS + 1024)
+	var after_warn_emitted := bool(service._backlog_warning_emitted)
+	# One below-cap tick — must NOT re-arm under hysteresis.
+	service._update_backlog_saturation(false, 0)
+	var post_single_recovery_emitted := bool(service._backlog_warning_emitted)
+	# Saturate back to threshold — no fresh warning should fire (flag still set).
+	for _i in range(ServiceScript.BACKLOG_SATURATION_TICKS):
+		service._update_backlog_saturation(true, ServiceScript.BACKLOG_WATERMARK_PACKETS + 1024)
+	var second_episode_emitted := bool(service._backlog_warning_emitted)
+	var second_episode_counter := int(service._consecutive_saturated_ticks)
+	_emit_result({
+		"after_warn_emitted": after_warn_emitted,
+		"post_single_recovery_emitted": post_single_recovery_emitted,
+		"second_episode": {"emitted": second_episode_emitted, "counter": second_episode_counter},
+	})
+	quit(0)
+
+
+func _run_hysteresis_n_recoveries_rearm() -> void:
+	var service = ServiceScript.new()
+	for _i in range(ServiceScript.BACKLOG_SATURATION_TICKS):
+		service._update_backlog_saturation(true, ServiceScript.BACKLOG_WATERMARK_PACKETS + 1024)
+	var after_warn_emitted := bool(service._backlog_warning_emitted)
+	# N - 1 below-cap ticks — flag should still be set (one short of re-arm).
+	for _i in range(ServiceScript.BACKLOG_RECOVERY_TICKS - 1):
+		service._update_backlog_saturation(false, 0)
+	var pre_rearm_emitted := bool(service._backlog_warning_emitted)
+	# N-th below-cap tick completes the hysteresis window — flag re-arms.
+	service._update_backlog_saturation(false, 0)
+	var post_rearm_emitted := bool(service._backlog_warning_emitted)
+	# A new episode should now produce a fresh warning.
+	for _i in range(ServiceScript.BACKLOG_SATURATION_TICKS):
+		service._update_backlog_saturation(true, ServiceScript.BACKLOG_WATERMARK_PACKETS + 1024)
+	var second_episode_emitted := bool(service._backlog_warning_emitted)
+	var second_episode_counter := int(service._consecutive_saturated_ticks)
+	_emit_result({
+		"after_warn_emitted": after_warn_emitted,
+		"pre_rearm_emitted": pre_rearm_emitted,
+		"post_rearm_emitted": post_rearm_emitted,
+		"second_episode": {"emitted": second_episode_emitted, "counter": second_episode_counter},
 	})
 	quit(0)
 

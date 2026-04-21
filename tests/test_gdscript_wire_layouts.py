@@ -772,6 +772,19 @@ def test_drain_packets_backlog_saturation_watermark() -> None:
     assert int(ticks_match.group(1)) > 0, (
         f"BACKLOG_SATURATION_TICKS must be positive. got {ticks_match.group(1)}"
     )
+    recovery_match = re.search(
+        r"^const\s+BACKLOG_RECOVERY_TICKS\s*:\s*int\s*=\s*(\d+)",
+        service_src,
+        re.MULTILINE,
+    )
+    assert recovery_match is not None, (
+        "gdscript_connection_service.gd must declare "
+        "`const BACKLOG_RECOVERY_TICKS: int = <positive int>` to gate the dedup-flag "
+        "re-arm under hysteresis."
+    )
+    assert int(recovery_match.group(1)) > 0, (
+        f"BACKLOG_RECOVERY_TICKS must be positive. got {recovery_match.group(1)}"
+    )
     watermark_match = re.search(
         r"^const\s+BACKLOG_WATERMARK_PACKETS\s*:\s*int\s*=\s*(\d+)",
         service_src,
@@ -806,6 +819,14 @@ def test_drain_packets_backlog_saturation_watermark() -> None:
         service_src,
         re.MULTILINE,
     ), "`var _backlog_warning_emitted: bool = false` field declaration missing."
+    assert re.search(
+        r"^var\s+_consecutive_below_cap_ticks\s*:\s*int\s*=\s*0",
+        service_src,
+        re.MULTILINE,
+    ), (
+        "`var _consecutive_below_cap_ticks: int = 0` field declaration missing — "
+        "required by the hysteresis gate added in the saturation-polish spec."
+    )
     # (c) `_drain_packets` must hand off to the extracted state-machine helper
     # `_update_backlog_saturation`, which owns the thresholds / counter /
     # de-dup flag / warn-emit site. The extraction is what lets runtime tests
@@ -825,6 +846,22 @@ def test_drain_packets_backlog_saturation_watermark() -> None:
     assert "_update_backlog_saturation(" in drain_body, (
         "`_drain_packets` body must delegate to `_update_backlog_saturation(...)` so the "
         "state-machine transitions are unit-testable."
+    )
+    # The pre-teardown flush emission lives inline in `_drain_packets` (not in
+    # `_update_backlog_saturation`) because every teardown arm resets the
+    # saturation counter BEFORE control returns to the post-loop accounting.
+    # `_drain_packets` must snapshot the pre-dispatch counter and hand it to
+    # `_check_and_emit_pre_teardown_flush` so the flush sees the real
+    # pre-teardown value, not the zeroed post-reset value.
+    assert "saturated_ticks_before_dispatch" in drain_body, (
+        "`_drain_packets` body must snapshot `_consecutive_saturated_ticks` into a "
+        "`saturated_ticks_before_dispatch` local before each packet dispatch so the "
+        "pre-teardown flush sees the real pre-reset counter value."
+    )
+    assert "_check_and_emit_pre_teardown_flush(" in drain_body, (
+        "`_drain_packets` body must call `_check_and_emit_pre_teardown_flush(...)` after "
+        "each packet dispatch so handler-induced teardowns get logged with the pre-reset "
+        "saturation counter."
     )
     helper_idx = next(
         (i for i, ln in enumerate(lines) if ln.startswith("func _update_backlog_saturation(")),
@@ -849,18 +886,76 @@ def test_drain_packets_backlog_saturation_watermark() -> None:
         "`_update_backlog_saturation` body must increment `_consecutive_saturated_ticks` "
         "exactly once per saturated tick. Expected literal `_consecutive_saturated_ticks += 1`."
     )
-    assert "_reset_backlog_saturation_state()" in helper_body, (
-        "`_update_backlog_saturation` body must reset the episode on the non-saturated "
-        "branch via `_reset_backlog_saturation_state()`."
+    assert "_consecutive_saturated_ticks = 0" in helper_body, (
+        "`_update_backlog_saturation` body must zero `_consecutive_saturated_ticks` inline "
+        "on every below-cap tick (within-episode counter semantics unchanged). Expected "
+        "literal `_consecutive_saturated_ticks = 0` on the non-saturated branch."
+    )
+    assert "_consecutive_below_cap_ticks += 1" in helper_body, (
+        "`_update_backlog_saturation` body must increment `_consecutive_below_cap_ticks` "
+        "on each below-cap tick to implement the hysteresis gate."
+    )
+    assert "BACKLOG_RECOVERY_TICKS" in helper_body, (
+        "`_update_backlog_saturation` body must reference BACKLOG_RECOVERY_TICKS to gate "
+        "dedup-flag re-arm under the hysteresis contract."
     )
     assert "_backlog_warning_emitted = true" in helper_body, (
         "`_update_backlog_saturation` body must set `_backlog_warning_emitted = true` on "
         "the warn-emit branch to de-dup per-episode."
     )
+    assert "_backlog_warning_emitted = false" in helper_body, (
+        "`_update_backlog_saturation` body must clear `_backlog_warning_emitted = false` "
+        "on the hysteresis-triggered re-arm branch."
+    )
     push_warning_count = helper_body.count("push_warning(")
     assert push_warning_count >= 1, (
         "`_update_backlog_saturation` body must emit `push_warning(` at least once "
         "(the saturation warn)."
+    )
+    # Pre-teardown flush emission lives in a dedicated helper so it stays
+    # direct-testable from the harness (no fake WebSocketPeer needed).
+    flush_helper_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith("func _check_and_emit_pre_teardown_flush(")),
+        -1,
+    )
+    assert flush_helper_idx >= 0, (
+        "`func _check_and_emit_pre_teardown_flush(` must exist so the pre-teardown flush "
+        "can be direct-tested without standing up a fake WebSocketPeer."
+    )
+    flush_helper_body_lines: list[str] = []
+    for ln in lines[flush_helper_idx + 1 :]:
+        if ln.startswith("func "):
+            break
+        flush_helper_body_lines.append(ln)
+    flush_helper_body = "\n".join(flush_helper_body_lines)
+    assert "_socket == null" in flush_helper_body, (
+        "`_check_and_emit_pre_teardown_flush` body must gate on `_socket == null` so the "
+        "flush fires only when a handler has torn down the session."
+    )
+    assert "not warning_emitted_before_dispatch" in flush_helper_body, (
+        "`_check_and_emit_pre_teardown_flush` body must gate on the pre-dispatch snapshot "
+        "(`not warning_emitted_before_dispatch`) — the live `_backlog_warning_emitted` "
+        "field is already zeroed by the teardown-path reset when control reaches the flush."
+    )
+    assert "BACKLOG_SATURATION_TICKS / 2" in flush_helper_body, (
+        "`_check_and_emit_pre_teardown_flush` body must compare the snapshot against "
+        "`BACKLOG_SATURATION_TICKS / 2` (half-threshold floor)."
+    )
+    assert "saturation symptom at teardown" in flush_helper_body, (
+        "`_check_and_emit_pre_teardown_flush` body must emit a push_warning containing "
+        "the literal `saturation symptom at teardown` substring so operators debugging a "
+        "saturation-triggered disconnect see the symptom."
+    )
+    assert flush_helper_body.count("push_warning(") == 1, (
+        "`_check_and_emit_pre_teardown_flush` body must emit exactly one `push_warning(` — "
+        "the pre-teardown flush."
+    )
+    assert "_backlog_warning_emitted = true" not in flush_helper_body, (
+        "`_check_and_emit_pre_teardown_flush` body must NOT set "
+        "`_backlog_warning_emitted = true` — doing so would bleed the dedup flag across "
+        "the degraded-reconnect cycle, since `_start_transport` does not run another "
+        "`_reset_backlog_saturation_state()`. Within-session dedup is unnecessary "
+        "because `_socket == null` blocks further drain iterations."
     )
     reset_helper_idx = next(
         (i for i, ln in enumerate(lines) if ln.startswith("func _reset_backlog_saturation_state(")),
@@ -881,6 +976,10 @@ def test_drain_packets_backlog_saturation_watermark() -> None:
     )
     assert "_backlog_warning_emitted = false" in reset_helper_body, (
         "`_reset_backlog_saturation_state` must clear `_backlog_warning_emitted = false`."
+    )
+    assert "_consecutive_below_cap_ticks = 0" in reset_helper_body, (
+        "`_reset_backlog_saturation_state` must clear `_consecutive_below_cap_ticks = 0` "
+        "so the hysteresis counter starts fresh after a session reset."
     )
     # (d) `_reset_subscription_runtime` must clear both fields so a reconnect
     # starts with a fresh saturation-accounting window.
