@@ -281,12 +281,14 @@ def test_recovery_re_arms_de_dup_flag_for_next_episode() -> None:
     episode2 = data["episode2"]
     # Episode 1: threshold reached → flag set.
     assert episode1["emitted"] is True
-    # Recovery tick: both fields clear.
+    # After BACKLOG_RECOVERY_TICKS consecutive below-cap ticks (hysteresis
+    # re-arm window), counter is back at 0 and the dedup flag has cleared.
     assert post_recovery["counter"] == 0, (
-        f"recovery tick must zero the counter; got {post_recovery['counter']}"
+        f"after the hysteresis re-arm window, counter must be 0; got {post_recovery['counter']}"
     )
     assert post_recovery["emitted"] is False, (
-        f"recovery tick must clear the de-dup flag; got emitted={post_recovery['emitted']}"
+        f"after BACKLOG_RECOVERY_TICKS consecutive below-cap ticks the dedup flag must clear; "
+        f"got emitted={post_recovery['emitted']}"
     )
     # Episode 2: flag must re-fire. If the recovery had failed to clear the
     # flag, episode 2 would reach threshold with emitted=True already set by
@@ -362,6 +364,136 @@ def test_teardown_tick_treated_as_not_saturated() -> None:
         f"got {data['post_teardown_counter']}"
     )
     assert bool(data["post_teardown_emitted"]) is False
+
+
+def test_pre_teardown_flush_fires_above_half_threshold() -> None:
+    proc = _run_harness_process("pre_teardown_flush_fires_above_half_threshold")
+    data = _unwrap(
+        _parse_harness_result(proc, "pre_teardown_flush_fires_above_half_threshold"),
+        "pre_teardown_flush_fires_above_half_threshold",
+    )
+    assert int(data["snapshot"]) > 0
+    # The flush helper intentionally does NOT set `_backlog_warning_emitted`
+    # (that would bleed across the degraded-reconnect cycle — see the helper's
+    # comment). The stderr count is the real observable for emission.
+    assert bool(data["live_flag"]) is False, (
+        "flush helper must not mutate `_backlog_warning_emitted`; the flag must stay "
+        f"whatever the teardown reset left it (false). got live_flag={data['live_flag']}"
+    )
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert stderr.count("saturation symptom at teardown") == 1, (
+        "flush must emit exactly one push_warning containing "
+        f"'saturation symptom at teardown'. stderr tail: {stderr[-1200:]}"
+    )
+
+
+def _read_saturation_threshold_constant() -> int:
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    import re as _re
+
+    match = _re.search(
+        r"^const\s+BACKLOG_SATURATION_TICKS\s*:\s*int\s*=\s*(\d+)",
+        service_src,
+        _re.MULTILINE,
+    )
+    assert match is not None, (
+        "gdscript_connection_service.gd must still declare BACKLOG_SATURATION_TICKS"
+    )
+    return int(match.group(1))
+
+
+def test_pre_teardown_flush_suppressed_below_half_threshold() -> None:
+    proc = _run_harness_process("pre_teardown_flush_suppressed_below_half")
+    data = _unwrap(
+        _parse_harness_result(proc, "pre_teardown_flush_suppressed_below_half"),
+        "pre_teardown_flush_suppressed_below_half",
+    )
+    half_threshold = _read_saturation_threshold_constant() // 2
+    assert int(data["snapshot"]) < half_threshold, (
+        f"harness should have seeded a snapshot below the half-threshold floor ({half_threshold}); "
+        f"got {data['snapshot']}"
+    )
+    assert bool(data["emitted"]) is False, (
+        "_check_and_emit_pre_teardown_flush must suppress when snapshot is below "
+        f"the half-threshold floor; got emitted={data['emitted']}"
+    )
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "saturation symptom at teardown" not in stderr, (
+        "no flush warning should appear on stderr when the snapshot is below the floor. "
+        f"stderr tail: {stderr[-1200:]}"
+    )
+
+
+def test_pre_teardown_flush_suppressed_when_already_emitted() -> None:
+    proc = _run_harness_process("pre_teardown_flush_suppressed_when_already_emitted")
+    data = _unwrap(
+        _parse_harness_result(proc, "pre_teardown_flush_suppressed_when_already_emitted"),
+        "pre_teardown_flush_suppressed_when_already_emitted",
+    )
+    # The flush checks the pre-dispatch flag snapshot — when it was already set,
+    # the flush suppresses itself and never touches the live flag.
+    assert bool(data["emitted"]) is False, (
+        "flush must not touch `_backlog_warning_emitted` when the pre-dispatch snapshot "
+        f"shows a warning was already emitted; got emitted={data['emitted']}"
+    )
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "saturation symptom at teardown" not in stderr, (
+        "flush warning must not appear when the pre-dispatch flag snapshot was true. "
+        f"stderr tail: {stderr[-1200:]}"
+    )
+
+
+def test_hysteresis_single_recovery_does_not_rearm_de_dup_flag() -> None:
+    proc = _run_harness_process("hysteresis_single_recovery_does_not_rearm")
+    data = _unwrap(
+        _parse_harness_result(proc, "hysteresis_single_recovery_does_not_rearm"),
+        "hysteresis_single_recovery_does_not_rearm",
+    )
+    assert data["after_warn_emitted"] is True
+    assert data["post_single_recovery_emitted"] is True, (
+        "a single below-cap tick must NOT re-arm the dedup flag under hysteresis; "
+        f"got post_single_recovery_emitted={data['post_single_recovery_emitted']}"
+    )
+    assert data["second_episode"]["emitted"] is True
+    stderr = proc.stderr.decode("utf-8", "replace")
+    # Exactly ONE warning across the whole session — flapping produces no spam.
+    assert stderr.count(BACKLOG_WARNING_PREFIX) == 1, (
+        "flapping workload must NOT produce a second warning when recovery is only one "
+        f"tick long. stderr tail: {stderr[-1200:]}"
+    )
+
+
+def test_hysteresis_n_consecutive_recoveries_rearm_de_dup_flag() -> None:
+    proc = _run_harness_process("hysteresis_n_recoveries_rearm")
+    data = _unwrap(
+        _parse_harness_result(proc, "hysteresis_n_recoveries_rearm"),
+        "hysteresis_n_recoveries_rearm",
+    )
+    assert data["after_warn_emitted"] is True
+    assert data["pre_rearm_emitted"] is True, (
+        "dedup flag must still be set after only BACKLOG_RECOVERY_TICKS - 1 below-cap ticks; "
+        f"got pre_rearm_emitted={data['pre_rearm_emitted']}"
+    )
+    assert data["post_rearm_emitted"] is False, (
+        "the full BACKLOG_RECOVERY_TICKS hysteresis window must clear the dedup flag; "
+        f"got post_rearm_emitted={data['post_rearm_emitted']}"
+    )
+    assert data["second_episode"]["emitted"] is True
+    stderr = proc.stderr.decode("utf-8", "replace")
+    # Two warnings total — the first episode and the second after full hysteresis.
+    assert stderr.count(BACKLOG_WARNING_PREFIX) == 2, (
+        "full hysteresis recovery must re-arm the next episode so a second warning fires. "
+        f"stderr tail: {stderr[-1200:]}"
+    )
 
 
 def test_mid_drain_teardown_drops_remaining_packets_and_disconnects_cleanly() -> None:
