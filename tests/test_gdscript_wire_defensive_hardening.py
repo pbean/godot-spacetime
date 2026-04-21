@@ -625,8 +625,10 @@ def test_unsubscribe_applied_erases_pending_entry_and_no_ops_on_stale_id() -> No
     result = _parse_harness_result(proc)
     assert result.get("ok"), f"harness reported error: {result}"
     data = result["data"]
-    # After the matched frame: size dropped from 2 to 1 (entry 17 erased),
-    # entry 42 still present.
+    assert int(data["size_after_mismatch"]) == 2
+    assert bool(data["still_has_17_after_mismatch"]) is True
+    # After the matched request_id + query_set_id frame: size dropped from 2 to
+    # 1 (entry 17 erased), entry 42 still present.
     assert int(data["size_after_match"]) == 1
     assert bool(data["still_has_42"]) is True
     # After the stale frame: size unchanged, no error pushed.
@@ -637,6 +639,28 @@ def test_unsubscribe_applied_erases_pending_entry_and_no_ops_on_stale_id() -> No
         "stale UnsubscribeApplied (integer request_id, just unknown) must not trigger "
         f"the non-integer warning. stderr tail: {stderr[-1200:]}"
     )
+
+
+def test_unsubscribe_send_failure_does_not_record_pending_entry() -> None:
+    # If Godot refuses the outbound packet after a request_id was reserved, the
+    # id is burned but must not be recorded as a pending unsubscribe. No server
+    # ack can arrive for a packet that was never accepted by the socket.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["unsubscribe_send_failure_does_not_record_pending"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert int(data["next_request_id_after"]) == int(data["next_request_id_before"]) + 1
+    assert int(data["pending_unsubscribes_size"]) == 0
 
 
 def test_reset_subscription_runtime_emits_synthetic_failure_for_pending_subscribes() -> None:
@@ -669,6 +693,35 @@ def test_reset_subscription_runtime_emits_synthetic_failure_for_pending_subscrib
         f"synthetic failure must cite the connection-lost reason verbatim; got {event['error_message']!r}"
     )
     assert "failed_at_unix_time" in event
+    assert data["handle_status_after"] == "Closed"
     # Both pending maps must be empty after reset.
+    assert int(data["pending_subscriptions_size_after"]) == 0
+    assert int(data["pending_unsubscribes_size_after"]) == 0
+
+
+def test_retry_teardown_resets_subscription_runtime_and_fails_pending_subscribe() -> None:
+    # Degraded retry creates a new wire session without replaying subscriptions.
+    # It must therefore clear old subscription runtime immediately, not wait
+    # for retry exhaustion.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["retry_teardown_resets_subscription_runtime"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["current_state"] == "Degraded"
+    assert bool(data["socket_cleared"]) is True
+    events = data["subscription_failed_events"]
+    assert len(events) == 1
+    assert int(events[0]["handle_id"]) == 42
+    assert data["handle_status_after"] == "Closed"
     assert int(data["pending_subscriptions_size_after"]) == 0
     assert int(data["pending_unsubscribes_size_after"]) == 0

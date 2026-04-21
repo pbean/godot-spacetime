@@ -91,10 +91,14 @@ func _init() -> void:
 			_run_reserve_request_id_wraps_forces_disconnect()
 		"unsubscribe_null_socket_does_not_burn_request_id":
 			_run_unsubscribe_null_socket_does_not_burn_request_id()
+		"unsubscribe_send_failure_does_not_record_pending":
+			_run_unsubscribe_send_failure_does_not_record_pending()
 		"unsubscribe_applied_erases_pending_entry":
 			_run_unsubscribe_applied_erases_pending_entry()
 		"reset_subscription_runtime_emits_synthetic_failure":
 			_run_reset_subscription_runtime_emits_synthetic_failure()
+		"retry_teardown_resets_subscription_runtime":
+			_run_retry_teardown_resets_subscription_runtime()
 		"reducer_result_non_integer_request_id":
 			_run_reducer_result_non_integer_request_id()
 		"request_id_persists_across_reset":
@@ -522,24 +526,52 @@ func _run_unsubscribe_null_socket_does_not_burn_request_id() -> void:
 
 func _run_unsubscribe_applied_erases_pending_entry() -> void:
 	# Seed `_pending_unsubscribes` with a known entry; dispatch a matching
-	# `UnsubscribeApplied` frame; observe the entry erased. Also cover the
-	# late/stale case where the request_id does not match any pending entry —
-	# the handler must silently no-op (not push_error, not crash).
+	# `UnsubscribeApplied` frame; observe the entry erased. Also cover mismatch
+	# and late/stale cases — mismatched query_set_id must not erase, and an
+	# unknown request_id must silently no-op (not push_error, not crash).
 	_reset_events()
 	var ctx := _new_service_context()
 	var service = ctx["service"]
 	service._pending_unsubscribes[17] = 5
 	service._pending_unsubscribes[42] = 9
-	service._handle_unsubscribe_applied({"kind": "UnsubscribeApplied", "request_id": 17})
+	service._handle_unsubscribe_applied({"kind": "UnsubscribeApplied", "request_id": 17, "query_set_id": 6})
+	var size_after_mismatch: int = (service._pending_unsubscribes as Dictionary).size()
+	var still_has_17_after_mismatch: bool = (service._pending_unsubscribes as Dictionary).has(17)
+	service._handle_unsubscribe_applied({"kind": "UnsubscribeApplied", "request_id": 17, "query_set_id": 5})
 	var size_after_match: int = (service._pending_unsubscribes as Dictionary).size()
 	var still_has_42: bool = (service._pending_unsubscribes as Dictionary).has(42)
 	# Stale / unknown request_id — must silently no-op.
-	service._handle_unsubscribe_applied({"kind": "UnsubscribeApplied", "request_id": 999})
+	service._handle_unsubscribe_applied({"kind": "UnsubscribeApplied", "request_id": 999, "query_set_id": 999})
 	var size_after_stale: int = (service._pending_unsubscribes as Dictionary).size()
 	_emit_result({
+		"size_after_mismatch": size_after_mismatch,
+		"still_has_17_after_mismatch": still_has_17_after_mismatch,
 		"size_after_match": size_after_match,
 		"still_has_42": still_has_42,
 		"size_after_stale": size_after_stale,
+	})
+	quit(0)
+
+
+func _run_unsubscribe_send_failure_does_not_record_pending() -> void:
+	# A non-open WebSocketPeer makes `put_packet` return non-OK. The request_id
+	# has been reserved at that point, but the pending-unsubscribe map must not
+	# record an entry that can never receive a server ack.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._current_status = service._make_status(
+		ServiceScript.STATE_CONNECTED,
+		"CONNECTED — harness transport",
+		ServiceScript.AUTH_NONE
+	)
+	service._socket = WebSocketPeer.new()
+	var before: int = int(service._next_request_id)
+	service._send_unsubscribe_for_query_set(5)
+	_emit_result({
+		"next_request_id_before": before,
+		"next_request_id_after": int(service._next_request_id),
+		"pending_unsubscribes_size": (service._pending_unsubscribes as Dictionary).size(),
 	})
 	quit(0)
 
@@ -560,6 +592,36 @@ func _run_reset_subscription_runtime_emits_synthetic_failure() -> void:
 	service._reset_subscription_runtime()
 	_emit_result({
 		"subscription_failed_events": _jsonify(_subscription_failed_events),
+		"handle_status_after": String(pending_handle.status),
+		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
+		"pending_unsubscribes_size_after": (service._pending_unsubscribes as Dictionary).size(),
+	})
+	quit(0)
+
+
+func _run_retry_teardown_resets_subscription_runtime() -> void:
+	# Degraded retry starts a fresh wire session; this service does not replay
+	# subscriptions across that session boundary. Retry scheduling must therefore
+	# run the same subscription-runtime reset as a final disconnect.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._current_status = service._make_status(
+		ServiceScript.STATE_CONNECTED,
+		"CONNECTED — harness transport",
+		ServiceScript.AUTH_NONE
+	)
+	service._reconnect_policy = DummyReconnectPolicy.new()
+	service._socket = WebSocketPeer.new()
+	var pending_handle = SubscriptionHandleScript.new(42, 11, 11)
+	service._pending_subscriptions[11] = pending_handle
+	service._pending_unsubscribes[88] = 7
+	service._schedule_retry_or_disconnect("harness retry")
+	_emit_result({
+		"subscription_failed_events": _jsonify(_subscription_failed_events),
+		"handle_status_after": String(pending_handle.status),
+		"current_state": String(service._current_status.get("state", "")),
+		"socket_cleared": service._socket == null,
 		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
 		"pending_unsubscribes_size_after": (service._pending_unsubscribes as Dictionary).size(),
 	})

@@ -686,9 +686,16 @@ func _schedule_retry_or_disconnect(error_message: String) -> void:
 			_transition_to(STATE_DEGRADED, degraded_description, AUTH_NONE)
 
 		_next_retry_at_seconds = _now_seconds() + delay_seconds
+		# Each retry transport starts a fresh wire session. Existing subscribe /
+		# unsubscribe acks cannot arrive on the new session, and this service
+		# does not replay subscriptions after reconnect. Fail pending subscribes
+		# and clear all subscription runtime state before the next socket starts.
+		_reset_subscription_runtime()
+		# Keep the reducer reset explicit for the Story 11.4 retry-teardown
+		# contract; `_reset_subscription_runtime` also clears reducer runtime.
 		_reset_pending_reducer_runtime()
-		# Each retry transport starts a fresh wire session. Do not carry a
-		# previous session's backlog-saturation episode across the reconnect.
+		# Keep the retry-path backlog reset explicit for the saturation contract;
+		# `_reset_subscription_runtime` also clears it as part of full runtime reset.
 		_reset_backlog_saturation_state()
 		_dispose_socket_immediately()
 		return
@@ -1199,6 +1206,13 @@ func _handle_unsubscribe_applied(message: Dictionary) -> void:
 		# cannot false-match a live entry and there is no consumer waiting on
 		# resolution.
 		return
+	var expected_query_set_id := int(_pending_unsubscribes[request_id])
+	var query_set_id_variant = message.get("query_set_id", null)
+	if typeof(query_set_id_variant) != TYPE_INT or int(query_set_id_variant) != expected_query_set_id:
+		push_warning(
+			"Ignoring UnsubscribeApplied: query_set_id mismatch for request_id %d" % request_id
+		)
+		return
 	_pending_unsubscribes.erase(request_id)
 
 
@@ -1233,9 +1247,10 @@ func _send_unsubscribe_for_query_set(query_set_id: int) -> void:
 	# pattern for the unsubscribe path.
 	if _socket == null:
 		return
-	_pending_unsubscribes[request_id] = query_set_id
 	var payload := ConnectionProtocolScript.encode_unsubscribe(request_id, query_set_id)
-	_socket.put_packet(payload)
+	var send_result := _socket.put_packet(payload)
+	if send_result == OK:
+		_pending_unsubscribes[request_id] = query_set_id
 
 
 func _validate_query_sqls(query_sqls: Array, caller_name: String) -> Array:
@@ -1324,6 +1339,8 @@ func _reset_subscription_runtime() -> void:
 		var pending_handle = _pending_subscriptions.get(pending_request_id)
 		if pending_handle == null:
 			continue
+		if pending_handle.has_method("close"):
+			pending_handle.close()
 		emit_signal("subscription_failed", {
 			"handle_id": int(pending_handle.handle_id),
 			"error_message": "Connection lost before SubscribeApplied was observed.",

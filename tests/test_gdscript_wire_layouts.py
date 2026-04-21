@@ -1183,6 +1183,10 @@ def test_correlation_hygiene_round_2_landmarks_and_ordering() -> None:
         "`_pending_unsubscribes[request_id] = query_set_id` so a later "
         "`UnsubscribeApplied` can correlate."
     )
+    assert "send_result == OK" in unsub_body, (
+        "`_send_unsubscribe_for_query_set` must only populate `_pending_unsubscribes` "
+        "after Godot accepts the outbound packet."
+    )
 
     # Item 4: `_handle_unsubscribe_applied` handler function exists with a
     # body that erases from `_pending_unsubscribes`.
@@ -1190,6 +1194,10 @@ def test_correlation_hygiene_round_2_landmarks_and_ordering() -> None:
     assert "_pending_unsubscribes.erase(" in handle_unsub_body, (
         "`_handle_unsubscribe_applied` body must erase the matching `request_id` entry "
         "from `_pending_unsubscribes` on correlation."
+    )
+    assert "query_set_id" in handle_unsub_body and "expected_query_set_id" in handle_unsub_body, (
+        "`_handle_unsubscribe_applied` must validate the ack's `query_set_id` before "
+        "erasing the pending request_id entry."
     )
 
     # Item 4: `_drain_packets` match statement dispatches UnsubscribeApplied.
@@ -1216,6 +1224,11 @@ def test_correlation_hygiene_round_2_landmarks_and_ordering() -> None:
         "BEFORE clearing `_pending_subscriptions` — clearing first would leave the "
         "iteration source empty and the emission a no-op."
     )
+    close_idx = reset_body.find(".close()")
+    assert close_idx >= 0 and close_idx < emit_idx, (
+        "`_reset_subscription_runtime` must close each pending handle before emitting "
+        "the synthetic failure so signal handlers observe terminal handle state."
+    )
     assert "_pending_unsubscribes.clear()" in reset_body, (
         "`_reset_subscription_runtime` must also clear `_pending_unsubscribes` "
         "symmetrically with `_pending_subscriptions`."
@@ -1224,4 +1237,11 @@ def test_correlation_hygiene_round_2_landmarks_and_ordering() -> None:
         "`_reset_subscription_runtime` must cite the connection-lost reason verbatim "
         "in the synthetic failure's `error_message` so callers can distinguish it from "
         "server-sent `SubscriptionError` frames."
+    )
+
+    retry_body = _body_for("func _schedule_retry_or_disconnect(")
+    assert "_reset_subscription_runtime()" in retry_body, (
+        "`_schedule_retry_or_disconnect` must reset subscription runtime on the retry "
+        "branch because a degraded retry starts a fresh wire session without replaying "
+        "subscriptions."
     )
