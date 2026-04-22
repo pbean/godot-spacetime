@@ -1370,9 +1370,9 @@ def test_reset_subscription_runtime_reentrance_guard_is_pinned() -> None:
     # indentation (unconditional function-body scope).
     assert non_trivial[-1].strip() == "_resetting_subscription_runtime = false", (
         "`_reset_subscription_runtime` body's LAST non-comment statement must be "
-        "`_resetting_subscription_runtime = false` so the guard is cleared even if "
-        "earlier state-mutation code raised (GDScript's lack of `defer` means the "
-        "bookend only holds if it is unconditionally the final statement). "
+        "`_resetting_subscription_runtime = false`. GDScript has no `defer`, so "
+        "the shipped contract is an unconditional final bookend on the normal "
+        "teardown path. "
         f"Got: {non_trivial[-1].strip()!r}"
     )
     assert _body_indent(non_trivial[-1]) == "\t", (
@@ -1382,23 +1382,62 @@ def test_reset_subscription_runtime_reentrance_guard_is_pinned() -> None:
     )
 
     # (2) Snapshot ordering — each emission loop must be preceded by its own
-    # snapshot-array declaration. The old-handle loop (fires first) consumes
-    # `pending_old_handle_ids` from `_pending_replacements.values()`; the
-    # subscription loop (fires second) consumes `pending_subscription_handles`
-    # from `_pending_subscriptions.values()`. A regression that moves either
-    # snapshot below its emission loop fails here.
-    body = "\n".join(body_lines)
-    old_snap_idx = body.find("pending_old_handle_ids: Array = []")
-    sub_snap_idx = body.find("pending_subscription_handles: Array = []")
-    first_emit_idx = body.find('emit_signal("subscription_failed"')
-    assert first_emit_idx >= 0, (
+    # populated snapshot array. The old-handle loop (fires first) consumes
+    # `pending_old_handle_ids` populated from `_pending_replacements.values()`;
+    # the subscription loop (fires second) consumes `pending_subscription_handles`
+    # populated from `_pending_subscriptions.values()`. Both snapshots must be
+    # fully built before the first `subscription_failed` emission.
+    def _indent_depth(ln: str) -> int:
+        return len(ln) - len(ln.lstrip("\t"))
+
+    code_lines = []
+    for i, ln in enumerate(body_lines):
+        code = _strip_trailing_comment(ln).rstrip()
+        if _non_trivial(code):
+            code_lines.append((i, code, _indent_depth(code)))
+
+    def _find_code(pattern: str) -> int:
+        compiled = re.compile(pattern)
+        return next((i for i, code, _ in code_lines if compiled.match(code)), -1)
+
+    def _code_block_after(loop_idx: int) -> list[str]:
+        loop_pos = next(
+            (pos for pos, (i, _, _) in enumerate(code_lines) if i == loop_idx),
+            -1,
+        )
+        assert loop_pos >= 0, f"Internal test error: loop index {loop_idx} not found."
+        loop_depth = code_lines[loop_pos][2]
+        block: list[str] = []
+        for _, code, depth in code_lines[loop_pos + 1 :]:
+            if depth <= loop_depth:
+                break
+            block.append(code.strip())
+        return block
+
+    old_snap_idx = _find_code(r"^\tvar\s+pending_old_handle_ids\s*:\s*Array\s*=\s*\[\]\s*$")
+    sub_snap_idx = _find_code(
+        r"^\tvar\s+pending_subscription_handles\s*:\s*Array\s*=\s*\[\]\s*$"
+    )
+    old_values_idx = _find_code(r"^\tfor\s+\w+\s+in\s+_pending_replacements\.values\(\):\s*$")
+    sub_values_idx = _find_code(r"^\tfor\s+\w+\s+in\s+_pending_subscriptions\.values\(\):\s*$")
+    old_append_idx = _find_code(r"^\t+pending_old_handle_ids\.append\(.+\)\s*$")
+    sub_append_idx = _find_code(r"^\t+pending_subscription_handles\.append\(.+\)\s*$")
+    old_loop_idx = _find_code(r"^\tfor\s+\w+\s+in\s+pending_old_handle_ids:\s*$")
+    sub_loop_idx = _find_code(r"^\tfor\s+\w+\s+in\s+pending_subscription_handles:\s*$")
+    emit_indices = [
+        i
+        for i, code, _ in code_lines
+        if re.match(r'^\t+emit_signal\("subscription_failed"\s*,', code)
+    ]
+    assert emit_indices, (
         "`_reset_subscription_runtime` body must emit `subscription_failed` synthetically."
     )
-    second_emit_idx = body.find('emit_signal("subscription_failed"', first_emit_idx + 1)
-    assert second_emit_idx >= 0, (
+    assert len(emit_indices) == 2, (
         "`_reset_subscription_runtime` body must emit `subscription_failed` twice — "
-        "once per replacement-handle loop, once per pending-subscription loop."
+        "once per replacement-handle loop, once per pending-subscription loop. "
+        f"Found {len(emit_indices)} emits."
     )
+    first_emit_idx, second_emit_idx = emit_indices
     assert old_snap_idx >= 0, (
         "`_reset_subscription_runtime` body must declare "
         "`var pending_old_handle_ids: Array = []` to snapshot "
@@ -1409,14 +1448,47 @@ def test_reset_subscription_runtime_reentrance_guard_is_pinned() -> None:
         "`var pending_subscription_handles: Array = []` to snapshot "
         "`_pending_subscriptions.values()` before emission."
     )
-    assert old_snap_idx < first_emit_idx, (
-        "`pending_old_handle_ids` snapshot must precede the FIRST "
-        "`emit_signal(\"subscription_failed\", ...)` call. "
-        f"snapshot at {old_snap_idx}, first emit at {first_emit_idx}."
+    assert old_values_idx >= 0 and old_append_idx >= 0, (
+        "`pending_old_handle_ids` must be populated from "
+        "`_pending_replacements.values()` before any `subscription_failed` emission."
     )
-    assert sub_snap_idx < second_emit_idx, (
-        "`pending_subscription_handles` snapshot must precede the SECOND "
-        "`emit_signal(\"subscription_failed\", ...)` call (the pending-subscription "
-        "emission loop). "
-        f"snapshot at {sub_snap_idx}, second emit at {second_emit_idx}."
+    assert sub_values_idx >= 0 and sub_append_idx >= 0, (
+        "`pending_subscription_handles` must be populated from "
+        "`_pending_subscriptions.values()` before any `subscription_failed` emission."
+    )
+    assert old_loop_idx >= 0, (
+        "`_reset_subscription_runtime` must emit replacement-handle failures by "
+        "iterating `pending_old_handle_ids`, not the live `_pending_replacements` map."
+    )
+    assert sub_loop_idx >= 0, (
+        "`_reset_subscription_runtime` must emit pending-subscribe failures by "
+        "iterating `pending_subscription_handles`, not the live `_pending_subscriptions` map."
+    )
+    assert old_snap_idx < old_values_idx < old_append_idx < first_emit_idx, (
+        "`pending_old_handle_ids` snapshot must precede the FIRST "
+        "`emit_signal(\"subscription_failed\", ...)` call and be populated from "
+        "`_pending_replacements.values()` before that emission. "
+        f"snapshot at line {old_snap_idx}, values loop at line {old_values_idx}, "
+        f"append at line {old_append_idx}, first emit at line {first_emit_idx}."
+    )
+    assert sub_snap_idx < sub_values_idx < sub_append_idx < first_emit_idx, (
+        "`pending_subscription_handles` snapshot must precede the FIRST "
+        "`emit_signal(\"subscription_failed\", ...)` call and be populated from "
+        "`_pending_subscriptions.values()` before that emission. "
+        f"snapshot at line {sub_snap_idx}, values loop at line {sub_values_idx}, "
+        f"append at line {sub_append_idx}, first emit at line {first_emit_idx}."
+    )
+    assert old_loop_idx < first_emit_idx and any(
+        re.match(r'emit_signal\("subscription_failed"\s*,', code)
+        for code in _code_block_after(old_loop_idx)
+    ), (
+        "The first synthetic `subscription_failed` emission must occur inside the "
+        "`for ... in pending_old_handle_ids:` snapshot-consumer loop."
+    )
+    assert sub_loop_idx < second_emit_idx and any(
+        re.match(r'emit_signal\("subscription_failed"\s*,', code)
+        for code in _code_block_after(sub_loop_idx)
+    ), (
+        "The second synthetic `subscription_failed` emission must occur inside the "
+        "`for ... in pending_subscription_handles:` snapshot-consumer loop."
     )
