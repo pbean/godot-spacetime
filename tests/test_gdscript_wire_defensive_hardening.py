@@ -958,11 +958,26 @@ def test_reentrant_subscribe_during_teardown_is_rejected() -> None:
     result = _parse_harness_result(proc)
     assert result.get("ok"), f"harness reported error: {result}"
     data = result["data"]
+    # Teardown must emit TWO synthetic failures (one pending replacement + one
+    # pending subscribe). The two-emission setup is what exercises the handler's
+    # one-shot guard — a single emission would leave the disarm path dead.
+    assert int(data["emission_count"]) == 2, (
+        "teardown must emit two `subscription_failed` events (pending replacement + "
+        f"pending subscribe) to exercise the one-shot guard; got {data['emission_count']}."
+    )
     # The reentrant path must actually be exercised — otherwise the assertions
     # below would pass vacuously.
     assert data["handler_fired"] is True, (
         "the `subscription_failed` handler must have fired during teardown so the "
         "reentrant `subscribe()` was genuinely attempted mid-emission."
+    )
+    # The one-shot `_reentrant_subscribe_armed` guard must hold across BOTH
+    # emissions: the handler attempts the re-subscribe exactly once, not once per
+    # emitted event. A regression that drops the guard would attempt twice.
+    assert int(data["reentrant_subscribe_attempt_count"]) == 1, (
+        "the handler's one-shot guard must permit exactly ONE reentrant `subscribe()` "
+        "attempt across the two teardown emissions; got "
+        f"{data['reentrant_subscribe_attempt_count']}."
     )
     assert data["reentrant_subscribe_returned_null"] is True, (
         "a `subscribe()` issued from inside the teardown emission loop (state "

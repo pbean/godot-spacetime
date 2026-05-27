@@ -86,6 +86,7 @@ var _reentrant_subscribe_handler_fired: bool = false
 var _reentrant_subscribe_returned_null: bool = false
 var _reentrant_subscribe_pending_delta: int = 0
 var _reentrant_subscribe_armed: bool = true
+var _reentrant_subscribe_attempt_count: int = 0
 
 
 func _init() -> void:
@@ -174,6 +175,7 @@ func _reset_events() -> void:
 	_reentrant_subscribe_returned_null = false
 	_reentrant_subscribe_pending_delta = 0
 	_reentrant_subscribe_armed = true
+	_reentrant_subscribe_attempt_count = 0
 
 
 func _run_transaction_update_non_numeric_id() -> void:
@@ -812,9 +814,18 @@ func _run_reentrant_subscribe_during_teardown_rejected() -> void:
 	)
 	# Real, non-null socket — the retry-path condition (state DEGRADED, socket live).
 	service._socket = WebSocketPeer.new()
-	# Seed one pending subscribe so teardown emits a synthetic failure that drives
-	# the reentrant handler.
+	# Seed BOTH a pending replacement (old handle) and a pending subscribe (new
+	# handle) so teardown emits TWO synthetic `subscription_failed` events. The
+	# reentrant handler re-subscribes only on the first (its one-shot
+	# `_reentrant_subscribe_armed` guard suppresses the second), so the two-event
+	# setup is what actually exercises that guard — a single-emission seed would
+	# leave the disarm path dead and prove nothing about repeated re-entry.
+	var ctx_registry = ctx["registry"]
+	var old_handle = SubscriptionHandleScript.new(42, 7, 7)
+	ctx_registry.handles_by_id[42] = old_handle
+	ctx_registry.handles_by_query_set_id[7] = old_handle
 	service._pending_subscriptions[11] = SubscriptionHandleScript.new(43, 11, 11)
+	service._pending_replacements[43] = 42
 	service.subscription_failed.connect(
 		_on_subscription_failed_reentrant_subscribe.bind(service)
 	)
@@ -823,6 +834,8 @@ func _run_reentrant_subscribe_during_teardown_rejected() -> void:
 		"handler_fired": _reentrant_subscribe_handler_fired,
 		"reentrant_subscribe_returned_null": _reentrant_subscribe_returned_null,
 		"pending_added_by_reentrant_subscribe": _reentrant_subscribe_pending_delta,
+		"reentrant_subscribe_attempt_count": _reentrant_subscribe_attempt_count,
+		"emission_count": _subscription_failed_events.size(),
 		"current_state": String(service._current_status.get("state", "")),
 	})
 	quit(0)
@@ -882,12 +895,14 @@ func _on_subscription_failed_reentrant_unsubscribe(event: Dictionary, service: O
 
 func _on_subscription_failed_reentrant_subscribe(_event: Dictionary, service: Object) -> void:
 	# Fire exactly once: re-entrant `subscribe()` during the teardown that is
-	# emitting this very `subscription_failed` signal. The guard prevents a
-	# re-subscribe attempt on every emission.
+	# emitting this very `subscription_failed` signal. The one-shot guard prevents
+	# a re-subscribe attempt on the SECOND (and any later) emission of the same
+	# teardown — `_reentrant_subscribe_attempt_count` lets the test assert it held.
 	if not _reentrant_subscribe_armed:
 		return
 	_reentrant_subscribe_armed = false
 	_reentrant_subscribe_handler_fired = true
+	_reentrant_subscribe_attempt_count += 1
 	var before: int = (service._pending_subscriptions as Dictionary).size()
 	var result = service.subscribe(["SELECT * FROM smoke_test"])
 	var after: int = (service._pending_subscriptions as Dictionary).size()

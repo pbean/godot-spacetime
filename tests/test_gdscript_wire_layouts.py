@@ -1539,10 +1539,15 @@ def test_reset_subscription_runtime_hoists_single_teardown_timestamp() -> None:
         / "gdscript_connection_service.gd"
     ).read_text(encoding="utf-8")
     body_lines = _isolate_func_body(service_src, "func _reset_subscription_runtime(")
-    body_text = "\n".join(body_lines)
 
-    # (a) Exactly one wall-clock read in the whole function body.
-    timestamp_reads = body_text.count("Time.get_unix_time_from_system()")
+    # (a) Exactly one wall-clock read in the whole function body. Count over CODE
+    # only — strip each line at its first `#` so a future doc-comment that spells
+    # `Time.get_unix_time_from_system()` (a natural thing to write beside the
+    # hoist) cannot poison this substring count into a false "two reads" failure.
+    # No `#` appears inside a string literal in this function body, so the naive
+    # split is safe here.
+    code_only = [ln.split("#", 1)[0] for ln in body_lines]
+    timestamp_reads = sum(ln.count("Time.get_unix_time_from_system()") for ln in code_only)
     assert timestamp_reads == 1, (
         "`_reset_subscription_runtime` must call `Time.get_unix_time_from_system()` "
         "exactly ONCE — a single per-teardown read shared by both synthetic "
@@ -1714,18 +1719,25 @@ def test_schedule_retry_transitions_to_degraded_before_subscription_reset() -> N
     ).read_text(encoding="utf-8")
     body_lines = _isolate_func_body(service_src, "func _schedule_retry_or_disconnect(")
 
-    degraded_transition_idx = next(
-        (
-            i
-            for i, ln in enumerate(body_lines)
-            if re.match(r"^\t+_transition_to\(STATE_DEGRADED\s*,", ln)
-        ),
-        -1,
-    )
-    assert degraded_transition_idx >= 0, (
-        "`_schedule_retry_or_disconnect` retry branch must transition to "
-        "`_transition_to(STATE_DEGRADED, ...)` so teardown emits while the status "
-        "reads DEGRADED (arming the connected-state gate)."
+    # The retry branch sets DEGRADED via EITHER form documented above:
+    # `_transition_to(STATE_DEGRADED, ...)` on the first retry (status was
+    # Connected), or `_refresh_status(...)` on subsequent retries (status is
+    # already DEGRADED). Match both so this pin tracks the real two-branch code,
+    # not just the first-retry path — otherwise a refactor that routed both
+    # branches through `_refresh_status` would fail here with a misleading
+    # "must transition to STATE_DEGRADED" message despite the contract holding.
+    degraded_setting_idxs = [
+        i
+        for i, ln in enumerate(body_lines)
+        if re.match(r"^\t+_transition_to\(STATE_DEGRADED\s*,", ln)
+        or re.match(r"^\t+_refresh_status\(", ln)
+    ]
+    assert degraded_setting_idxs, (
+        "`_schedule_retry_or_disconnect` retry branch must set the session to "
+        "DEGRADED before teardown — via `_transition_to(STATE_DEGRADED, ...)` (first "
+        "retry) or `_refresh_status(...)` while already DEGRADED (subsequent retries) "
+        "— so teardown emits while the status reads DEGRADED (arming the "
+        "connected-state gate)."
     )
     reset_call_idx = next(
         (
@@ -1739,11 +1751,14 @@ def test_schedule_retry_transitions_to_degraded_before_subscription_reset() -> N
         "`_schedule_retry_or_disconnect` retry branch must call "
         "`_reset_subscription_runtime()`."
     )
-    assert degraded_transition_idx < reset_call_idx, (
-        "`_schedule_retry_or_disconnect` must transition to STATE_DEGRADED BEFORE "
+    # EVERY DEGRADED-setting statement must precede the reset (both if/else arms
+    # sit above the post-block `_reset_subscription_runtime()` call), so the gate
+    # is armed when teardown emits regardless of which retry branch executed.
+    assert max(degraded_setting_idxs) < reset_call_idx, (
+        "`_schedule_retry_or_disconnect` must set STATE_DEGRADED BEFORE "
         "calling `_reset_subscription_runtime()` so the connected-state gate is armed "
         "when teardown emits `subscription_failed`. "
-        f"DEGRADED transition at {degraded_transition_idx}, reset call at {reset_call_idx}."
+        f"DEGRADED-setting lines at {degraded_setting_idxs}, reset call at {reset_call_idx}."
     )
 
 
