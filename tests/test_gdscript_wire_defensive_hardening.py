@@ -853,3 +853,123 @@ def test_retry_teardown_resets_subscription_runtime_and_fails_pending_subscribe(
     assert data["handle_status_after"] == "Closed"
     assert int(data["pending_subscriptions_size_after"]) == 0
     assert int(data["pending_unsubscribes_size_after"]) == 0
+
+
+def test_reset_subscription_runtime_shares_single_failed_at_unix_time() -> None:
+    # Spec spec-gdscript-wire-teardown-emission-hardening (item 412): a single
+    # teardown failing one pending-replacement old handle and one pending subscribe
+    # must stamp BOTH synthetic `subscription_failed` events with an IDENTICAL
+    # `failed_at_unix_time`. The fix hoists one wall-clock read shared by both
+    # emission loops; two independent reads could skew the two events apart.
+    #
+    # NOTE on what this test does and does NOT prove: the AUTHORITATIVE regression
+    # guard for the single-read shape is the static-contract test
+    # `test_reset_subscription_runtime_hoists_single_teardown_timestamp` in
+    # `tests/test_gdscript_wire_layouts.py` — it pins exactly one
+    # `Time.get_unix_time_from_system()` call hoisted into a shared
+    # `failed_at_unix_time` local referenced by both payloads. This runtime test
+    # only confirms end-to-end that both synthetic emissions propagate the ONE
+    # shared value through `emit_signal` -> JSON; it does NOT by itself distinguish
+    # a single read from two near-simultaneous reads (which usually tie at the same
+    # value). Do not weaken the static-contract test on the strength of this one.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reset_subscription_runtime_shares_single_failed_at_unix_time"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    events = data["subscription_failed_events"]
+    assert int(data["event_count"]) == 2, f"expected two emissions, got {data['event_count']}"
+    assert len(events) == 2
+    # Emission order unchanged: old handle (42) first, new handle (43) second.
+    assert [int(event["handle_id"]) for event in events] == [42, 43]
+    timestamps = [event["failed_at_unix_time"] for event in events]
+    assert timestamps[0] == timestamps[1], (
+        "Both synthetic `subscription_failed` events from a single teardown must "
+        f"carry an identical `failed_at_unix_time`. Got {timestamps!r}."
+    )
+    assert float(timestamps[0]) > 0.0, (
+        "`failed_at_unix_time` must be a real wall-clock unix time, not zero. "
+        f"Got {timestamps[0]!r}."
+    )
+
+
+def test_subscribe_rejected_while_degraded_adds_no_pending() -> None:
+    # Spec spec-gdscript-wire-teardown-emission-hardening (item 413): a
+    # synchronous `subscribe()` issued during teardown (state DEGRADED, socket
+    # non-null — the retry path) is rejected by the Connected-state gate. It must
+    # return null and add NO `_pending_subscriptions` entry, so no re-subscribe
+    # packet can leak onto a dying socket.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["subscribe_rejected_while_degraded_adds_no_pending"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["current_state"] == "Degraded"
+    assert bool(data["subscribe_returned_null"]) is True, (
+        "`subscribe()` while DEGRADED must return null (rejected by the "
+        "Connected-state gate)."
+    )
+    assert int(data["pending_subscriptions_size_before"]) == 0
+    assert int(data["pending_subscriptions_size_after"]) == 0, (
+        "A rejected `subscribe()` must not add a `_pending_subscriptions` entry."
+    )
+
+
+def test_reentrant_subscribe_during_teardown_is_rejected() -> None:
+    # Spec spec-gdscript-wire-teardown-emission-hardening (item 413), TRUE reentrant
+    # flow: a `subscription_failed` handler that synchronously calls `subscribe()`
+    # DURING a real `_reset_subscription_runtime()` teardown (state DEGRADED, socket
+    # non-null — the retry path) must be rejected by the public `subscribe()`
+    # Connected-state gate. The reentrant `subscribe()` returns null and leaks NO
+    # `_pending_subscriptions` entry, so a re-subscribe packet can never reach a
+    # dying socket mid-teardown. Higher fidelity than
+    # `test_subscribe_rejected_while_degraded_adds_no_pending`, which exercises a
+    # standalone DEGRADED `subscribe()` rather than one issued from inside the
+    # teardown emission loop.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reentrant_subscribe_during_teardown_rejected"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    # The reentrant path must actually be exercised — otherwise the assertions
+    # below would pass vacuously.
+    assert data["handler_fired"] is True, (
+        "the `subscription_failed` handler must have fired during teardown so the "
+        "reentrant `subscribe()` was genuinely attempted mid-emission."
+    )
+    assert data["reentrant_subscribe_returned_null"] is True, (
+        "a `subscribe()` issued from inside the teardown emission loop (state "
+        "DEGRADED) must be rejected by the Connected-state gate and return null."
+    )
+    assert int(data["pending_added_by_reentrant_subscribe"]) == 0, (
+        "the rejected reentrant `subscribe()` must not leak a `_pending_subscriptions` "
+        f"entry; got delta={data['pending_added_by_reentrant_subscribe']}."
+    )
+    assert data["current_state"] == "Degraded"

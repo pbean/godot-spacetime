@@ -1492,3 +1492,321 @@ def test_reset_subscription_runtime_reentrance_guard_is_pinned() -> None:
         "The second synthetic `subscription_failed` emission must occur inside the "
         "`for ... in pending_subscription_handles:` snapshot-consumer loop."
     )
+
+
+def _isolate_func_body(service_src: str, func_decl_prefix: str) -> list[str]:
+    """Return the body lines of a top-level GDScript function (excluding the
+    `func ...:` declaration line), terminating at the next column-0 top-level
+    declaration. Mirrors the body-isolation logic in
+    `test_reset_subscription_runtime_reentrance_guard_is_pinned`."""
+    lines = service_src.splitlines()
+    func_idx = next(
+        (i for i, ln in enumerate(lines) if ln.startswith(func_decl_prefix)),
+        -1,
+    )
+    assert func_idx >= 0, (
+        f"gdscript_connection_service.gd must define `{func_decl_prefix}`."
+    )
+    body_lines: list[str] = []
+    for ln in lines[func_idx + 1 :]:
+        if ln.startswith(("func ", "class ", "static ", "@")):
+            break
+        body_lines.append(ln)
+    return body_lines
+
+
+def test_reset_subscription_runtime_hoists_single_teardown_timestamp() -> None:
+    # Spec `spec-gdscript-wire-teardown-emission-hardening` (item 412): a single
+    # teardown must stamp every synthetic `subscription_failed` event with an
+    # IDENTICAL `failed_at_unix_time`. Two independent
+    # `Time.get_unix_time_from_system()` reads (one per emission loop) could skew
+    # — even backwards under an NTP step / VM suspend between the two loops. The
+    # fix hoists one wall-clock read above the snapshot loops and references it in
+    # both payloads. This pins: (a) exactly one
+    # `Time.get_unix_time_from_system()` call in the function body; (b) a hoisted
+    # `var failed_at_unix_time := Time.get_unix_time_from_system()` local; (c)
+    # BOTH `subscription_failed` payloads carry `"failed_at_unix_time":
+    # failed_at_unix_time` (the hoisted var, never a fresh inline call). A silent
+    # regression that re-inlines either read fails here.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    body_lines = _isolate_func_body(service_src, "func _reset_subscription_runtime(")
+    body_text = "\n".join(body_lines)
+
+    # (a) Exactly one wall-clock read in the whole function body.
+    timestamp_reads = body_text.count("Time.get_unix_time_from_system()")
+    assert timestamp_reads == 1, (
+        "`_reset_subscription_runtime` must call `Time.get_unix_time_from_system()` "
+        "exactly ONCE — a single per-teardown read shared by both synthetic "
+        f"`subscription_failed` emissions. Found {timestamp_reads} calls."
+    )
+
+    # (b) The single read is hoisted into a `failed_at_unix_time` local.
+    hoist_matches = [
+        ln
+        for ln in body_lines
+        if re.match(
+            r"^\tvar\s+failed_at_unix_time\s*:=\s*Time\.get_unix_time_from_system\(\)\s*$",
+            ln,
+        )
+    ]
+    assert len(hoist_matches) == 1, (
+        "`_reset_subscription_runtime` must hoist the teardown timestamp into "
+        "exactly one `var failed_at_unix_time := Time.get_unix_time_from_system()` "
+        f"local. Found {len(hoist_matches)} matches."
+    )
+
+    # (c) Both payloads reference the hoisted var, not a fresh inline call.
+    payload_refs = [
+        ln
+        for ln in body_lines
+        if re.match(r'^\t+"failed_at_unix_time"\s*:\s*failed_at_unix_time\s*,?\s*$', ln)
+    ]
+    assert len(payload_refs) == 2, (
+        "Both synthetic `subscription_failed` payloads must reference the hoisted "
+        '`failed_at_unix_time` local via `"failed_at_unix_time": failed_at_unix_time`. '
+        f"Found {len(payload_refs)} references."
+    )
+    # No payload may carry a fresh inline `Time.get_unix_time_from_system()` read.
+    inline_payload_reads = [
+        ln
+        for ln in body_lines
+        if re.match(
+            r'^\t+"failed_at_unix_time"\s*:\s*Time\.get_unix_time_from_system\(\)',
+            ln,
+        )
+    ]
+    assert not inline_payload_reads, (
+        "No `subscription_failed` payload may re-inline "
+        "`Time.get_unix_time_from_system()`; both must reference the hoisted "
+        f"`failed_at_unix_time`. Offending lines: {inline_payload_reads!r}"
+    )
+
+    # The hoist must sit AFTER the guard set-true and BEFORE the first snapshot
+    # array, preserving the reentrance-guard contract pinned separately.
+    set_true_idx = next(
+        (i for i, ln in enumerate(body_lines) if ln.strip() == "_resetting_subscription_runtime = true"),
+        -1,
+    )
+    hoist_idx = next(
+        (
+            i
+            for i, ln in enumerate(body_lines)
+            if re.match(
+                r"^\tvar\s+failed_at_unix_time\s*:=\s*Time\.get_unix_time_from_system\(\)\s*$",
+                ln,
+            )
+        ),
+        -1,
+    )
+    first_snapshot_idx = next(
+        (
+            i
+            for i, ln in enumerate(body_lines)
+            if re.match(r"^\tvar\s+pending_old_handle_ids\s*:\s*Array\s*=\s*\[\]\s*$", ln)
+        ),
+        -1,
+    )
+    assert set_true_idx >= 0 and hoist_idx >= 0 and first_snapshot_idx >= 0, (
+        "Internal test error: could not locate guard set-true, hoist, or snapshot."
+    )
+    assert set_true_idx < hoist_idx < first_snapshot_idx, (
+        "`var failed_at_unix_time := Time.get_unix_time_from_system()` must sit "
+        "AFTER `_resetting_subscription_runtime = true` and BEFORE the "
+        "`pending_old_handle_ids` snapshot so the reentrance-guard + "
+        "snapshot-before-emit contract stays intact. "
+        f"set_true at {set_true_idx}, hoist at {hoist_idx}, snapshot at {first_snapshot_idx}."
+    )
+
+
+def test_send_subscribe_request_carries_connected_state_gate() -> None:
+    # Spec `spec-gdscript-wire-teardown-emission-hardening` (item 413): the
+    # protection that blocks a synchronous re-subscribe during teardown is the
+    # connected-state gate at the top of `_send_subscribe_request`. A
+    # `subscription_failed` handler that calls `subscribe()` mid-teardown reaches
+    # the wire encoder only if this gate is absent — on the retry path the state
+    # is DEGRADED (gate rejects), on the disconnect path `_socket` is null (gate
+    # rejects), so `put_packet` never fires on a dying socket. This pins the gate
+    # so a refactor that drops it fails here rather than re-opening the window.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    body_lines = _isolate_func_body(service_src, "func _send_subscribe_request(")
+
+    gate_matches = [
+        ln
+        for ln in body_lines
+        if re.match(
+            r"^\tif\s+_socket\s*==\s*null\s+or\s+String\(_current_status\.get\("
+            r'"state",\s*STATE_DISCONNECTED\)\)\s*!=\s*STATE_CONNECTED:\s*$',
+            ln,
+        )
+    ]
+    assert len(gate_matches) == 1, (
+        "`_send_subscribe_request` must guard with "
+        "`if _socket == null or String(_current_status.get(\"state\", "
+        "STATE_DISCONNECTED)) != STATE_CONNECTED:` before any `put_packet` — this is "
+        "the connected-state gate that rejects a re-subscribe during teardown. "
+        f"Found {len(gate_matches)} matches."
+    )
+    # The gate's early-return body must bail with ERR_UNAVAILABLE and precede the
+    # `put_packet` call so the dying socket is never written.
+    gate_idx = next(
+        (i for i, ln in enumerate(body_lines) if ln in gate_matches),
+        -1,
+    )
+    return_idx = next(
+        (
+            i
+            for i, ln in enumerate(body_lines)
+            if i > gate_idx and ln.strip() == "return ERR_UNAVAILABLE"
+        ),
+        -1,
+    )
+    put_packet_idx = next(
+        (i for i, ln in enumerate(body_lines) if "_socket.put_packet(" in ln),
+        -1,
+    )
+    assert gate_idx >= 0 and return_idx >= 0 and put_packet_idx >= 0, (
+        "`_send_subscribe_request` must early-return `ERR_UNAVAILABLE` from the "
+        "connected-state gate before its `_socket.put_packet(...)` call."
+    )
+    assert gate_idx < return_idx < put_packet_idx, (
+        "The connected-state gate's `return ERR_UNAVAILABLE` must precede the "
+        f"`_socket.put_packet(...)` write. gate at {gate_idx}, return at {return_idx}, "
+        f"put_packet at {put_packet_idx}."
+    )
+
+
+def test_schedule_retry_transitions_to_degraded_before_subscription_reset() -> None:
+    # Spec `spec-gdscript-wire-teardown-emission-hardening` (item 413): on the
+    # retry branch, `_schedule_retry_or_disconnect` moves the session to DEGRADED
+    # (via `_transition_to(STATE_DEGRADED, ...)` or `_refresh_status` while already
+    # DEGRADED) BEFORE it calls `_reset_subscription_runtime()`. That ordering is
+    # what arms the connected-state gate: by the time teardown emits
+    # `subscription_failed`, the status already reads DEGRADED, so a handler's
+    # synchronous `subscribe()` is rejected by `_send_subscribe_request`. This pins
+    # the ordering so a reorder that emits while still Connected fails here.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    body_lines = _isolate_func_body(service_src, "func _schedule_retry_or_disconnect(")
+
+    degraded_transition_idx = next(
+        (
+            i
+            for i, ln in enumerate(body_lines)
+            if re.match(r"^\t+_transition_to\(STATE_DEGRADED\s*,", ln)
+        ),
+        -1,
+    )
+    assert degraded_transition_idx >= 0, (
+        "`_schedule_retry_or_disconnect` retry branch must transition to "
+        "`_transition_to(STATE_DEGRADED, ...)` so teardown emits while the status "
+        "reads DEGRADED (arming the connected-state gate)."
+    )
+    reset_call_idx = next(
+        (
+            i
+            for i, ln in enumerate(body_lines)
+            if ln.strip() == "_reset_subscription_runtime()"
+        ),
+        -1,
+    )
+    assert reset_call_idx >= 0, (
+        "`_schedule_retry_or_disconnect` retry branch must call "
+        "`_reset_subscription_runtime()`."
+    )
+    assert degraded_transition_idx < reset_call_idx, (
+        "`_schedule_retry_or_disconnect` must transition to STATE_DEGRADED BEFORE "
+        "calling `_reset_subscription_runtime()` so the connected-state gate is armed "
+        "when teardown emits `subscription_failed`. "
+        f"DEGRADED transition at {degraded_transition_idx}, reset call at {reset_call_idx}."
+    )
+
+
+def test_finish_disconnect_disposes_socket_before_subscription_reset() -> None:
+    # Spec `spec-gdscript-wire-teardown-emission-hardening` (item 413), disconnect
+    # arm: on the FINAL-disconnect path `_finish_disconnect` does NOT transition the
+    # session out of `Connected` before teardown (the `state_changed` emission is
+    # deliberately deferred until after session-state is cleared — see the
+    # `_finish_disconnect` emission-order contract). So when
+    # `_reset_subscription_runtime()` emits the synthetic `subscription_failed`,
+    # `_current_status` may still read `Connected`. That means the DEGRADED half of
+    # the `_send_subscribe_request` connected-state gate is NOT what protects this
+    # path — the ONLY active half is `_socket == null`. A `subscription_failed`
+    # handler that synchronously re-subscribes is therefore rejected only because
+    # the socket was already disposed. This pins that `_dispose_socket_immediately()`
+    # runs BEFORE `_reset_subscription_runtime()` inside `_finish_disconnect`; a
+    # reorder that resets the subscription runtime (and emits) while `_socket` is
+    # still live would re-open the window for a re-subscribe packet on a dying
+    # socket. Mirrors the retry-path pin
+    # `test_schedule_retry_transitions_to_degraded_before_subscription_reset` for the
+    # other teardown caller.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    body_lines = _isolate_func_body(service_src, "func _finish_disconnect(")
+
+    dispose_idx = next(
+        (
+            i
+            for i, ln in enumerate(body_lines)
+            if ln.strip() == "_dispose_socket_immediately()"
+        ),
+        -1,
+    )
+    reset_idx = next(
+        (
+            i
+            for i, ln in enumerate(body_lines)
+            if ln.strip() == "_reset_subscription_runtime()"
+        ),
+        -1,
+    )
+    assert dispose_idx >= 0, (
+        "`_finish_disconnect` body must call `_dispose_socket_immediately()` so the "
+        "socket is null by the time teardown emits `subscription_failed`."
+    )
+    assert reset_idx >= 0, (
+        "`_finish_disconnect` body must call `_reset_subscription_runtime()` to tear "
+        "down in-flight subscription state on a final disconnect."
+    )
+    assert dispose_idx < reset_idx, (
+        "`_finish_disconnect` must call `_dispose_socket_immediately()` BEFORE "
+        "`_reset_subscription_runtime()`. On the disconnect path the status may still "
+        "read Connected when teardown emits `subscription_failed`, so the only active "
+        "half of the `_send_subscribe_request` connected-state gate is `_socket == "
+        "null` — a re-subscribe in a synchronous handler is rejected ONLY because the "
+        "socket was already disposed. "
+        f"dispose at {dispose_idx}, reset at {reset_idx}."
+    )

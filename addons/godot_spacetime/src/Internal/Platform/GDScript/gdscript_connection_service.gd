@@ -1335,6 +1335,15 @@ func _reset_subscription_runtime() -> void:
 		return
 	_resetting_subscription_runtime = true
 
+	# Sample wall-clock unix time ONCE per teardown so every synthetic
+	# `subscription_failed` emission below shares an identical
+	# `failed_at_unix_time`. Two independent reads (one per emission loop) could
+	# stamp the same teardown's events with different — or backwards-skewing under
+	# NTP step / VM suspend — timestamps. Wall-clock (not monotonic) to stay
+	# consistent with `_handle_subscription_error` and the repo-wide
+	# event-timestamp convention.
+	var failed_at_unix_time := Time.get_unix_time_from_system()
+
 	# Synthetic failure events for any in-flight subscribe whose SubscribeApplied
 	# / SubscriptionError could no longer arrive on this session. Fire BEFORE
 	# clearing the map so callers waiting on a terminal event for their subscribe
@@ -1368,7 +1377,7 @@ func _reset_subscription_runtime() -> void:
 		emit_signal("subscription_failed", {
 			"handle_id": old_handle_id,
 			"error_message": "Connection lost before replacement subscription was confirmed; pre-replacement handle terminated.",
-			"failed_at_unix_time": Time.get_unix_time_from_system(),
+			"failed_at_unix_time": failed_at_unix_time,
 		})
 	for pending_handle in pending_subscription_handles:
 		if pending_handle.has_method("close"):
@@ -1376,7 +1385,7 @@ func _reset_subscription_runtime() -> void:
 		emit_signal("subscription_failed", {
 			"handle_id": int(pending_handle.handle_id),
 			"error_message": "Connection lost before SubscribeApplied was observed.",
-			"failed_at_unix_time": Time.get_unix_time_from_system(),
+			"failed_at_unix_time": failed_at_unix_time,
 		})
 	_pending_subscriptions.clear()
 	_pending_replacements.clear()

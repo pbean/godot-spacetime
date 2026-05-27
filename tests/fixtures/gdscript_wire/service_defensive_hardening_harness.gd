@@ -82,6 +82,10 @@ var _reducer_success_events: Array = []
 var _reducer_failure_events: Array = []
 var _subscription_failed_events: Array = []
 var _reentrant_unsubscribe_count: int = 0
+var _reentrant_subscribe_handler_fired: bool = false
+var _reentrant_subscribe_returned_null: bool = false
+var _reentrant_subscribe_pending_delta: int = 0
+var _reentrant_subscribe_armed: bool = true
 
 
 func _init() -> void:
@@ -124,6 +128,12 @@ func _init() -> void:
 			_run_reset_subscription_runtime_dedupes_duplicate_replacement_old_handles()
 		"reset_subscription_runtime_reentrant_old_failure_still_fails_new_handle":
 			_run_reset_subscription_runtime_reentrant_old_failure_still_fails_new_handle()
+		"reset_subscription_runtime_shares_single_failed_at_unix_time":
+			_run_reset_subscription_runtime_shares_single_failed_at_unix_time()
+		"subscribe_rejected_while_degraded_adds_no_pending":
+			_run_subscribe_rejected_while_degraded_adds_no_pending()
+		"reentrant_subscribe_during_teardown_rejected":
+			_run_reentrant_subscribe_during_teardown_rejected()
 		"retry_teardown_resets_subscription_runtime":
 			_run_retry_teardown_resets_subscription_runtime()
 		"reducer_result_non_integer_request_id":
@@ -160,6 +170,10 @@ func _reset_events() -> void:
 	_reducer_failure_events.clear()
 	_subscription_failed_events.clear()
 	_reentrant_unsubscribe_count = 0
+	_reentrant_subscribe_handler_fired = false
+	_reentrant_subscribe_returned_null = false
+	_reentrant_subscribe_pending_delta = 0
+	_reentrant_subscribe_armed = true
 
 
 func _run_transaction_update_non_numeric_id() -> void:
@@ -725,6 +739,95 @@ func _run_reset_subscription_runtime_reentrant_old_failure_still_fails_new_handl
 	quit(0)
 
 
+func _run_reset_subscription_runtime_shares_single_failed_at_unix_time() -> void:
+	# Spec spec-gdscript-wire-teardown-emission-hardening (item 412): a single
+	# teardown stamps every synthetic `subscription_failed` with the SAME
+	# `failed_at_unix_time`. Seed one pending replacement (old handle) PLUS one
+	# pending subscribe (new handle) so the reset emits both loops; assert the two
+	# events carry an identical, non-zero wall-clock timestamp. Emission order is
+	# unchanged (old-handle first), pinned elsewhere.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	var old_handle = SubscriptionHandleScript.new(42, 7, 7)
+	registry.handles_by_id[42] = old_handle
+	registry.handles_by_query_set_id[7] = old_handle
+	var new_handle = SubscriptionHandleScript.new(43, 11, 11)
+	service._pending_subscriptions[11] = new_handle
+	service._pending_replacements[43] = 42
+	service._reset_subscription_runtime()
+	_emit_result({
+		"subscription_failed_events": _jsonify(_subscription_failed_events),
+		"event_count": _subscription_failed_events.size(),
+	})
+	quit(0)
+
+
+func _run_subscribe_rejected_while_degraded_adds_no_pending() -> void:
+	# Spec spec-gdscript-wire-teardown-emission-hardening (item 413): a
+	# synchronous `subscribe()` during teardown (state DEGRADED, socket non-null on
+	# the retry path) is rejected by the public `subscribe()` Connected-state gate.
+	# Force DEGRADED, call `subscribe(...)`, and assert it returns null and adds NO
+	# `_pending_subscriptions` entry. The connected-state half of the
+	# `_send_subscribe_request` guard is the deeper protection; this exercises the
+	# public-API gate that callers actually hit.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._current_status = service._make_status(
+		ServiceScript.STATE_DEGRADED,
+		"DEGRADED — harness teardown in progress",
+		ServiceScript.AUTH_NONE
+	)
+	service._socket = WebSocketPeer.new()
+	var pending_before: int = (service._pending_subscriptions as Dictionary).size()
+	var result = service.subscribe(["SELECT * FROM smoke_test"])
+	var pending_after: int = (service._pending_subscriptions as Dictionary).size()
+	_emit_result({
+		"subscribe_returned_null": result == null,
+		"pending_subscriptions_size_before": pending_before,
+		"pending_subscriptions_size_after": pending_after,
+		"current_state": String(service._current_status.get("state", "")),
+	})
+	quit(0)
+
+
+func _run_reentrant_subscribe_during_teardown_rejected() -> void:
+	# Spec spec-gdscript-wire-teardown-emission-hardening (item 413), TRUE reentrant
+	# flow: a `subscription_failed` handler that synchronously calls `subscribe()`
+	# DURING a real `_reset_subscription_runtime()` teardown must be rejected by the
+	# public `subscribe()` Connected-state gate (state is DEGRADED here — the retry
+	# path), so the in-handler re-subscribe returns null and leaks NO
+	# `_pending_subscriptions` entry. This is higher fidelity than
+	# `subscribe_rejected_while_degraded_adds_no_pending`, which calls `subscribe()`
+	# standalone: here the reject happens mid-emission, inside the teardown loop.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._current_status = service._make_status(
+		ServiceScript.STATE_DEGRADED,
+		"DEGRADED — harness reentrant",
+		ServiceScript.AUTH_NONE
+	)
+	# Real, non-null socket — the retry-path condition (state DEGRADED, socket live).
+	service._socket = WebSocketPeer.new()
+	# Seed one pending subscribe so teardown emits a synthetic failure that drives
+	# the reentrant handler.
+	service._pending_subscriptions[11] = SubscriptionHandleScript.new(43, 11, 11)
+	service.subscription_failed.connect(
+		_on_subscription_failed_reentrant_subscribe.bind(service)
+	)
+	service._reset_subscription_runtime()
+	_emit_result({
+		"handler_fired": _reentrant_subscribe_handler_fired,
+		"reentrant_subscribe_returned_null": _reentrant_subscribe_returned_null,
+		"pending_added_by_reentrant_subscribe": _reentrant_subscribe_pending_delta,
+		"current_state": String(service._current_status.get("state", "")),
+	})
+	quit(0)
+
+
 func _run_retry_teardown_resets_subscription_runtime() -> void:
 	# Degraded retry starts a fresh wire session; this service does not replay
 	# subscriptions across that session boundary. Retry scheduling must therefore
@@ -775,6 +878,21 @@ func _on_subscription_failed_reentrant_unsubscribe(event: Dictionary, service: O
 		return
 	_reentrant_unsubscribe_count += 1
 	service.unsubscribe(handle)
+
+
+func _on_subscription_failed_reentrant_subscribe(_event: Dictionary, service: Object) -> void:
+	# Fire exactly once: re-entrant `subscribe()` during the teardown that is
+	# emitting this very `subscription_failed` signal. The guard prevents a
+	# re-subscribe attempt on every emission.
+	if not _reentrant_subscribe_armed:
+		return
+	_reentrant_subscribe_armed = false
+	_reentrant_subscribe_handler_fired = true
+	var before: int = (service._pending_subscriptions as Dictionary).size()
+	var result = service.subscribe(["SELECT * FROM smoke_test"])
+	var after: int = (service._pending_subscriptions as Dictionary).size()
+	_reentrant_subscribe_returned_null = result == null
+	_reentrant_subscribe_pending_delta = after - before
 
 
 func _jsonify(v: Variant) -> Variant:
