@@ -1632,6 +1632,70 @@ def test_reset_subscription_runtime_hoists_single_teardown_timestamp() -> None:
     )
 
 
+def test_reset_subscription_runtime_guards_malformed_pending_entry() -> None:
+    # Spec `spec-gdscript-wire-teardown-guard-exception-safety` (item A): GDScript
+    # has no try/finally, so `_reset_subscription_runtime` keeps its guarded region
+    # raise-proof. The pending-subscribe snapshot resolves each `handle_id` behind a
+    # non-raising probe (Object-type gate + integer check) and SKIPS a malformed
+    # entry with a `push_warning` instead of letting `int(pending_handle.handle_id)`
+    # raise and bypass the `_resetting_subscription_runtime = false` bookend. This
+    # pins the guard so a refactor that re-inlines the raw, unguarded handle_id read
+    # fails here rather than wedging every later teardown in production.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    body_lines = _isolate_func_body(service_src, "func _reset_subscription_runtime(")
+    # Strip comments so a doc-comment mentioning the old shape cannot poison the checks.
+    code = [ln.split("#", 1)[0] for ln in body_lines]
+    code_text = "\n".join(code)
+
+    # (1) The raw, unguarded raise source must be gone — reading `handle_id` straight
+    # off the loop variable is exactly the access that raises on a malformed value.
+    assert "int(pending_handle.handle_id)" not in code_text, (
+        "`_reset_subscription_runtime` must not read `int(pending_handle.handle_id)` "
+        "directly in the emission loop — that unguarded access is the raise source "
+        "that can skip the guard bookend. Resolve handle_id through the validated "
+        "snapshot instead."
+    )
+
+    # (2) The snapshot must probe `handle_id` behind an Object-type gate so a
+    # primitive value cannot itself raise on `.get(...)`.
+    assert any('get("handle_id")' in ln and "TYPE_OBJECT" in ln for ln in code), (
+        "the pending-subscribe snapshot must resolve handle_id via a non-raising "
+        'probe gated on Object type, e.g. `pending_handle.get("handle_id") if '
+        "typeof(pending_handle) == TYPE_OBJECT else null`."
+    )
+
+    # (3) A non-integer handle_id must be skipped (continue) with a diagnostic
+    # `push_warning` rather than appended.
+    int_guard_idx = next(
+        (
+            i
+            for i, ln in enumerate(code)
+            if re.search(r"typeof\(\s*handle_id_variant\s*\)\s*!=\s*TYPE_INT\s*:", ln)
+        ),
+        -1,
+    )
+    assert int_guard_idx >= 0, (
+        "the snapshot must guard the resolved handle_id with "
+        "`if typeof(handle_id_variant) != TYPE_INT:` before appending."
+    )
+    skip_block = code[int_guard_idx + 1 : int_guard_idx + 3]
+    assert any("push_warning(" in ln for ln in skip_block), (
+        "a malformed pending subscription must be reported with `push_warning(...)`."
+    )
+    assert any(ln.strip() == "continue" for ln in skip_block), (
+        "a malformed pending subscription must be skipped with `continue`."
+    )
+
+
 def test_send_subscribe_request_carries_connected_state_gate() -> None:
     # Spec `spec-gdscript-wire-teardown-emission-hardening` (item 413): the
     # protection that blocks a synchronous re-subscribe during teardown is the

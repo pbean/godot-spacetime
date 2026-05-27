@@ -988,3 +988,134 @@ def test_reentrant_subscribe_during_teardown_is_rejected() -> None:
         f"entry; got delta={data['pending_added_by_reentrant_subscribe']}."
     )
     assert data["current_state"] == "Degraded"
+
+
+def test_reset_subscription_runtime_survives_malformed_pending_entry() -> None:
+    # Spec `spec-gdscript-wire-teardown-guard-exception-safety` (item A): the
+    # pending-subscribe emission loop in `_reset_subscription_runtime` reads the
+    # handle_id off each `_pending_subscriptions` value. A malformed value (a
+    # primitive, or an Object without `handle_id`) must be SKIPPED, not allowed to
+    # raise — GDScript has no try/finally, so a raise between the guard set-true and
+    # the `_resetting_subscription_runtime = false` bookend would leave the guard
+    # stuck `true` and turn every later teardown into the entry-guard early return.
+    # Pins: (a) valid entries still fail while malformed ones are skipped; (b) the
+    # guard is restored after a teardown that hit a malformed entry; (c) a SECOND
+    # teardown still emits for a freshly-seeded handle (proving no wedge).
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reset_subscription_runtime_survives_malformed_pending_entry"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    # (a) The valid handle (id=42) still fails; the primitive and bare-Object
+    # entries are skipped rather than raising.
+    first_ids = [int(e["handle_id"]) for e in data["first_failed_events"]]
+    assert first_ids == [42], (
+        "the valid pending handle must still emit `subscription_failed` while the two "
+        f"malformed entries are skipped; got handle_ids {first_ids}."
+    )
+    assert int(data["pending_subscriptions_size_after_first"]) == 0
+    # (b) Guard restored — the malformed entry did not bypass the bookend.
+    assert data["guard_after_first"] is False, (
+        "`_resetting_subscription_runtime` must be restored to false after a teardown "
+        "that encountered a malformed pending entry; a stuck guard would wedge all "
+        "future teardowns."
+    )
+    # (c) A second teardown still runs a full emission (not a silent early-return).
+    second_ids = [int(e["handle_id"]) for e in data["second_failed_events"]]
+    assert second_ids == [99], (
+        "a second `_reset_subscription_runtime()` must still emit for a freshly-seeded "
+        f"handle (id=99), proving the guard did not wedge; got {second_ids}."
+    )
+    assert data["guard_after_second"] is False
+
+
+def test_replace_subscription_rejected_during_disconnect_teardown() -> None:
+    # Spec `spec-gdscript-wire-teardown-guard-exception-safety` (item B): a
+    # `subscription_failed` handler that synchronously calls `replace_subscription()`
+    # during the DISCONNECT teardown window — `_socket` already disposed, state still
+    # reading Connected because the DISCONNECTED transition fires after the reset — is
+    # rejected. It passes its own up-front gates (the authoritative handle is not
+    # reset until after the emission loops) and reaches `_begin_subscription` ->
+    # `_send_subscribe_request`, which rejects on the null socket; `_begin_subscription`
+    # then cleans up its transient pending entry. Net: returns null, nothing leaks, no
+    # frame is sent. This is the MEASURED mechanism — the deferred-work note's
+    # "authoritative reset to -1" claim was inaccurate for this window.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["replace_subscription_rejected_during_disconnect_teardown"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    # The reentrant path must actually be exercised, or the assertions pass vacuously.
+    assert data["replace_handler_fired"] is True, (
+        "the `subscription_failed` handler must have fired during teardown so "
+        "`replace_subscription()` was genuinely attempted mid-emission."
+    )
+    # State Connected confirms this is the disconnect window (not the retry/DEGRADED
+    # path), so the early Connected-state gate does NOT reject — the socket-null gate
+    # inside `_send_subscribe_request` is what stops it.
+    assert data["current_state"] == "Connected", (
+        "the disconnect-teardown window must keep state reading Connected; otherwise "
+        "this would exercise the retry path's up-front Connected-state rejection."
+    )
+    assert data["replace_returned_null"] is True, (
+        "`replace_subscription()` issued during the disconnect-teardown window (null "
+        "socket) must be rejected and return null."
+    )
+    # No transient pending entry survives the teardown.
+    assert int(data["pending_subscriptions_size_after"]) == 0
+    assert int(data["pending_replacements_size_after"]) == 0
+    # The valid pending subscribe (id=43) that drove the handler still emitted.
+    failed_ids = [int(e["handle_id"]) for e in data["subscription_failed_events"]]
+    assert failed_ids == [43], (
+        "the pending subscribe that drove the handler must still emit its synthetic "
+        f"failure; got handle_ids {failed_ids}."
+    )
+
+
+def test_replace_subscription_rejected_while_degraded_adds_no_pending() -> None:
+    # Spec `spec-gdscript-wire-teardown-guard-exception-safety` I/O matrix
+    # (retry-teardown row): a `replace_subscription()` issued while state is DEGRADED is
+    # rejected by its own up-front Connected-state gate, returns null, and adds no
+    # pending replacement/subscription entry. This is the retry-path counterpart to the
+    # disconnect-window test above (state Connected + null socket, rejected deeper in
+    # `_send_subscribe_request`) — distinct rejection mechanisms, both pinned.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["replace_subscription_rejected_while_degraded"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["current_state"] == "Degraded"
+    assert data["replace_returned_null"] is True, (
+        "`replace_subscription()` while DEGRADED must return null (rejected by its own "
+        "Connected-state gate before reaching `_begin_subscription`)."
+    )
+    assert int(data["pending_subscriptions_size_before"]) == 0
+    assert int(data["pending_subscriptions_size_after"]) == 0
+    assert int(data["pending_replacements_size_after"]) == 0

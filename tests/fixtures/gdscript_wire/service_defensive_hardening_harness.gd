@@ -19,6 +19,12 @@ class DummyRegistry:
 				return handle
 		return handles_by_query_set_id.get(query_set_id)
 
+	func register(handle: Object) -> void:
+		if handle == null:
+			return
+		handles_by_id[int(handle.handle_id)] = handle
+		handles_by_query_set_id[int(handle.query_set_id)] = handle
+
 	func unregister(handle_id: int) -> Dictionary:
 		if not handles_by_id.has(handle_id):
 			return {}
@@ -87,6 +93,9 @@ var _reentrant_subscribe_returned_null: bool = false
 var _reentrant_subscribe_pending_delta: int = 0
 var _reentrant_subscribe_armed: bool = true
 var _reentrant_subscribe_attempt_count: int = 0
+var _reentrant_replace_armed: bool = true
+var _reentrant_replace_handler_fired: bool = false
+var _reentrant_replace_returned_null: bool = false
 
 
 func _init() -> void:
@@ -143,6 +152,12 @@ func _init() -> void:
 			_run_request_id_persists_across_reset()
 		"subscribe_applied_rebinds_query_set_id":
 			_run_subscribe_applied_rebinds_query_set_id()
+		"reset_subscription_runtime_survives_malformed_pending_entry":
+			_run_reset_subscription_runtime_survives_malformed_pending_entry()
+		"replace_subscription_rejected_during_disconnect_teardown":
+			_run_replace_subscription_rejected_during_disconnect_teardown()
+		"replace_subscription_rejected_while_degraded":
+			_run_replace_subscription_rejected_while_degraded()
 		_:
 			_emit_error("unknown mode: %s" % args[0])
 			quit(2)
@@ -176,6 +191,9 @@ func _reset_events() -> void:
 	_reentrant_subscribe_pending_delta = 0
 	_reentrant_subscribe_armed = true
 	_reentrant_subscribe_attempt_count = 0
+	_reentrant_replace_armed = true
+	_reentrant_replace_handler_fired = false
+	_reentrant_replace_returned_null = false
 
 
 func _run_transaction_update_non_numeric_id() -> void:
@@ -868,6 +886,130 @@ func _run_retry_teardown_resets_subscription_runtime() -> void:
 		"pending_unsubscribes_size_after": (service._pending_unsubscribes as Dictionary).size(),
 	})
 	quit(0)
+
+
+func _run_reset_subscription_runtime_survives_malformed_pending_entry() -> void:
+	# Item A (exception safety): the pending-subscribe emission loop must not raise
+	# on a malformed `_pending_subscriptions` value. A primitive (exercises the
+	# `else null` probe branch), a bare Object lacking `handle_id` (exercises the
+	# missing-property probe), and a freed Object (exercises the `is_instance_valid`
+	# guard) are all skipped with a warning; the valid handle still fails. GDScript
+	# has no try/finally, so a raise here would skip the
+	# `_resetting_subscription_runtime = false` bookend and wedge every later
+	# teardown — so we also confirm the guard is restored AND a second teardown
+	# still emits for a freshly-seeded handle.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service._pending_subscriptions[10] = 123
+	service._pending_subscriptions[11] = RefCounted.new()
+	# A freed Object still reports typeof == TYPE_OBJECT; the `is_instance_valid`
+	# half of the probe is what stops `.get("handle_id")` from raising on it.
+	var freed_object := Object.new()
+	freed_object.free()
+	service._pending_subscriptions[12] = freed_object
+	service._pending_subscriptions[13] = SubscriptionHandleScript.new(42, 13, 13)
+	service._reset_subscription_runtime()
+	var first_failed_events = _jsonify(_subscription_failed_events)
+	var guard_after_first = service._resetting_subscription_runtime
+	var pending_after_first: int = (service._pending_subscriptions as Dictionary).size()
+	# A stuck guard would make this second teardown early-return and emit nothing.
+	_subscription_failed_events.clear()
+	service._pending_subscriptions[14] = SubscriptionHandleScript.new(99, 14, 14)
+	service._reset_subscription_runtime()
+	_emit_result({
+		"first_failed_events": first_failed_events,
+		"guard_after_first": guard_after_first,
+		"pending_subscriptions_size_after_first": pending_after_first,
+		"second_failed_events": _jsonify(_subscription_failed_events),
+		"guard_after_second": service._resetting_subscription_runtime,
+	})
+	quit(0)
+
+
+func _run_replace_subscription_rejected_during_disconnect_teardown() -> void:
+	# Item B (measured contract): on the disconnect teardown path `_finish_disconnect`
+	# disposes the socket BEFORE `_reset_subscription_runtime` and transitions to
+	# DISCONNECTED AFTER it, so during synthetic emission `_socket == null` while
+	# state still reads Connected. A `subscription_failed` handler that calls
+	# `replace_subscription()` in that window passes its own gates (authoritative not
+	# yet reset) but is rejected by `_send_subscribe_request`'s socket-null check;
+	# `_begin_subscription`'s send-failure cleanup discards the transient handle, so
+	# nothing leaks and no frame is sent — NOT the authoritative-reset mechanism the
+	# deferred note claimed.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	service._current_status = service._make_status(
+		ServiceScript.STATE_CONNECTED,
+		"CONNECTED — harness disconnect-teardown window",
+		ServiceScript.AUTH_NONE
+	)
+	service._socket = null
+	var auth_handle = SubscriptionHandleScript.new(50, 5, 5)
+	registry.handles_by_id[50] = auth_handle
+	registry.handles_by_query_set_id[5] = auth_handle
+	service._authoritative_handle_id = 50
+	service._pending_subscriptions[11] = SubscriptionHandleScript.new(43, 11, 11)
+	service.subscription_failed.connect(
+		_on_subscription_failed_reentrant_replace.bind(service, auth_handle)
+	)
+	service._reset_subscription_runtime()
+	_emit_result({
+		"subscription_failed_events": _jsonify(_subscription_failed_events),
+		"replace_handler_fired": _reentrant_replace_handler_fired,
+		"replace_returned_null": _reentrant_replace_returned_null,
+		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
+		"pending_replacements_size_after": (service._pending_replacements as Dictionary).size(),
+		"current_state": String(service._current_status.get("state", "")),
+	})
+	quit(0)
+
+
+func _run_replace_subscription_rejected_while_degraded() -> void:
+	# I/O matrix (retry-teardown row): a `replace_subscription()` issued while state is
+	# DEGRADED is rejected up front by `replace_subscription`'s own Connected-state gate
+	# — before it touches `_begin_subscription` or reserves anything — so it returns null
+	# and adds no pending replacement/subscription entry. Distinct from the
+	# disconnect-window path (state Connected, socket null), which is rejected deeper in
+	# `_send_subscribe_request`.
+	_reset_events()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	service._current_status = service._make_status(
+		ServiceScript.STATE_DEGRADED,
+		"DEGRADED — harness retry-path replace",
+		ServiceScript.AUTH_NONE
+	)
+	service._socket = WebSocketPeer.new()
+	var auth_handle = SubscriptionHandleScript.new(50, 5, 5)
+	registry.handles_by_id[50] = auth_handle
+	registry.handles_by_query_set_id[5] = auth_handle
+	service._authoritative_handle_id = 50
+	var pending_before: int = (service._pending_subscriptions as Dictionary).size()
+	var result = service.replace_subscription(auth_handle, ["SELECT * FROM smoke_test"])
+	_emit_result({
+		"replace_returned_null": result == null,
+		"pending_subscriptions_size_before": pending_before,
+		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
+		"pending_replacements_size_after": (service._pending_replacements as Dictionary).size(),
+		"current_state": String(service._current_status.get("state", "")),
+	})
+	quit(0)
+
+
+func _on_subscription_failed_reentrant_replace(_event: Dictionary, service: Object, auth_handle: Object) -> void:
+	# Fire exactly once: a synchronous `replace_subscription()` during the teardown
+	# emitting this signal. The one-shot guard keeps a single attempt even if the
+	# teardown emits more than once.
+	if not _reentrant_replace_armed:
+		return
+	_reentrant_replace_armed = false
+	_reentrant_replace_handler_fired = true
+	var result = service.replace_subscription(auth_handle, ["SELECT * FROM smoke_test"])
+	_reentrant_replace_returned_null = result == null
 
 
 func _on_row_changed(event: Dictionary) -> void:

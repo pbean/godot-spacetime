@@ -1358,16 +1358,41 @@ func _reset_subscription_runtime() -> void:
 	var pending_old_handle_ids: Array = []
 	var emitted_old_handle_ids: Dictionary = {}
 	for old_handle_id_variant in _pending_replacements.values():
+		# Belt-and-suspenders: `_pending_replacements` values are always ints
+		# (seeded from `replaced_handle_id`), but guard the cast so a future
+		# relaxation of that invariant cannot raise here and skip the
+		# `_resetting_subscription_runtime = false` restore at the end of this
+		# function. GDScript has no try/finally, so the guarded region is kept
+		# raise-proof instead.
+		if typeof(old_handle_id_variant) != TYPE_INT:
+			push_warning("GDScript wire: skipping non-integer pending-replacement old handle id during teardown.")
+			continue
 		var old_handle_id := int(old_handle_id_variant)
 		if emitted_old_handle_ids.has(old_handle_id):
 			continue
 		emitted_old_handle_ids[old_handle_id] = true
 		pending_old_handle_ids.append(old_handle_id)
 
+	# Build the pending-subscribe snapshot defensively. Each value must be an
+	# Object carrying an integer `handle_id`; a malformed entry is skipped with a
+	# warning rather than allowed to raise on the `handle_id` access. The raise
+	# would land between the guard set-true above and the
+	# `_resetting_subscription_runtime = false` restore below — with no
+	# try/finally in GDScript, that would leave the guard stuck `true` and turn
+	# every later teardown into the entry-guard early return. Resolving the id
+	# here means the emission loop consumes only pre-validated data. "Raise-proof"
+	# here covers internal value shape only — a `subscription_failed` handler that
+	# itself raises during emission is a separate, pre-existing hazard (tracked in
+	# deferred-work). The probe is gated on a LIVE Object first: a primitive has no
+	# `.get()`, and `.get()` on a freed instance would raise (typeof alone still
+	# reports TYPE_OBJECT for a freed object).
 	var pending_subscription_handles: Array = []
 	for pending_handle in _pending_subscriptions.values():
-		if pending_handle != null:
-			pending_subscription_handles.append(pending_handle)
+		var handle_id_variant = pending_handle.get("handle_id") if typeof(pending_handle) == TYPE_OBJECT and is_instance_valid(pending_handle) else null
+		if typeof(handle_id_variant) != TYPE_INT:
+			push_warning("GDScript wire: skipping malformed pending subscription (no integer handle_id) during teardown.")
+			continue
+		pending_subscription_handles.append({"handle": pending_handle, "handle_id": int(handle_id_variant)})
 
 	for old_handle_id_variant in pending_old_handle_ids:
 		var old_handle_id := int(old_handle_id_variant)
@@ -1379,11 +1404,12 @@ func _reset_subscription_runtime() -> void:
 			"error_message": "Connection lost before replacement subscription was confirmed; pre-replacement handle terminated.",
 			"failed_at_unix_time": failed_at_unix_time,
 		})
-	for pending_handle in pending_subscription_handles:
+	for entry in pending_subscription_handles:
+		var pending_handle = entry["handle"]
 		if pending_handle.has_method("close"):
 			pending_handle.close()
 		emit_signal("subscription_failed", {
-			"handle_id": int(pending_handle.handle_id),
+			"handle_id": entry["handle_id"],
 			"error_message": "Connection lost before SubscribeApplied was observed.",
 			"failed_at_unix_time": failed_at_unix_time,
 		})
