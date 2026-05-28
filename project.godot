@@ -14,16 +14,15 @@ config/name="godot-spacetime"
 config/features=PackedStringArray("4.6", "C#", "Forward Plus")
 config/icon="res://addons/godot_spacetime/assets/icon.svg"
 
+[autoload]
+
+TestBridge="*res://addons/test_bridge/TestBridge.gd"
+DemoBootstrap="*res://demo/autoload/DemoBootstrap.cs"
+
 [dotnet]
 
 project/assembly_name="GodotSpacetime"
 
 [rendering]
 
-renderer/rendering_method="forward_plus"
 renderer/rendering_method.mobile="forward_plus"
-
-[autoload]
-
-TestBridge="*res://addons/test_bridge/TestBridge.gd"
-DemoBootstrap="*res://demo/autoload/DemoBootstrap.cs"
