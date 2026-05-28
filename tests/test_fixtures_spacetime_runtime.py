@@ -18,7 +18,9 @@ import pytest
 from tests.fixtures import spacetime_runtime
 from tests.fixtures.spacetime_runtime import (
     ProbeResult,
+    probe_browser_binary,
     probe_godot_binary,
+    probe_godot_non_mono_binary,
     probe_local_runtime,
     probe_spacetime_cli,
 )
@@ -356,3 +358,169 @@ def test_probe_result_is_frozen() -> None:
     result = ProbeResult(available=True, path="/x")
     with pytest.raises(Exception):
         result.available = False  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Exec-time failure (PermissionError/OSError) must skip, never error
+# ---------------------------------------------------------------------------
+
+
+def test_probe_spacetime_cli_unrunnable_binary_skips(
+    isolated_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _make_stub_binary(isolated_path, "spacetime")
+
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_spacetime_cli()
+    assert not result.available
+    assert "unrunnable" in result.reason
+
+
+def test_probe_godot_binary_unrunnable_binary_skips(
+    isolated_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _make_stub_binary(isolated_path, "godot-mono")
+
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
+        raise OSError(8, "Exec format error")
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_godot_binary()
+    assert not result.available
+    assert "unrunnable" in result.reason
+
+
+def test_probe_godot_non_mono_binary_unrunnable_binary_skips(
+    isolated_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GODOT_WEB_EXPORT_BIN", raising=False)
+    _make_stub_binary(isolated_path, "godot")
+
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_godot_non_mono_binary()
+    assert not result.available
+    assert "unrunnable" in result.reason
+
+
+def test_probe_browser_binary_unrunnable_binary_skips(
+    isolated_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BROWSER_BIN", raising=False)
+    _make_stub_binary(isolated_path, "chromium")
+
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
+        raise OSError(8, "Exec format error")
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_browser_binary()
+    assert not result.available
+    assert "unrunnable" in result.reason
+
+
+def test_probe_local_runtime_unrunnable_binary_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(*args: Any, **kwargs: Any) -> Any:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_local_runtime("/fake/spacetime")
+    assert not result.available
+    assert "unrunnable" in result.reason
+
+
+# ---------------------------------------------------------------------------
+# Non-zero exit must surface the child's stderr in the skip reason
+# ---------------------------------------------------------------------------
+
+
+def test_probe_godot_binary_nonzero_exit_includes_stderr(
+    isolated_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _make_stub_binary(isolated_path, "godot-mono")
+
+    def fake_run(*args: Any, **kwargs: Any) -> _FakeCompletedProcess:
+        return _FakeCompletedProcess(returncode=1, stderr="export template missing")
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_godot_binary()
+    assert not result.available
+    assert "exited with" in result.reason
+    assert "export template missing" in result.reason
+
+
+def test_probe_godot_non_mono_binary_nonzero_exit_includes_stderr(
+    isolated_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GODOT_WEB_EXPORT_BIN", raising=False)
+    _make_stub_binary(isolated_path, "godot")
+
+    def fake_run(*args: Any, **kwargs: Any) -> _FakeCompletedProcess:
+        return _FakeCompletedProcess(returncode=1, stderr="export template missing")
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_godot_non_mono_binary()
+    assert not result.available
+    assert "exited with" in result.reason
+    assert "export template missing" in result.reason
+
+
+def test_probe_browser_binary_nonzero_exit_includes_stderr(
+    isolated_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BROWSER_BIN", raising=False)
+    _make_stub_binary(isolated_path, "chromium")
+
+    def fake_run(*args: Any, **kwargs: Any) -> _FakeCompletedProcess:
+        return _FakeCompletedProcess(returncode=1, stderr="export template missing")
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_browser_binary()
+    assert not result.available
+    assert "exited with" in result.reason
+    assert "export template missing" in result.reason
+
+
+# ---------------------------------------------------------------------------
+# _looks_like_mono_godot_build: anchored markers, no dotnet false positive
+# ---------------------------------------------------------------------------
+
+
+def test_looks_like_mono_godot_build_ignores_incidental_dotnet_banner() -> None:
+    banner = "Godot Engine v4.6.3.stable.arch_linux (dotnet runtime present)"
+    assert (
+        spacetime_runtime._looks_like_mono_godot_build("/usr/bin/godot", banner)
+        is False
+    )
+
+
+def test_looks_like_mono_godot_build_still_detects_mono_banner() -> None:
+    banner = "Godot Engine v4.6.3.stable.mono.arch_linux"
+    assert (
+        spacetime_runtime._looks_like_mono_godot_build("/usr/bin/godot", banner)
+        is True
+    )
+
+
+def test_probe_godot_non_mono_binary_accepts_dotnet_mentioning_banner(
+    isolated_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GODOT_WEB_EXPORT_BIN", raising=False)
+    path = _make_stub_binary(isolated_path, "godot")
+
+    def fake_run(*args: Any, **kwargs: Any) -> _FakeCompletedProcess:
+        return _FakeCompletedProcess(
+            returncode=0,
+            stdout="Godot Engine v4.6.3.stable.arch_linux (dotnet runtime present)",
+        )
+
+    monkeypatch.setattr(spacetime_runtime.subprocess, "run", fake_run)
+    result = probe_godot_non_mono_binary()
+    assert result.available
+    assert result.path == path

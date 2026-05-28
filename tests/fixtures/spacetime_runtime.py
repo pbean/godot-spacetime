@@ -89,13 +89,13 @@ def probe_spacetime_cli() -> ProbeResult:
             text=True,
             timeout=10,
         )
-    except FileNotFoundError:
-        return ProbeResult(
-            available=False, reason=f"spacetime CLI at {path} disappeared before exec"
-        )
     except subprocess.TimeoutExpired:
         return ProbeResult(
             available=False, reason="spacetime --version timed out after 10s"
+        )
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        return ProbeResult(
+            available=False, reason=f"spacetime CLI at {path} unrunnable: {exc}"
         )
     if result.returncode != 0:
         return ProbeResult(
@@ -143,19 +143,20 @@ def probe_godot_binary() -> ProbeResult:
             text=True,
             timeout=15,
         )
-    except FileNotFoundError:
-        return ProbeResult(
-            available=False,
-            reason=f"Godot binary at {resolved} disappeared before exec",
-        )
     except subprocess.TimeoutExpired:
         return ProbeResult(
             available=False, reason="godot --version timed out after 15s"
         )
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        return ProbeResult(
+            available=False,
+            reason=f"Godot binary at {resolved} unrunnable: {exc}",
+        )
     if result.returncode != 0:
         return ProbeResult(
             available=False,
-            reason=f"{resolved} --version exited with {result.returncode}",
+            reason=f"{resolved} --version exited with {result.returncode}: "
+            f"{(result.stderr or '').strip()[:200]}",
         )
     if not _looks_like_mono_godot_build(resolved, result.stdout or ""):
         return ProbeResult(
@@ -222,19 +223,20 @@ def probe_godot_non_mono_binary() -> ProbeResult:
             text=True,
             timeout=15,
         )
-    except FileNotFoundError:
-        return ProbeResult(
-            available=False,
-            reason=f"Godot binary at {resolved} disappeared before exec",
-        )
     except subprocess.TimeoutExpired:
         return ProbeResult(
             available=False, reason="godot --version timed out after 15s"
         )
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        return ProbeResult(
+            available=False,
+            reason=f"Godot binary at {resolved} unrunnable: {exc}",
+        )
     if result.returncode != 0:
         return ProbeResult(
             available=False,
-            reason=f"{resolved} --version exited with {result.returncode}",
+            reason=f"{resolved} --version exited with {result.returncode}: "
+            f"{(result.stderr or '').strip()[:200]}",
         )
     # Some packaged Godot variants print the version banner to stderr only;
     # concatenate both so a Mono build cannot hide its `.mono.` marker by
@@ -287,20 +289,21 @@ def probe_browser_binary() -> ProbeResult:
             text=True,
             timeout=15,
         )
-    except FileNotFoundError:
-        return ProbeResult(
-            available=False,
-            reason=f"browser binary at {resolved} disappeared before exec",
-        )
     except subprocess.TimeoutExpired:
         return ProbeResult(
             available=False,
             reason="browser --version timed out after 15s",
         )
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        return ProbeResult(
+            available=False,
+            reason=f"browser binary at {resolved} unrunnable: {exc}",
+        )
     if result.returncode != 0:
         return ProbeResult(
             available=False,
-            reason=f"{resolved} --version exited with {result.returncode}",
+            reason=f"{resolved} --version exited with {result.returncode}: "
+            f"{(result.stderr or '').strip()[:200]}",
         )
     return ProbeResult(available=True, path=resolved)
 
@@ -369,6 +372,11 @@ def probe_local_runtime(spacetime_cli_path: str) -> ProbeResult:
         return ProbeResult(
             available=False, reason="spacetime server list timed out after 10s"
         )
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        return ProbeResult(
+            available=False,
+            reason=f"spacetime CLI at {spacetime_cli_path} unrunnable: {exc}",
+        )
     if list_result.returncode != 0:
         return ProbeResult(
             available=False,
@@ -392,6 +400,11 @@ def probe_local_runtime(spacetime_cli_path: str) -> ProbeResult:
         return ProbeResult(
             available=False,
             reason=f"spacetime server ping {server} timed out after 10s",
+        )
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        return ProbeResult(
+            available=False,
+            reason=f"spacetime CLI at {spacetime_cli_path} unrunnable: {exc}",
         )
     if ping_result.returncode != 0:
         return ProbeResult(
@@ -535,8 +548,8 @@ def _looks_like_mono_godot_build(path: str, version_output: str) -> bool:
     return (
         "mono" in lowered_path
         or "mono" in lowered_output
-        or ".net" in lowered_output
-        or "dotnet" in lowered_output
+        or re.search(r"\.mono\b", lowered_output) is not None
+        or re.search(r"\.net\b", lowered_output) is not None
     )
 
 
