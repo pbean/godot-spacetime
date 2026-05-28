@@ -100,6 +100,9 @@ var _reentrant_replace_returned_null: bool = false
 # reentrance-guard value it observes, which must be `false` (teardown completed
 # and the guard was restored before any handler ran).
 var _guard_seen_inside_handler: bool = true
+# Ordered log of signal names as they are emitted, used by `finish_disconnect_ordering`
+# to assert `connection_closed` precedes the deferred `subscription_failed`.
+var _ordered_signal_log: Array = []
 
 
 func _init() -> void:
@@ -160,6 +163,8 @@ func _init() -> void:
 			_run_reset_subscription_runtime_survives_malformed_pending_entry()
 		"replace_subscription_rejected_during_disconnect_teardown":
 			_run_replace_subscription_rejected_during_disconnect_teardown()
+		"finish_disconnect_ordering":
+			_run_finish_disconnect_ordering()
 		"replace_subscription_rejected_while_degraded":
 			_run_replace_subscription_rejected_while_degraded()
 		"reset_subscription_runtime_handler_runs_after_guard_cleared":
@@ -950,8 +955,8 @@ func _run_replace_subscription_rejected_during_disconnect_teardown() -> void:
 	# deferred `subscription_failed` handler runs the session is terminal
 	# (DISCONNECTED), so a handler that calls `replace_subscription()` is rejected up
 	# front by its own Connected-state gate — it never reaches the wire and leaks no
-	# pending entry. We reproduce that ordering by transitioning to DISCONNECTED
-	# after the reset, mirroring `_finish_disconnect`.
+	# pending entry. We drive the real `_finish_disconnect(...)` so this ordering is
+	# observed against the production caller rather than a hand-assembled transition.
 	_reset_events()
 	var ctx := _new_service_context()
 	var service = ctx["service"]
@@ -970,15 +975,17 @@ func _run_replace_subscription_rejected_during_disconnect_teardown() -> void:
 	service.subscription_failed.connect(
 		_on_subscription_failed_reentrant_replace.bind(service, auth_handle)
 	)
-	service._reset_subscription_runtime()
-	# Drive the DISCONNECTED transition through `_transition_to` (as `_finish_disconnect`
-	# does) rather than assigning `_current_status` directly, so the harness emits
-	# `state_changed` exactly like production and faithfully reproduces the ordering the
-	# deferred handler observes.
-	service._transition_to(
-		ServiceScript.STATE_DISCONNECTED,
+	# Drive the real `_finish_disconnect(...)` rather than hand-assembling
+	# `_reset_subscription_runtime()` + a manual `_transition_to(STATE_DISCONNECTED, ...)`,
+	# so the harness exercises the production caller's actual interleaving (socket
+	# disposal, reset, DISCONNECTED transition, then connection_closed) and cannot drift
+	# from it.
+	service._finish_disconnect(
 		"DISCONNECTED — harness disconnect-teardown",
-		ServiceScript.AUTH_NONE
+		ServiceScript.AUTH_NONE,
+		true,
+		ServiceScript.CLOSE_REASON_CLEAN,
+		""
 	)
 	await _settle_deferred()
 	_emit_result({
@@ -987,6 +994,55 @@ func _run_replace_subscription_rejected_during_disconnect_teardown() -> void:
 		"replace_returned_null": _reentrant_replace_returned_null,
 		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
 		"pending_replacements_size_after": (service._pending_replacements as Dictionary).size(),
+		"current_state": String(service._current_status.get("state", "")),
+	})
+	quit(0)
+
+
+func _run_finish_disconnect_ordering() -> void:
+	# D2: pin the documented end-to-end ordering by driving the real
+	# `_finish_disconnect(...)` — NOT a hand-assembled `_reset_subscription_runtime()` +
+	# manual transition. `_finish_disconnect` runs the synchronous teardown (which queues
+	# the synthetic `subscription_failed` DEFERRED), transitions to DISCONNECTED
+	# (synchronous `state_changed`), then emits `connection_closed` synchronously. The
+	# deferred `subscription_failed` therefore flushes on a LATER idle frame, after both
+	# `state_changed` and `connection_closed`. We capture every signal's name into a
+	# single ordered log so the test can assert `connection_closed` precedes the deferred
+	# `subscription_failed`, and surface the failure payloads to confirm the pending
+	# subscribe still emitted.
+	_reset_events()
+	_ordered_signal_log.clear()
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	var registry = ctx["registry"]
+	service._current_status = service._make_status(
+		ServiceScript.STATE_CONNECTED,
+		"CONNECTED — harness finish-disconnect ordering",
+		ServiceScript.AUTH_NONE
+	)
+	service._socket = null
+	var auth_handle = SubscriptionHandleScript.new(50, 5, 5)
+	registry.handles_by_id[50] = auth_handle
+	registry.handles_by_query_set_id[5] = auth_handle
+	service._authoritative_handle_id = 50
+	service._pending_subscriptions[11] = SubscriptionHandleScript.new(43, 11, 11)
+	# Capture each signal into one ordered log. `subscription_failed` already has the
+	# default `_on_subscription_failed` listener appending to `_subscription_failed_events`;
+	# the ordered-log listeners are additive and only record the emission order.
+	service.state_changed.connect(_on_state_changed_ordered)
+	service.connection_closed.connect(_on_connection_closed_ordered)
+	service.subscription_failed.connect(_on_subscription_failed_ordered)
+	service._finish_disconnect(
+		"DISCONNECTED — harness finish-disconnect ordering",
+		ServiceScript.AUTH_NONE,
+		true,
+		ServiceScript.CLOSE_REASON_CLEAN,
+		""
+	)
+	await _settle_deferred()
+	_emit_result({
+		"ordered_signal_log": _jsonify(_ordered_signal_log),
+		"subscription_failed_events": _jsonify(_subscription_failed_events),
 		"current_state": String(service._current_status.get("state", "")),
 	})
 	quit(0)
@@ -1077,6 +1133,18 @@ func _on_subscription_failed_reentrant_replace(_event: Dictionary, service: Obje
 	_reentrant_replace_handler_fired = true
 	var result = service.replace_subscription(auth_handle, ["SELECT * FROM smoke_test"])
 	_reentrant_replace_returned_null = result == null
+
+
+func _on_state_changed_ordered(_status: Dictionary) -> void:
+	_ordered_signal_log.append("state_changed")
+
+
+func _on_connection_closed_ordered(_event: Dictionary) -> void:
+	_ordered_signal_log.append("connection_closed")
+
+
+func _on_subscription_failed_ordered(_event: Dictionary) -> void:
+	_ordered_signal_log.append("subscription_failed")
 
 
 func _on_row_changed(event: Dictionary) -> void:

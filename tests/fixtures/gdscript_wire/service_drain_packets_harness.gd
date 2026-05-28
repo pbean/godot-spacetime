@@ -67,6 +67,8 @@ func _init() -> void:
 			_run_hysteresis_n_recoveries_rearm()
 		"mid_drain_teardown_disconnects_and_drops_remaining_packets":
 			_run_mid_drain_teardown_disconnects_and_drops_remaining_packets()
+		"drain_loop_saturation_hits_cap":
+			_run_drain_loop_saturation_hits_cap()
 		_:
 			_emit_error("unknown mode: %s" % args[0])
 			quit(2)
@@ -339,6 +341,67 @@ func _run_mid_drain_teardown_disconnects_and_drops_remaining_packets() -> void:
 		"socket_cleared": service._socket == null,
 		"current_state": String(service._current_status.get("state", "")),
 		"current_description": String(service._current_status.get("description", "")),
+	})
+	quit(0)
+
+
+func _run_drain_loop_saturation_hits_cap() -> void:
+	var args := OS.get_cmdline_user_args()
+	if args.size() < 2:
+		_emit_error("saturation-cap mode requires a port argument")
+		quit(2)
+		return
+	var port := int(args[1])
+	var service = DrainHarnessService.new()
+	var open_result := service.open_connection("ws://127.0.0.1:%d" % port, "smoke_test")
+	if open_result != OK:
+		_emit_error("open_connection failed: %s" % error_string(open_result))
+		quit(2)
+		return
+	# Poll the transport up to OPEN without invoking the drain loop yet — the
+	# fixture server completes the RFC-6455 handshake then streams the frames.
+	var reached_open := false
+	for _i in range(120):
+		if service._socket == null:
+			break
+		service._socket.poll()
+		if service._socket.get_ready_state() == WebSocketPeer.STATE_OPEN:
+			reached_open = true
+			break
+		OS.delay_msec(10)
+	if not reached_open or service._socket == null:
+		_emit_error("socket never reached STATE_OPEN")
+		quit(2)
+		return
+	# Give the fixture a moment to deliver all queued frames so a single tick
+	# sees more than DRAIN_PACKETS_PER_TICK packets buffered. Mirror the
+	# OPEN-wait loop above: if delivery never reaches the precondition (slow CI,
+	# scheduler jitter, TCP coalescing, early server close) bail with a
+	# self-describing error instead of silently advancing — otherwise an
+	# environment timing race surfaces as a misleading saturation-logic failure.
+	var buffered_enough := false
+	for _i in range(20):
+		if service._socket == null:
+			break
+		service._socket.poll()
+		if service._socket.get_available_packet_count() > ServiceScript.DRAIN_PACKETS_PER_TICK:
+			buffered_enough = true
+			break
+		OS.delay_msec(10)
+	if not buffered_enough:
+		var buffered: int = service._socket.get_available_packet_count() if service._socket != null else -1
+		_emit_error("fixture did not buffer more than DRAIN_PACKETS_PER_TICK frames before advance(); buffered=%d cap=%d" % [buffered, ServiceScript.DRAIN_PACKETS_PER_TICK])
+		quit(2)
+		return
+	# Exactly one tick: poll() + _process_socket_state() -> _drain_packets() ->
+	# _update_backlog_saturation(). The all-valid frames never tear the socket
+	# down, so the loop exits via the cap and saturated_this_tick is true.
+	service.advance()
+	_emit_result({
+		"drained_count": service.initial_connection_messages.size(),
+		"consecutive_saturated_ticks": int(service._consecutive_saturated_ticks),
+		"buffered_after": service._socket.get_available_packet_count() if service._socket != null else 0,
+		"cap": ServiceScript.DRAIN_PACKETS_PER_TICK,
 	})
 	quit(0)
 

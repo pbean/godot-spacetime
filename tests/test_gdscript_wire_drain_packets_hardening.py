@@ -529,3 +529,80 @@ def test_mid_drain_teardown_drops_remaining_packets_and_disconnects_cleanly() ->
     stderr = proc.stderr.decode("utf-8", "replace")
     assert "SCRIPT ERROR" not in stderr, stderr
     assert "Assertion failed" not in stderr, stderr
+
+
+def _read_drain_packets_per_tick_constant() -> int:
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+    import re as _re
+
+    match = _re.search(
+        r"^const\s+DRAIN_PACKETS_PER_TICK\s*:\s*int\s*=\s*(\d+)",
+        service_src,
+        _re.MULTILINE,
+    )
+    assert match is not None, (
+        "gdscript_connection_service.gd must still declare DRAIN_PACKETS_PER_TICK"
+    )
+    return int(match.group(1))
+
+
+def test_drain_loop_hits_cap_marks_tick_saturated_with_packets_buffered() -> None:
+    # Drives the real open_connection -> advance -> _process_socket_state ->
+    # _drain_packets -> _update_backlog_saturation path against a localhost
+    # WebSocket that queues more than DRAIN_PACKETS_PER_TICK valid frames in a
+    # single tick. The all-valid frames never tear the socket down, so the loop
+    # exits via the cap (`drained >= DRAIN_PACKETS_PER_TICK`) — exercising the
+    # `saturated_this_tick` predicate and the post-loop `buffered_after` sample
+    # that the direct-helper saturation tests never touch at runtime.
+    cap = _read_drain_packets_per_tick_constant()
+    overflow = 16
+    payloads = [
+        _build_initial_connection_frame(f"frame_{i}") for i in range(cap + overflow)
+    ]
+    with _FixtureWebSocketServer(payloads) as server:
+        proc = _run_harness_process(
+            "drain_loop_saturation_hits_cap",
+            [str(server.port)],
+        )
+        data = _unwrap(
+            _parse_harness_result(proc, "drain_loop_saturation_hits_cap"),
+            "drain_loop_saturation_hits_cap",
+        )
+    assert int(data["cap"]) == cap
+    # The drain loop honored the per-tick cap: exactly DRAIN_PACKETS_PER_TICK
+    # frames dispatched, not all cap+overflow. This pins the loop-termination
+    # bound (`if drained >= DRAIN_PACKETS_PER_TICK: break`, production line 443) —
+    # the `saturated_this_tick` predicate (line 498) is pinned separately by the
+    # `consecutive_saturated_ticks == 1` assertion below.
+    assert int(data["drained_count"]) == cap, (
+        f"drain loop must stop at the {cap}-frame cap, not dispatch all "
+        f"{cap + overflow} frames in one tick; got {data['drained_count']}"
+    )
+    # The single saturated tick advanced the counter to exactly 1 — proving the
+    # real `_socket != null and drained >= DRAIN_PACKETS_PER_TICK` predicate
+    # evaluated true. A `>=`-to-`>` flip would dispatch all frames and leave the
+    # counter at 0.
+    assert int(data["consecutive_saturated_ticks"]) == 1, (
+        "a single cap-hitting tick must advance `_consecutive_saturated_ticks` to "
+        f"1 via the saturated_this_tick predicate; got {data['consecutive_saturated_ticks']}"
+    )
+    # Packets remain queued after the cap-bounded drain — proving the sample is
+    # taken AFTER the loop, not before (a pre-loop sample would also be > 0, but
+    # combined with the counter==1 and drained==cap assertions this pins the
+    # post-loop semantics the static layer cannot catch).
+    assert int(data["buffered_after"]) > 0, (
+        "the cap was hit with frames still queued, so the post-drain "
+        f"get_available_packet_count() must be > 0; got {data['buffered_after']}"
+    )
+    stderr = proc.stderr.decode("utf-8", "replace")
+    assert "SCRIPT ERROR" not in stderr, stderr
+    assert "Assertion failed" not in stderr, stderr

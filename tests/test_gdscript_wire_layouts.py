@@ -1077,6 +1077,85 @@ def test_max_bundled_query_sets_cap_declared_and_used_by_both_handlers() -> None
     )
 
 
+def test_bundled_update_handlers_carry_defensive_query_set_coercion() -> None:
+    # Bucket A close-out lock-in: both `_handle_transaction_update` and
+    # `_handle_reducer_result` must keep the four defensive guards that stop a
+    # malformed server frame (non-Array `query_sets`, a non-Dictionary bundle
+    # entry, a missing/non-int `query_set_id`, or a negative id) from raising a
+    # Godot runtime cast error or false-matching a registered handle. The guards
+    # already shipped (commits 61e2a32 / 09ad764); this static-contract test
+    # pins their source shape so a future refactor cannot silently drop the
+    # coercion. Mirrors the body-slice pattern in
+    # `test_max_bundled_query_sets_cap_declared_and_used_by_both_handlers`.
+    service_src = (
+        ROOT
+        / "addons"
+        / "godot_spacetime"
+        / "src"
+        / "Internal"
+        / "Platform"
+        / "GDScript"
+        / "gdscript_connection_service.gd"
+    ).read_text(encoding="utf-8")
+
+    lines = service_src.splitlines()
+
+    def _body_for(func_prefix: str) -> str:
+        idx = next((i for i, ln in enumerate(lines) if ln.startswith(func_prefix)), -1)
+        assert idx >= 0, f"{func_prefix!r} must exist."
+        body: list[str] = []
+        for ln in lines[idx + 1 :]:
+            if ln.startswith("func "):
+                break
+            body.append(ln)
+        return "\n".join(body)
+
+    transaction_update_body = _body_for("func _handle_transaction_update(")
+    reducer_result_body = _body_for("func _handle_reducer_result(")
+
+    # Guard 1: non-Array `query_sets` must be rejected before the typed
+    # `var query_sets: Array = ...` cast (return for TransactionUpdate,
+    # coerce-to-`[]` for ReducerResult so the reducer signal still fires).
+    assert "if not (query_sets_variant is Array)" in transaction_update_body, (
+        "`_handle_transaction_update` must guard a non-Array `query_sets` with "
+        "`if not (query_sets_variant is Array)` before the typed cast."
+    )
+    assert "if not (query_sets_variant is Array)" in reducer_result_body, (
+        "`_handle_reducer_result` must guard a non-Array `query_sets` with "
+        "`if not (query_sets_variant is Array)` before the typed cast."
+    )
+
+    # Guard 2: non-Dictionary per-entry skip before the typed entry cast.
+    assert "if not (query_set_update_variant is Dictionary)" in transaction_update_body, (
+        "`_handle_transaction_update` must skip a non-Dictionary bundle entry with "
+        "`if not (query_set_update_variant is Dictionary)`."
+    )
+    assert "if not (q_variant is Dictionary)" in reducer_result_body, (
+        "`_handle_reducer_result` must skip a non-Dictionary bundle entry with "
+        "`if not (q_variant is Dictionary)`."
+    )
+
+    # Guard 3: missing/non-int `query_set_id` skipped via the typeof check.
+    assert "typeof(qs_id_variant) != TYPE_INT" in transaction_update_body, (
+        "`_handle_transaction_update` must skip a non-int `query_set_id` with "
+        "`typeof(qs_id_variant) != TYPE_INT`."
+    )
+    assert "typeof(qs_id_variant) != TYPE_INT" in reducer_result_body, (
+        "`_handle_reducer_result` must skip a non-int `query_set_id` with "
+        "`typeof(qs_id_variant) != TYPE_INT`."
+    )
+
+    # Guard 4: negative parsed id cannot match a handle (`continue`).
+    assert "if qs_id < 0" in transaction_update_body, (
+        "`_handle_transaction_update` must `continue` past a negative parsed "
+        "`query_set_id` via `if qs_id < 0`."
+    )
+    assert "if qs_id < 0" in reducer_result_body, (
+        "`_handle_reducer_result` must `continue` past a negative parsed "
+        "`query_set_id` via `if qs_id < 0`."
+    )
+
+
 def test_corrupt_gzip_envelope_produces_distinct_protocol_error_landmark() -> None:
     # The call-site gzip-magic probe in `parse_server_message` must route
     # envelopes missing the `1F 8B` magic to a distinct protocol error,

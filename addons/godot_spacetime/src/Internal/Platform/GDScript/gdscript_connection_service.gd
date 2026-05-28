@@ -24,6 +24,7 @@ const STATE_DEGRADED := "Degraded"
 
 const AUTH_NONE := "None"
 const AUTH_TOKEN_RESTORED := "TokenRestored"
+const AUTH_AUTHENTICATED := "Authenticated"
 const AUTH_AUTH_FAILED := "AuthFailed"
 const AUTH_CONNECT_FAILED := "ConnectFailed"
 const AUTH_TOKEN_EXPIRED := "TokenExpired"
@@ -589,7 +590,9 @@ func _handle_initial_connection(message: Dictionary) -> void:
 	_reconnect_policy.reset()
 	_last_transport_error = ""
 
-	var auth_state := AUTH_TOKEN_RESTORED if _credentials_provided else AUTH_NONE
+	var auth_state := AUTH_NONE
+	if _credentials_provided:
+		auth_state = AUTH_TOKEN_RESTORED if _restored_from_store else AUTH_AUTHENTICATED
 	_restored_from_store = false
 
 	if String(_current_status.get("state", STATE_DISCONNECTED)) == STATE_DEGRADED:
@@ -1455,6 +1458,16 @@ func _reset_subscription_runtime() -> void:
 	# Mirrors the pinned SpacetimeDB 2.1.0 SDK (isolates each user callback, mutates
 	# state outside it); `call_deferred` is the GDScript-native equivalent. See
 	# docs/runtime-boundaries.md.
+	# Drop-window diagnostic: this service is RefCounted (no scene tree), so the only
+	# state in which the queued `call_deferred("emit_signal", ...)` emits are GUARANTEED
+	# to never flush is the absence of a `MainLoop` to pump idle frames — Godot's
+	# MessageQueue then discards every queued call silently with no error. Surface that
+	# single provable drop window with one warning naming the un-flushable count. The
+	# warning is unconditional (not debug-gated): a guaranteed silent drop is a real
+	# defect in any build. It is diagnostic only — it must not raise and does not change
+	# the emission/clearing behavior below.
+	if not deferred_failures.is_empty() and Engine.get_main_loop() == null:
+		push_warning("GdscriptConnectionService: no MainLoop is driving idle frames; %d deferred subscription_failed emission(s) queued during teardown will be discarded silently by the MessageQueue and never delivered." % deferred_failures.size())
 	for failure in deferred_failures:
 		call_deferred("emit_signal", "subscription_failed", failure)
 	_resetting_subscription_runtime = false

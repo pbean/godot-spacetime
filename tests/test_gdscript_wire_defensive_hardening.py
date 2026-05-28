@@ -1132,6 +1132,51 @@ def test_replace_subscription_rejected_during_disconnect_teardown() -> None:
     )
 
 
+def test_finish_disconnect_emits_connection_closed_before_deferred_subscription_failed() -> None:
+    # spec-gdscript-wire-teardown-deferred-emission-residuals (D2): the most
+    # consumer-visible new behavior is `connection_closed` firing BEFORE the deferred
+    # `subscription_failed` on a real disconnect. This drives the production
+    # `_finish_disconnect(...)` (emit_close_event=true) rather than a hand-assembled
+    # transition, captures every signal's name into one ordered log, and pins that
+    # `connection_closed`'s index precedes the deferred `subscription_failed`'s index.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["finish_disconnect_ordering"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    assert data["current_state"] == "Disconnected", (
+        "the real `_finish_disconnect(...)` must transition the session to Disconnected."
+    )
+    log = data["ordered_signal_log"]
+    # The deferred synthetic failure must actually have flushed, or the ordering is
+    # asserted vacuously.
+    assert "connection_closed" in log, f"connection_closed never emitted; log={log}"
+    assert "subscription_failed" in log, f"subscription_failed never emitted; log={log}"
+    closed_index = log.index("connection_closed")
+    # The deferred `subscription_failed` is the one that flushes after the synchronous
+    # close event — assert its index is strictly greater than connection_closed's.
+    subscription_failed_index = log.index("subscription_failed")
+    assert closed_index < subscription_failed_index, (
+        "the documented ordering requires `connection_closed` (synchronous) to precede "
+        f"the deferred `subscription_failed`; got ordered log {log}."
+    )
+    # The pending subscribe (id=43) that drove the teardown still emitted its failure.
+    failed_ids = [int(e["handle_id"]) for e in data["subscription_failed_events"]]
+    assert failed_ids == [43], (
+        "the pending subscribe must still emit its synthetic failure; got handle_ids "
+        f"{failed_ids}."
+    )
+
+
 def test_replace_subscription_rejected_while_degraded_adds_no_pending() -> None:
     # Spec `spec-gdscript-wire-teardown-guard-exception-safety` I/O matrix
     # (retry-teardown row): a `replace_subscription()` issued while state is DEGRADED is
