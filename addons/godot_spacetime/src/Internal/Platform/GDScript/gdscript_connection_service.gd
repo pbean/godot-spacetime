@@ -1344,17 +1344,18 @@ func _reset_subscription_runtime() -> void:
 	# event-timestamp convention.
 	var failed_at_unix_time := Time.get_unix_time_from_system()
 
-	# Synthetic failure events for any in-flight subscribe whose SubscribeApplied
-	# / SubscriptionError could no longer arrive on this session. Fire BEFORE
-	# clearing the map so callers waiting on a terminal event for their subscribe
-	# observe one. Emitted on the teardown path only (not on routine server-sent
+	# Snapshot the in-flight subscribes/replacements whose SubscribeApplied /
+	# SubscriptionError can no longer arrive on this session, so callers waiting on
+	# a terminal event observe a synthetic `subscription_failed`. The events are
+	# BUILT here but EMITTED deferred (see the `call_deferred` loop at the end).
+	# Emitted on the teardown path only (not on routine server-sent
 	# SubscriptionError, which takes the dedicated handler).
 	#
-	# The `_pending_replacements.values()` loop fires first so callers tracking a
-	# pre-replacement handle across a teardown observe a terminal event for the
-	# OLD handle — symmetric with `_handle_subscription_error` leaving the old
-	# handle live on the server-error path. Dedupe guards against any future
-	# relaxation of the `_pending_replacements` value-uniqueness invariant.
+	# Pending replacements are ordered FIRST so callers tracking a pre-replacement
+	# handle across a teardown observe a terminal event for the OLD handle —
+	# symmetric with `_handle_subscription_error` leaving the old handle live on the
+	# server-error path. Dedupe guards against any future relaxation of the
+	# `_pending_replacements` value-uniqueness invariant.
 	var pending_old_handle_ids: Array = []
 	var emitted_old_handle_ids: Dictionary = {}
 	for old_handle_id_variant in _pending_replacements.values():
@@ -1375,17 +1376,16 @@ func _reset_subscription_runtime() -> void:
 
 	# Build the pending-subscribe snapshot defensively. Each value must be an
 	# Object carrying an integer `handle_id`; a malformed entry is skipped with a
-	# warning rather than allowed to raise on the `handle_id` access. The raise
-	# would land between the guard set-true above and the
-	# `_resetting_subscription_runtime = false` restore below — with no
-	# try/finally in GDScript, that would leave the guard stuck `true` and turn
-	# every later teardown into the entry-guard early return. Resolving the id
-	# here means the emission loop consumes only pre-validated data. "Raise-proof"
-	# here covers internal value shape only — a `subscription_failed` handler that
-	# itself raises during emission is a separate, pre-existing hazard (tracked in
-	# deferred-work). The probe is gated on a LIVE Object first: a primitive has no
-	# `.get()`, and `.get()` on a freed instance would raise (typeof alone still
-	# reports TYPE_OBJECT for a freed object).
+	# warning rather than allowed to raise on the `handle_id` access. Such a raise
+	# would land in the SYNCHRONOUS guarded region (between guard set-true above
+	# and the restore below) — with no try/finally in GDScript that would wedge the
+	# guard `true` and turn every later teardown into the entry-guard early return.
+	# Resolving the id here keeps that region raise-proof. (A `subscription_failed`
+	# HANDLER that hard-errors is a different hazard, closed separately by deferring
+	# emission — see the `call_deferred` loop at the end.) The probe is gated on a
+	# LIVE Object first: a primitive has no `.get()`, and `.get()` on a freed
+	# instance would raise (typeof alone still reports TYPE_OBJECT for a freed
+	# object).
 	var pending_subscription_handles: Array = []
 	for pending_handle in _pending_subscriptions.values():
 		var handle_id_variant = pending_handle.get("handle_id") if typeof(pending_handle) == TYPE_OBJECT and is_instance_valid(pending_handle) else null
@@ -1394,12 +1394,15 @@ func _reset_subscription_runtime() -> void:
 			continue
 		pending_subscription_handles.append({"handle": pending_handle, "handle_id": int(handle_id_variant)})
 
-	for old_handle_id_variant in pending_old_handle_ids:
-		var old_handle_id := int(old_handle_id_variant)
+	# Close each handle synchronously and accumulate the failure payloads. NOTHING
+	# is emitted here — emission is deferred to the end of the function (see the
+	# `call_deferred` loop) so a handler that hard-errors cannot wedge the guard.
+	var deferred_failures: Array = []
+	for old_handle_id in pending_old_handle_ids:
 		var old_handle = _subscription_registry.try_get_handle(old_handle_id)
 		if old_handle != null and old_handle.has_method("close"):
 			old_handle.close()
-		emit_signal("subscription_failed", {
+		deferred_failures.append({
 			"handle_id": old_handle_id,
 			"error_message": "Connection lost before replacement subscription was confirmed; pre-replacement handle terminated.",
 			"failed_at_unix_time": failed_at_unix_time,
@@ -1408,7 +1411,7 @@ func _reset_subscription_runtime() -> void:
 		var pending_handle = entry["handle"]
 		if pending_handle.has_method("close"):
 			pending_handle.close()
-		emit_signal("subscription_failed", {
+		deferred_failures.append({
 			"handle_id": entry["handle_id"],
 			"error_message": "Connection lost before SubscribeApplied was observed.",
 			"failed_at_unix_time": failed_at_unix_time,
@@ -1441,6 +1444,19 @@ func _reset_subscription_runtime() -> void:
 	# accounting; clearing `_backlog_warning_emitted` re-arms the one-shot
 	# warning for the next episode.
 	_reset_backlog_saturation_state()
+
+	# Emit the synthetic failures DEFERRED, after the full synchronous teardown.
+	# GDScript has no try/finally: a `subscription_failed` handler that hard-errors
+	# during a synchronous emit would abort the call chain before the guard restore
+	# below and wedge `_resetting_subscription_runtime` true forever. Deferring runs
+	# every handler on a later, isolated call stack — after the guard is restored —
+	# so a handler raise can neither wedge the guard nor observe a partial teardown.
+	# Order preserved: old-handle failures first, then pending-subscribe failures.
+	# Mirrors the pinned SpacetimeDB 2.1.0 SDK (isolates each user callback, mutates
+	# state outside it); `call_deferred` is the GDScript-native equivalent. See
+	# docs/runtime-boundaries.md.
+	for failure in deferred_failures:
+		call_deferred("emit_signal", "subscription_failed", failure)
 	_resetting_subscription_runtime = false
 
 

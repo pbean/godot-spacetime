@@ -1207,27 +1207,36 @@ def test_correlation_hygiene_round_2_landmarks_and_ordering() -> None:
         "`_handle_unsubscribe_applied(message)`."
     )
 
-    # Item 3: synthetic-failure loop in `_reset_subscription_runtime` — the
-    # `subscription_failed` emission must appear BEFORE `_pending_subscriptions.clear()`.
+    # Item 3: synthetic-failure handling in `_reset_subscription_runtime`. Emission
+    # is DEFERRED via `call_deferred` (handler-raise raise-safety — a synchronous
+    # emit lets a hard-erroring handler skip the guard restore), but the failure
+    # PAYLOADS are built from the pending maps before those maps are cleared.
     reset_body = _body_for("func _reset_subscription_runtime(")
-    emit_idx = reset_body.find('emit_signal("subscription_failed"')
+    deferred_emit_idx = reset_body.find('call_deferred("emit_signal", "subscription_failed"')
+    build_idx = reset_body.find("deferred_failures.append(")
     clear_idx = reset_body.find("_pending_subscriptions.clear()")
-    assert emit_idx >= 0, (
-        "`_reset_subscription_runtime` body must emit `subscription_failed` synthetically "
-        "on teardown so callers observe a terminal event for in-flight subscribes."
+    assert deferred_emit_idx >= 0, (
+        "`_reset_subscription_runtime` must emit `subscription_failed` synthetically on "
+        'teardown via `call_deferred("emit_signal", "subscription_failed", ...)` so a '
+        "raising handler runs outside the guarded region and cannot wedge the guard."
+    )
+    assert 'emit_signal("subscription_failed"' not in reset_body, (
+        "`_reset_subscription_runtime` must NOT emit `subscription_failed` synchronously "
+        "— a synchronous emit lets a hard-erroring handler abort the call chain before "
+        "the guard restore. Use `call_deferred`."
     )
     assert clear_idx >= 0, (
         "`_reset_subscription_runtime` body must still clear `_pending_subscriptions`."
     )
-    assert emit_idx < clear_idx, (
-        "`_reset_subscription_runtime` must emit the synthetic `subscription_failed` "
-        "BEFORE clearing `_pending_subscriptions` — clearing first would leave the "
-        "iteration source empty and the emission a no-op."
+    assert build_idx >= 0 and build_idx < clear_idx, (
+        "`_reset_subscription_runtime` must build the synthetic failure payloads "
+        "(`deferred_failures.append(...)`) from the pending maps BEFORE clearing "
+        "`_pending_subscriptions` — clearing first would leave the iteration source empty."
     )
     close_idx = reset_body.find(".close()")
-    assert close_idx >= 0 and close_idx < emit_idx, (
-        "`_reset_subscription_runtime` must close each pending handle before emitting "
-        "the synthetic failure so signal handlers observe terminal handle state."
+    assert close_idx >= 0 and close_idx < deferred_emit_idx, (
+        "`_reset_subscription_runtime` must close each pending handle before the deferred "
+        "emission is queued so signal handlers observe terminal handle state."
     )
     assert "_pending_unsubscribes.clear()" in reset_body, (
         "`_reset_subscription_runtime` must also clear `_pending_unsubscribes` "
@@ -1255,14 +1264,16 @@ def test_reset_subscription_runtime_reentrance_guard_is_pinned() -> None:
     # rules protect the contract:
     #   (1) the guard flag is declared at field scope and bookends the function
     #       (top-of-body early-return + `= true`, last-statement `= false`);
-    #   (2) both emission loops build their iteration arrays
-    #       (`pending_old_handle_ids`, `pending_subscription_handles`) textually
-    #       before the first `emit_signal("subscription_failed"` so a reentrant
-    #       `unsubscribe()` cannot skip a queued synthetic emission by clearing
-    #       the pending map mid-iteration.
+    #   (2) the synthetic `subscription_failed` events are emitted DEFERRED via
+    #       `call_deferred` after the snapshots are built and the pending maps
+    #       cleared — never synchronously. A synchronous emit would let a
+    #       hard-erroring handler abort the call chain before the bookend restore
+    #       and wedge the guard. The snapshots (`pending_old_handle_ids`,
+    #       `pending_subscription_handles`) and the `deferred_failures` payload list
+    #       are built before the deferred emit is queued.
     # This test pins the shipped shape. A silent regression that deletes the
-    # guard, reorders the bookends, or moves an emission above the snapshot
-    # declarations fails here instead of in production.
+    # guard, reorders the bookends, or re-inlines a synchronous emission fails
+    # here instead of in production.
     service_src = (
         ROOT
         / "addons"
@@ -1381,12 +1392,15 @@ def test_reset_subscription_runtime_reentrance_guard_is_pinned() -> None:
         f"Got indent: {_body_indent(non_trivial[-1])!r}"
     )
 
-    # (2) Snapshot ordering — each emission loop must be preceded by its own
-    # populated snapshot array. The old-handle loop (fires first) consumes
-    # `pending_old_handle_ids` populated from `_pending_replacements.values()`;
-    # the subscription loop (fires second) consumes `pending_subscription_handles`
-    # populated from `_pending_subscriptions.values()`. Both snapshots must be
-    # fully built before the first `subscription_failed` emission.
+    # (2) Deferred emission + snapshot ordering. The synthetic failures are built
+    # into `deferred_failures` from pre-cleared snapshots and emitted via
+    # `call_deferred` — never synchronously. A synchronous emit would let a
+    # hard-erroring handler abort the call chain before the bookend restore and
+    # wedge the guard. This pins: no synchronous `emit_signal("subscription_failed"`;
+    # exactly one `call_deferred("emit_signal", "subscription_failed", ...)`; both
+    # snapshots populated from their maps before the deferred emit is queued; and
+    # the old-handle consumer loop preceding the pending-subscribe consumer loop so
+    # `deferred_failures` (hence emission order) keeps old-handle failures first.
     def _indent_depth(ln: str) -> int:
         return len(ln) - len(ln.lstrip("\t"))
 
@@ -1400,97 +1414,96 @@ def test_reset_subscription_runtime_reentrance_guard_is_pinned() -> None:
         compiled = re.compile(pattern)
         return next((i for i, code, _ in code_lines if compiled.match(code)), -1)
 
-    def _code_block_after(loop_idx: int) -> list[str]:
-        loop_pos = next(
-            (pos for pos, (i, _, _) in enumerate(code_lines) if i == loop_idx),
-            -1,
-        )
-        assert loop_pos >= 0, f"Internal test error: loop index {loop_idx} not found."
-        loop_depth = code_lines[loop_pos][2]
-        block: list[str] = []
-        for _, code, depth in code_lines[loop_pos + 1 :]:
-            if depth <= loop_depth:
-                break
-            block.append(code.strip())
-        return block
+    # No synchronous emission. `call_deferred("emit_signal", "subscription_failed", ...)`
+    # does not contain the synchronous `emit_signal("subscription_failed"` form.
+    sync_emits = [code for _, code, _ in code_lines if 'emit_signal("subscription_failed"' in code]
+    assert not sync_emits, (
+        "`_reset_subscription_runtime` must NOT emit `subscription_failed` synchronously "
+        "— a synchronous emit lets a hard-erroring handler skip the guard restore. Emit "
+        f"via call_deferred instead. Offending lines: {sync_emits!r}"
+    )
+    deferred_emit_indices = [
+        i
+        for i, code, _ in code_lines
+        if re.search(r'call_deferred\(\s*"emit_signal"\s*,\s*"subscription_failed"', code)
+    ]
+    assert len(deferred_emit_indices) == 1, (
+        "`_reset_subscription_runtime` must queue the synthetic failures with exactly one "
+        'deferred `call_deferred("emit_signal", "subscription_failed", ...)` emission. '
+        f"Found {len(deferred_emit_indices)}."
+    )
+    deferred_emit_idx = deferred_emit_indices[0]
 
     old_snap_idx = _find_code(r"^\tvar\s+pending_old_handle_ids\s*:\s*Array\s*=\s*\[\]\s*$")
-    sub_snap_idx = _find_code(
-        r"^\tvar\s+pending_subscription_handles\s*:\s*Array\s*=\s*\[\]\s*$"
-    )
+    sub_snap_idx = _find_code(r"^\tvar\s+pending_subscription_handles\s*:\s*Array\s*=\s*\[\]\s*$")
     old_values_idx = _find_code(r"^\tfor\s+\w+\s+in\s+_pending_replacements\.values\(\):\s*$")
     sub_values_idx = _find_code(r"^\tfor\s+\w+\s+in\s+_pending_subscriptions\.values\(\):\s*$")
     old_append_idx = _find_code(r"^\t+pending_old_handle_ids\.append\(.+\)\s*$")
     sub_append_idx = _find_code(r"^\t+pending_subscription_handles\.append\(.+\)\s*$")
+    deferred_decl_idx = _find_code(r"^\tvar\s+deferred_failures\s*:\s*Array\s*=\s*\[\]\s*$")
+    deferred_append_idx = _find_code(r"^\t+deferred_failures\.append\(")
     old_loop_idx = _find_code(r"^\tfor\s+\w+\s+in\s+pending_old_handle_ids:\s*$")
     sub_loop_idx = _find_code(r"^\tfor\s+\w+\s+in\s+pending_subscription_handles:\s*$")
-    emit_indices = [
-        i
-        for i, code, _ in code_lines
-        if re.match(r'^\t+emit_signal\("subscription_failed"\s*,', code)
-    ]
-    assert emit_indices, (
-        "`_reset_subscription_runtime` body must emit `subscription_failed` synthetically."
-    )
-    assert len(emit_indices) == 2, (
-        "`_reset_subscription_runtime` body must emit `subscription_failed` twice — "
-        "once per replacement-handle loop, once per pending-subscription loop. "
-        f"Found {len(emit_indices)} emits."
-    )
-    first_emit_idx, second_emit_idx = emit_indices
-    assert old_snap_idx >= 0, (
-        "`_reset_subscription_runtime` body must declare "
-        "`var pending_old_handle_ids: Array = []` to snapshot "
-        "`_pending_replacements.values()` before emission."
-    )
-    assert sub_snap_idx >= 0, (
-        "`_reset_subscription_runtime` body must declare "
-        "`var pending_subscription_handles: Array = []` to snapshot "
-        "`_pending_subscriptions.values()` before emission."
+    deferred_loop_idx = _find_code(r"^\tfor\s+\w+\s+in\s+deferred_failures:\s*$")
+
+    def _depth_at(idx: int) -> int:
+        return next((d for i, _, d in code_lines if i == idx), -1)
+
+    assert old_snap_idx >= 0 and sub_snap_idx >= 0, (
+        "`_reset_subscription_runtime` must declare `pending_old_handle_ids` and "
+        "`pending_subscription_handles` snapshot arrays."
     )
     assert old_values_idx >= 0 and old_append_idx >= 0, (
-        "`pending_old_handle_ids` must be populated from "
-        "`_pending_replacements.values()` before any `subscription_failed` emission."
+        "`pending_old_handle_ids` must be populated from `_pending_replacements.values()`."
     )
     assert sub_values_idx >= 0 and sub_append_idx >= 0, (
-        "`pending_subscription_handles` must be populated from "
-        "`_pending_subscriptions.values()` before any `subscription_failed` emission."
+        "`pending_subscription_handles` must be populated from `_pending_subscriptions.values()`."
     )
-    assert old_loop_idx >= 0, (
-        "`_reset_subscription_runtime` must emit replacement-handle failures by "
-        "iterating `pending_old_handle_ids`, not the live `_pending_replacements` map."
+    assert deferred_decl_idx >= 0 and deferred_append_idx >= 0, (
+        "`_reset_subscription_runtime` must accumulate failure payloads into a "
+        "`deferred_failures` array before the deferred emit."
     )
-    assert sub_loop_idx >= 0, (
-        "`_reset_subscription_runtime` must emit pending-subscribe failures by "
-        "iterating `pending_subscription_handles`, not the live `_pending_subscriptions` map."
+    assert old_loop_idx >= 0 and sub_loop_idx >= 0, (
+        "`_reset_subscription_runtime` must build `deferred_failures` by iterating the "
+        "`pending_old_handle_ids` and `pending_subscription_handles` snapshots, not the "
+        "live maps."
     )
-    assert old_snap_idx < old_values_idx < old_append_idx < first_emit_idx, (
-        "`pending_old_handle_ids` snapshot must precede the FIRST "
-        "`emit_signal(\"subscription_failed\", ...)` call and be populated from "
-        "`_pending_replacements.values()` before that emission. "
-        f"snapshot at line {old_snap_idx}, values loop at line {old_values_idx}, "
-        f"append at line {old_append_idx}, first emit at line {first_emit_idx}."
+    assert old_snap_idx < old_values_idx < old_append_idx < deferred_emit_idx, (
+        "`pending_old_handle_ids` must be snapshotted and populated from "
+        "`_pending_replacements.values()` before the deferred emit is queued. "
+        f"snap {old_snap_idx}, values {old_values_idx}, append {old_append_idx}, "
+        f"deferred emit {deferred_emit_idx}."
     )
-    assert sub_snap_idx < sub_values_idx < sub_append_idx < first_emit_idx, (
-        "`pending_subscription_handles` snapshot must precede the FIRST "
-        "`emit_signal(\"subscription_failed\", ...)` call and be populated from "
-        "`_pending_subscriptions.values()` before that emission. "
-        f"snapshot at line {sub_snap_idx}, values loop at line {sub_values_idx}, "
-        f"append at line {sub_append_idx}, first emit at line {first_emit_idx}."
+    assert sub_snap_idx < sub_values_idx < sub_append_idx < deferred_emit_idx, (
+        "`pending_subscription_handles` must be snapshotted and populated from "
+        "`_pending_subscriptions.values()` before the deferred emit is queued. "
+        f"snap {sub_snap_idx}, values {sub_values_idx}, append {sub_append_idx}, "
+        f"deferred emit {deferred_emit_idx}."
     )
-    assert old_loop_idx < first_emit_idx and any(
-        re.match(r'emit_signal\("subscription_failed"\s*,', code)
-        for code in _code_block_after(old_loop_idx)
-    ), (
-        "The first synthetic `subscription_failed` emission must occur inside the "
-        "`for ... in pending_old_handle_ids:` snapshot-consumer loop."
+    assert old_loop_idx < sub_loop_idx < deferred_emit_idx, (
+        "The old-handle consumer loop must precede the pending-subscribe consumer loop "
+        "(so `deferred_failures` keeps old-handle failures first), and both must build "
+        "`deferred_failures` before the deferred emit is queued. "
+        f"old loop {old_loop_idx}, sub loop {sub_loop_idx}, deferred emit {deferred_emit_idx}."
     )
-    assert sub_loop_idx < second_emit_idx and any(
-        re.match(r'emit_signal\("subscription_failed"\s*,', code)
-        for code in _code_block_after(sub_loop_idx)
-    ), (
-        "The second synthetic `subscription_failed` emission must occur inside the "
-        "`for ... in pending_subscription_handles:` snapshot-consumer loop."
+    assert deferred_decl_idx < deferred_append_idx < deferred_emit_idx, (
+        "`deferred_failures` must be declared and appended to before the deferred emit."
+    )
+    # The single deferred emit must sit INSIDE a function-body-level
+    # `for ... in deferred_failures:` loop (after both consumer loops), not be
+    # misplaced into a per-handle loop or queued at function-body level.
+    assert deferred_loop_idx >= 0, (
+        "`_reset_subscription_runtime` must emit by iterating `deferred_failures` in a "
+        "`for ... in deferred_failures:` loop."
+    )
+    assert sub_loop_idx < deferred_loop_idx < deferred_emit_idx, (
+        "the `for ... in deferred_failures:` emit loop must come after both consumer "
+        f"loops. sub loop {sub_loop_idx}, deferred loop {deferred_loop_idx}, "
+        f"deferred emit {deferred_emit_idx}."
+    )
+    assert _depth_at(deferred_emit_idx) > _depth_at(deferred_loop_idx), (
+        "the `call_deferred` emit must sit INSIDE the `for ... in deferred_failures:` "
+        "loop body (deeper indent), not at function-body level or in a per-handle loop."
     )
 
 

@@ -902,6 +902,49 @@ def test_reset_subscription_runtime_shares_single_failed_at_unix_time() -> None:
     )
 
 
+def test_reset_subscription_runtime_deferred_handler_runs_outside_guard() -> None:
+    # spec-gdscript-wire-teardown-deferred-emission: synthetic `subscription_failed`
+    # is emitted via `call_deferred`, so a connected handler runs only AFTER the
+    # synchronous teardown completes and `_resetting_subscription_runtime` is restored
+    # to false. That is what makes a hard-erroring handler unable to wedge the guard —
+    # the guard is already cleared before any handler runs. The harness records the
+    # guard value seen from inside the deferred handler and runs a SECOND teardown to
+    # prove the guard was never wedged.
+    godot = _require_godot()
+    proc = _run_harness_process(
+        godot,
+        SERVICE_HARNESS_RES,
+        ["reset_subscription_runtime_handler_runs_after_guard_cleared"],
+    )
+    assert proc.returncode == 0, (
+        f"service harness exited with {proc.returncode}.\n"
+        f"stdout tail: {proc.stdout.decode('utf-8', 'replace')[-800:]}\n"
+        f"stderr tail: {proc.stderr.decode('utf-8', 'replace')[-800:]}"
+    )
+    result = _parse_harness_result(proc)
+    assert result.get("ok"), f"harness reported error: {result}"
+    data = result["data"]
+    # Guard restored synchronously, before any deferred handler runs.
+    assert data["guard_immediately_after_first"] is False, (
+        "`_resetting_subscription_runtime` must be restored to false synchronously, "
+        "before the deferred `subscription_failed` emission fires."
+    )
+    # The deferred handler observes the guard already cleared — so a handler that
+    # hard-errored could not wedge it.
+    assert data["guard_seen_inside_handler_first"] is False, (
+        "A deferred `subscription_failed` handler must observe "
+        "`_resetting_subscription_runtime == false` — proving emission happens outside "
+        "the guarded region, so a raising handler cannot wedge the guard."
+    )
+    # Both teardowns still emit exactly one event — the guard was never wedged.
+    assert int(data["first_event_count"]) == 1, data
+    assert int(data["second_event_count"]) == 1, (
+        "A second teardown must still emit; a wedged guard would early-return and emit "
+        f"nothing. Got {data['second_event_count']}."
+    )
+    assert data["guard_after_second"] is False
+
+
 def test_subscribe_rejected_while_degraded_adds_no_pending() -> None:
     # Spec spec-gdscript-wire-teardown-emission-hardening (item 413): a
     # synchronous `subscribe()` issued during teardown (state DEGRADED, socket
@@ -1039,16 +1082,15 @@ def test_reset_subscription_runtime_survives_malformed_pending_entry() -> None:
 
 
 def test_replace_subscription_rejected_during_disconnect_teardown() -> None:
-    # Spec `spec-gdscript-wire-teardown-guard-exception-safety` (item B): a
-    # `subscription_failed` handler that synchronously calls `replace_subscription()`
-    # during the DISCONNECT teardown window — `_socket` already disposed, state still
-    # reading Connected because the DISCONNECTED transition fires after the reset — is
-    # rejected. It passes its own up-front gates (the authoritative handle is not
-    # reset until after the emission loops) and reaches `_begin_subscription` ->
-    # `_send_subscribe_request`, which rejects on the null socket; `_begin_subscription`
-    # then cleans up its transient pending entry. Net: returns null, nothing leaks, no
-    # frame is sent. This is the MEASURED mechanism — the deferred-work note's
-    # "authoritative reset to -1" claim was inaccurate for this window.
+    # spec-gdscript-wire-teardown-deferred-emission: synthetic `subscription_failed`
+    # is emitted DEFERRED, so a handler that calls `replace_subscription()` runs only
+    # after the disconnect teardown has fully completed — including `_finish_disconnect`'s
+    # DISCONNECTED transition. The handler therefore sees a terminal DISCONNECTED state
+    # and is rejected up front by `replace_subscription()`'s own Connected-state gate:
+    # it returns null, leaks no pending entry, and sends no frame. (Under the prior
+    # synchronous emission the handler ran mid-teardown with state still reading
+    # Connected and was instead stopped by `_send_subscribe_request`'s null-socket gate;
+    # deferring emission makes the rejection uniform and simpler.)
     godot = _require_godot()
     proc = _run_harness_process(
         godot,
@@ -1065,19 +1107,19 @@ def test_replace_subscription_rejected_during_disconnect_teardown() -> None:
     data = result["data"]
     # The reentrant path must actually be exercised, or the assertions pass vacuously.
     assert data["replace_handler_fired"] is True, (
-        "the `subscription_failed` handler must have fired during teardown so "
-        "`replace_subscription()` was genuinely attempted mid-emission."
+        "the `subscription_failed` handler must have fired from the deferred emission so "
+        "`replace_subscription()` was genuinely attempted."
     )
-    # State Connected confirms this is the disconnect window (not the retry/DEGRADED
-    # path), so the early Connected-state gate does NOT reject — the socket-null gate
-    # inside `_send_subscribe_request` is what stops it.
-    assert data["current_state"] == "Connected", (
-        "the disconnect-teardown window must keep state reading Connected; otherwise "
-        "this would exercise the retry path's up-front Connected-state rejection."
+    # State Disconnected confirms the deferred handler runs after the full teardown
+    # (including `_finish_disconnect`'s DISCONNECTED transition), so the up-front
+    # Connected-state gate is what rejects `replace_subscription()`.
+    assert data["current_state"] == "Disconnected", (
+        "under deferred emission the handler runs after `_finish_disconnect`'s "
+        "DISCONNECTED transition, so the session must read Disconnected."
     )
     assert data["replace_returned_null"] is True, (
-        "`replace_subscription()` issued during the disconnect-teardown window (null "
-        "socket) must be rejected and return null."
+        "`replace_subscription()` issued from the deferred handler against a terminal "
+        "DISCONNECTED session must be rejected and return null."
     )
     # No transient pending entry survives the teardown.
     assert int(data["pending_subscriptions_size_after"]) == 0

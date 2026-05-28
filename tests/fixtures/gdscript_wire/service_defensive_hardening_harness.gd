@@ -96,6 +96,10 @@ var _reentrant_subscribe_attempt_count: int = 0
 var _reentrant_replace_armed: bool = true
 var _reentrant_replace_handler_fired: bool = false
 var _reentrant_replace_returned_null: bool = false
+# Sentinel `true`: a deferred `subscription_failed` handler overwrites it with the
+# reentrance-guard value it observes, which must be `false` (teardown completed
+# and the guard was restored before any handler ran).
+var _guard_seen_inside_handler: bool = true
 
 
 func _init() -> void:
@@ -158,6 +162,8 @@ func _init() -> void:
 			_run_replace_subscription_rejected_during_disconnect_teardown()
 		"replace_subscription_rejected_while_degraded":
 			_run_replace_subscription_rejected_while_degraded()
+		"reset_subscription_runtime_handler_runs_after_guard_cleared":
+			_run_reset_subscription_runtime_handler_runs_after_guard_cleared()
 		_:
 			_emit_error("unknown mode: %s" % args[0])
 			quit(2)
@@ -652,6 +658,7 @@ func _run_reset_subscription_runtime_emits_synthetic_failure() -> void:
 	# synthetic signal (Ask First scoped that out).
 	service._pending_unsubscribes[88] = 7
 	service._reset_subscription_runtime()
+	await _settle_deferred()
 	_emit_result({
 		"subscription_failed_events": _jsonify(_subscription_failed_events),
 		"handle_status_after": String(pending_handle.status),
@@ -678,6 +685,7 @@ func _run_reset_subscription_runtime_fails_pending_replacement_old_handle() -> v
 	service._pending_subscriptions[11] = new_handle
 	service._pending_replacements[43] = 42
 	service._reset_subscription_runtime()
+	await _settle_deferred()
 	_emit_result({
 		"subscription_failed_events": _jsonify(_subscription_failed_events),
 		"old_handle_status_after": String(old_handle.status),
@@ -699,6 +707,7 @@ func _run_reset_subscription_runtime_missing_old_handle_does_not_crash() -> void
 	var service = ctx["service"]
 	service._pending_replacements[43] = 42
 	service._reset_subscription_runtime()
+	await _settle_deferred()
 	_emit_result({
 		"subscription_failed_events": _jsonify(_subscription_failed_events),
 		"pending_subscriptions_size_after": (service._pending_subscriptions as Dictionary).size(),
@@ -720,6 +729,7 @@ func _run_reset_subscription_runtime_dedupes_duplicate_replacement_old_handles()
 	service._pending_replacements[43] = 42
 	service._pending_replacements[44] = 42
 	service._reset_subscription_runtime()
+	await _settle_deferred()
 	_emit_result({
 		"subscription_failed_events": _jsonify(_subscription_failed_events),
 		"old_handle_status_after": String(old_handle.status),
@@ -729,9 +739,10 @@ func _run_reset_subscription_runtime_dedupes_duplicate_replacement_old_handles()
 
 
 func _run_reset_subscription_runtime_reentrant_old_failure_still_fails_new_handle() -> void:
-	# Reentrant listener: after the old-handle synthetic failure, synchronously
-	# unsubscribe the replacement handle. Reset still must emit the new-handle
-	# terminal failure from its pre-emission snapshot.
+	# Reentrant listener: on the old-handle synthetic failure, unsubscribe the
+	# replacement handle from the deferred handler. Reset still emits the new-handle
+	# terminal failure — both events are queued up front from the pre-emission
+	# snapshot, so a reentrant unsubscribe cannot drop the second.
 	_reset_events()
 	var ctx := _new_service_context()
 	var service = ctx["service"]
@@ -748,6 +759,7 @@ func _run_reset_subscription_runtime_reentrant_old_failure_still_fails_new_handl
 		_on_subscription_failed_reentrant_unsubscribe.bind(service, new_handle)
 	)
 	service._reset_subscription_runtime()
+	await _settle_deferred()
 	_emit_result({
 		"subscription_failed_events": _jsonify(_subscription_failed_events),
 		"reentrant_unsubscribe_count": _reentrant_unsubscribe_count,
@@ -777,6 +789,7 @@ func _run_reset_subscription_runtime_shares_single_failed_at_unix_time() -> void
 	service._pending_subscriptions[11] = new_handle
 	service._pending_replacements[43] = 42
 	service._reset_subscription_runtime()
+	await _settle_deferred()
 	_emit_result({
 		"subscription_failed_events": _jsonify(_subscription_failed_events),
 		"event_count": _subscription_failed_events.size(),
@@ -814,14 +827,13 @@ func _run_subscribe_rejected_while_degraded_adds_no_pending() -> void:
 
 
 func _run_reentrant_subscribe_during_teardown_rejected() -> void:
-	# Spec spec-gdscript-wire-teardown-emission-hardening (item 413), TRUE reentrant
-	# flow: a `subscription_failed` handler that synchronously calls `subscribe()`
-	# DURING a real `_reset_subscription_runtime()` teardown must be rejected by the
-	# public `subscribe()` Connected-state gate (state is DEGRADED here — the retry
-	# path), so the in-handler re-subscribe returns null and leaks NO
-	# `_pending_subscriptions` entry. This is higher fidelity than
-	# `subscribe_rejected_while_degraded_adds_no_pending`, which calls `subscribe()`
-	# standalone: here the reject happens mid-emission, inside the teardown loop.
+	# Deferred-emission reentrant flow: a `subscription_failed` handler that calls
+	# `subscribe()` from the deferred emission (state is DEGRADED here — the retry
+	# path) must be rejected by the public `subscribe()` Connected-state gate, so the
+	# in-handler re-subscribe returns null and leaks NO `_pending_subscriptions`
+	# entry. Higher fidelity than `subscribe_rejected_while_degraded_adds_no_pending`
+	# (which calls `subscribe()` standalone): here the reject happens from inside a
+	# real teardown's deferred handler, with both synthetic events delivered.
 	_reset_events()
 	var ctx := _new_service_context()
 	var service = ctx["service"]
@@ -848,6 +860,7 @@ func _run_reentrant_subscribe_during_teardown_rejected() -> void:
 		_on_subscription_failed_reentrant_subscribe.bind(service)
 	)
 	service._reset_subscription_runtime()
+	await _settle_deferred()
 	_emit_result({
 		"handler_fired": _reentrant_subscribe_handler_fired,
 		"reentrant_subscribe_returned_null": _reentrant_subscribe_returned_null,
@@ -877,6 +890,7 @@ func _run_retry_teardown_resets_subscription_runtime() -> void:
 	service._pending_subscriptions[11] = pending_handle
 	service._pending_unsubscribes[88] = 7
 	service._schedule_retry_or_disconnect("harness retry")
+	await _settle_deferred()
 	_emit_result({
 		"subscription_failed_events": _jsonify(_subscription_failed_events),
 		"handle_status_after": String(pending_handle.status),
@@ -910,6 +924,7 @@ func _run_reset_subscription_runtime_survives_malformed_pending_entry() -> void:
 	service._pending_subscriptions[12] = freed_object
 	service._pending_subscriptions[13] = SubscriptionHandleScript.new(42, 13, 13)
 	service._reset_subscription_runtime()
+	await _settle_deferred()
 	var first_failed_events = _jsonify(_subscription_failed_events)
 	var guard_after_first = service._resetting_subscription_runtime
 	var pending_after_first: int = (service._pending_subscriptions as Dictionary).size()
@@ -917,6 +932,7 @@ func _run_reset_subscription_runtime_survives_malformed_pending_entry() -> void:
 	_subscription_failed_events.clear()
 	service._pending_subscriptions[14] = SubscriptionHandleScript.new(99, 14, 14)
 	service._reset_subscription_runtime()
+	await _settle_deferred()
 	_emit_result({
 		"first_failed_events": first_failed_events,
 		"guard_after_first": guard_after_first,
@@ -928,15 +944,14 @@ func _run_reset_subscription_runtime_survives_malformed_pending_entry() -> void:
 
 
 func _run_replace_subscription_rejected_during_disconnect_teardown() -> void:
-	# Item B (measured contract): on the disconnect teardown path `_finish_disconnect`
-	# disposes the socket BEFORE `_reset_subscription_runtime` and transitions to
-	# DISCONNECTED AFTER it, so during synthetic emission `_socket == null` while
-	# state still reads Connected. A `subscription_failed` handler that calls
-	# `replace_subscription()` in that window passes its own gates (authoritative not
-	# yet reset) but is rejected by `_send_subscribe_request`'s socket-null check;
-	# `_begin_subscription`'s send-failure cleanup discards the transient handle, so
-	# nothing leaks and no frame is sent — NOT the authoritative-reset mechanism the
-	# deferred note claimed.
+	# Item B (deferred-emission contract): on the disconnect teardown path
+	# `_finish_disconnect` disposes the socket, runs `_reset_subscription_runtime`
+	# (which now emits deferred), then transitions to DISCONNECTED. By the time the
+	# deferred `subscription_failed` handler runs the session is terminal
+	# (DISCONNECTED), so a handler that calls `replace_subscription()` is rejected up
+	# front by its own Connected-state gate — it never reaches the wire and leaks no
+	# pending entry. We reproduce that ordering by transitioning to DISCONNECTED
+	# after the reset, mirroring `_finish_disconnect`.
 	_reset_events()
 	var ctx := _new_service_context()
 	var service = ctx["service"]
@@ -956,6 +971,16 @@ func _run_replace_subscription_rejected_during_disconnect_teardown() -> void:
 		_on_subscription_failed_reentrant_replace.bind(service, auth_handle)
 	)
 	service._reset_subscription_runtime()
+	# Drive the DISCONNECTED transition through `_transition_to` (as `_finish_disconnect`
+	# does) rather than assigning `_current_status` directly, so the harness emits
+	# `state_changed` exactly like production and faithfully reproduces the ordering the
+	# deferred handler observes.
+	service._transition_to(
+		ServiceScript.STATE_DISCONNECTED,
+		"DISCONNECTED — harness disconnect-teardown",
+		ServiceScript.AUTH_NONE
+	)
+	await _settle_deferred()
 	_emit_result({
 		"subscription_failed_events": _jsonify(_subscription_failed_events),
 		"replace_handler_fired": _reentrant_replace_handler_fired,
@@ -998,6 +1023,48 @@ func _run_replace_subscription_rejected_while_degraded() -> void:
 		"current_state": String(service._current_status.get("state", "")),
 	})
 	quit(0)
+
+
+func _run_reset_subscription_runtime_handler_runs_after_guard_cleared() -> void:
+	# Core wedge-safety proof. Synthetic `subscription_failed` is emitted DEFERRED,
+	# so by the time a connected handler runs the synchronous teardown has fully
+	# completed and `_resetting_subscription_runtime` is already `false`. A handler
+	# that hard-errored therefore could not wedge the guard (it is already cleared)
+	# nor observe a partial teardown. We record the guard value seen from inside the
+	# handler, confirm the guard was restored synchronously, and confirm a SECOND
+	# teardown still emits — i.e. the guard was never wedged.
+	_reset_events()
+	_guard_seen_inside_handler = true
+	var ctx := _new_service_context()
+	var service = ctx["service"]
+	service.subscription_failed.connect(_on_subscription_failed_records_guard.bind(service))
+	service._pending_subscriptions[11] = SubscriptionHandleScript.new(42, 11, 11)
+	service._reset_subscription_runtime()
+	var guard_immediately_after = service._resetting_subscription_runtime
+	await _settle_deferred()
+	var first_event_count := _subscription_failed_events.size()
+	var guard_seen_first := _guard_seen_inside_handler
+	# A stuck guard would make this second teardown early-return and emit nothing.
+	_subscription_failed_events.clear()
+	service._pending_subscriptions[12] = SubscriptionHandleScript.new(99, 12, 12)
+	service._reset_subscription_runtime()
+	await _settle_deferred()
+	_emit_result({
+		"guard_immediately_after_first": guard_immediately_after,
+		"guard_seen_inside_handler_first": guard_seen_first,
+		"first_event_count": first_event_count,
+		"second_event_count": _subscription_failed_events.size(),
+		"guard_after_second": service._resetting_subscription_runtime,
+	})
+	quit(0)
+
+
+func _on_subscription_failed_records_guard(_event: Dictionary, service: Object) -> void:
+	# Records the reentrance-guard value visible from inside a DEFERRED handler.
+	# Does NOT append to `_subscription_failed_events` — the default
+	# `_on_subscription_failed` listener already does, so the event count stays
+	# accurate with both listeners connected.
+	_guard_seen_inside_handler = service._resetting_subscription_runtime
 
 
 func _on_subscription_failed_reentrant_replace(_event: Dictionary, service: Object, auth_handle: Object) -> void:
@@ -1050,6 +1117,16 @@ func _on_subscription_failed_reentrant_subscribe(_event: Dictionary, service: Ob
 	var after: int = (service._pending_subscriptions as Dictionary).size()
 	_reentrant_subscribe_returned_null = result == null
 	_reentrant_subscribe_pending_delta = after - before
+
+
+func _settle_deferred() -> void:
+	# Synthetic `subscription_failed` events are emitted via `call_deferred`, so
+	# they flush on a later idle frame rather than synchronously inside
+	# `_reset_subscription_runtime`. Await two frames to guarantee the MessageQueue
+	# has flushed (regardless of intra-frame ordering) before a mode reads
+	# `_subscription_failed_events`.
+	await process_frame
+	await process_frame
 
 
 func _jsonify(v: Variant) -> Variant:
