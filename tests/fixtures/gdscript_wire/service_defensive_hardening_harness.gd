@@ -1120,13 +1120,21 @@ func _on_subscription_failed_reentrant_subscribe(_event: Dictionary, service: Ob
 
 
 func _settle_deferred() -> void:
-	# Synthetic `subscription_failed` events are emitted via `call_deferred`, so
-	# they flush on a later idle frame rather than synchronously inside
-	# `_reset_subscription_runtime`. Await two frames to guarantee the MessageQueue
-	# has flushed (regardless of intra-frame ordering) before a mode reads
-	# `_subscription_failed_events`.
-	await process_frame
-	await process_frame
+	# Synthetic `subscription_failed` events are emitted via `call_deferred`, so they
+	# flush on a later idle frame rather than synchronously inside
+	# `_reset_subscription_runtime`. Poll the MessageQueue (bounded) until the captured
+	# event count holds steady across a full frame, then return. Polling-until-settled
+	# rather than awaiting a fixed two frames means a handler that itself re-defers work
+	# is drained to quiescence (not read mid-flush), while the frame cap keeps a
+	# zero-emit teardown — or a pathologically re-deferring one — from spinning forever.
+	const MAX_SETTLE_FRAMES := 8
+	var previous_count := -1
+	for _i in MAX_SETTLE_FRAMES:
+		await process_frame
+		var current_count := _subscription_failed_events.size()
+		if current_count == previous_count:
+			return
+		previous_count = current_count
 
 
 func _jsonify(v: Variant) -> Variant:

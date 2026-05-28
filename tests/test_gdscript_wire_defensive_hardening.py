@@ -977,16 +977,16 @@ def test_subscribe_rejected_while_degraded_adds_no_pending() -> None:
 
 
 def test_reentrant_subscribe_during_teardown_is_rejected() -> None:
-    # Spec spec-gdscript-wire-teardown-emission-hardening (item 413), TRUE reentrant
-    # flow: a `subscription_failed` handler that synchronously calls `subscribe()`
-    # DURING a real `_reset_subscription_runtime()` teardown (state DEGRADED, socket
-    # non-null — the retry path) must be rejected by the public `subscribe()`
-    # Connected-state gate. The reentrant `subscribe()` returns null and leaks NO
-    # `_pending_subscriptions` entry, so a re-subscribe packet can never reach a
-    # dying socket mid-teardown. Higher fidelity than
-    # `test_subscribe_rejected_while_degraded_adds_no_pending`, which exercises a
-    # standalone DEGRADED `subscribe()` rather than one issued from inside the
-    # teardown emission loop.
+    # Deferred-emission reentrant flow (originally
+    # spec-gdscript-wire-teardown-emission-hardening item 413; emission model updated by
+    # spec-gdscript-wire-teardown-deferred-emission): a `subscription_failed` handler that
+    # calls `subscribe()` from the DEFERRED emission of a real `_reset_subscription_runtime()`
+    # teardown (state DEGRADED, socket non-null — the retry path) must be rejected by the
+    # public `subscribe()` Connected-state gate. The reentrant `subscribe()` returns null and
+    # leaks NO `_pending_subscriptions` entry, so a re-subscribe packet can never reach the
+    # dying socket. Higher fidelity than
+    # `test_subscribe_rejected_while_degraded_adds_no_pending`, which exercises a standalone
+    # DEGRADED `subscribe()` rather than one issued from a real teardown's deferred handler.
     godot = _require_godot()
     proc = _run_harness_process(
         godot,
@@ -1011,8 +1011,8 @@ def test_reentrant_subscribe_during_teardown_is_rejected() -> None:
     # The reentrant path must actually be exercised — otherwise the assertions
     # below would pass vacuously.
     assert data["handler_fired"] is True, (
-        "the `subscription_failed` handler must have fired during teardown so the "
-        "reentrant `subscribe()` was genuinely attempted mid-emission."
+        "the `subscription_failed` handler must have fired from the deferred emission so "
+        "the reentrant `subscribe()` was genuinely attempted."
     )
     # The one-shot `_reentrant_subscribe_armed` guard must hold across BOTH
     # emissions: the handler attempts the re-subscribe exactly once, not once per
@@ -1023,8 +1023,8 @@ def test_reentrant_subscribe_during_teardown_is_rejected() -> None:
         f"{data['reentrant_subscribe_attempt_count']}."
     )
     assert data["reentrant_subscribe_returned_null"] is True, (
-        "a `subscribe()` issued from inside the teardown emission loop (state "
-        "DEGRADED) must be rejected by the Connected-state gate and return null."
+        "a `subscribe()` issued from a real teardown's deferred `subscription_failed` handler "
+        "(state DEGRADED) must be rejected by the Connected-state gate and return null."
     )
     assert int(data["pending_added_by_reentrant_subscribe"]) == 0, (
         "the rejected reentrant `subscribe()` must not leak a `_pending_subscriptions` "
