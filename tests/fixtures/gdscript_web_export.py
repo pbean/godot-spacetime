@@ -21,7 +21,7 @@ from pathlib import Path
 
 from tests.fixtures.spacetime_runtime import (
     probe_browser_binary,
-    probe_godot_binary,
+    probe_godot_non_mono_binary,
     probe_loopback_http,
 )
 
@@ -40,12 +40,31 @@ renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 """
 
+# The `[preset.0]` block lists every key Godot 4.6's preset loader looks up
+# without a default — observed empirically by running
+# `godot-mono --export-debug Web` against a minimal probe project in /tmp and
+# walking each `Couldn't find ... section "preset.0" and key "<x>"` error
+# until the preset parsed clean. `script_export_mode=2` mirrors the Godot
+# 4.6 editor default (`ScriptExportMode::MODE_BINARY_TOKENS_COMPRESSED`);
+# the test does not assert PCK script encoding, so any of the three modes
+# would work, but matching the editor default minimizes drift if a developer
+# regenerates the preset by opening the staged project in the editor.
 EXPORT_PRESETS_TEMPLATE = """[preset.0]
 name="Web"
 platform="Web"
 runnable=true
 advanced_options=false
 dedicated_server=false
+custom_features=""
+export_filter="all_resources"
+include_filter=""
+exclude_filter=""
+export_path=""
+encryption_include_filters=""
+encryption_exclude_filters=""
+encrypt_pck=false
+encrypt_directory=false
+script_export_mode=2
 
 [preset.0.options]
 custom_template/debug=""
@@ -72,8 +91,14 @@ const RENDERER_LABEL = "Compatibility"
 
 
 def probe_story_11_5_web_export_prereqs() -> dict[str, object]:
-    """Return discovery-only prerequisite probes for Story 11.5."""
-    godot = probe_godot_binary()
+    """Return discovery-only prerequisite probes for Story 11.5.
+
+    Web export needs a non-Mono Godot binary because Godot 4 refuses Web
+    export from the C#/.NET editor build; `probe_godot_non_mono_binary`
+    honors the `GODOT_WEB_EXPORT_BIN` env var and skips cleanly when only a
+    Mono build is on PATH.
+    """
+    godot = probe_godot_non_mono_binary()
     browser = probe_browser_binary()
     loopback = probe_loopback_http()
     return {

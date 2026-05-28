@@ -17,7 +17,7 @@ import pytest
 
 from tests.fixtures.spacetime_runtime import (
     probe_browser_binary,
-    probe_godot_binary,
+    probe_godot_non_mono_binary,
     probe_local_runtime,
     probe_loopback_http,
     probe_spacetime_cli,
@@ -91,7 +91,7 @@ def test_story_11_5_web_export_runner_contract_strings_present() -> None:
 def test_story_11_5_web_export_helper_reuses_shared_prerequisite_probes() -> None:
     content = HELPER_PATH.read_text(encoding="utf-8")
     for expected in (
-        "probe_godot_binary",
+        "probe_godot_non_mono_binary",
         "probe_browser_binary",
         "probe_loopback_http",
         "Compatibility",
@@ -109,7 +109,7 @@ def test_story_11_5_web_export_integration_reuses_shared_runtime_probes() -> Non
     for expected in (
         "probe_spacetime_cli",
         "probe_local_runtime",
-        "probe_godot_binary",
+        "probe_godot_non_mono_binary",
         "probe_browser_binary",
         "probe_loopback_http",
     ):
@@ -127,9 +127,9 @@ def test_story_11_5_gdscript_web_export_e2e(tmp_path: Path) -> None:
     if not cli_probe.available:
         pytest.skip(f"spacetime CLI not available on PATH: {cli_probe.reason}")
 
-    godot_probe = probe_godot_binary()
+    godot_probe = probe_godot_non_mono_binary()
     if not godot_probe.available:
-        pytest.skip(f"godot-mono not available on PATH: {godot_probe.reason}")
+        pytest.skip(f"non-Mono Godot binary not available for Web export: {godot_probe.reason}")
 
     browser_probe = probe_browser_binary()
     if not browser_probe.available:

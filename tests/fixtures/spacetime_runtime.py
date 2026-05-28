@@ -32,6 +32,13 @@ DEFAULT_SPACETIME_SERVER = "local"
 # build, so a non-C# Godot binary still yields a clean skip instead of a later
 # harness load failure.
 GODOT_BINARY_CANDIDATES = ("godot-mono", "godot4-mono", "godot", "godot4")
+# Non-Mono Godot binary candidates used exclusively by the Story 11.5 web-export
+# proof path. Godot 4 refuses Web export from the C#/.NET editor build even when
+# the staged project itself is pure GDScript, so the web-export lane has to dial
+# a non-Mono binary; the regular `GODOT_BINARY_CANDIDATES` would silently dead-
+# end at the export step. Empirically observed against Godot 4.6.3 mono:
+# "Exporting to Web is currently not supported in Godot 4 when using C#/.NET."
+NON_MONO_GODOT_BINARY_CANDIDATES = ("godot", "godot4")
 BROWSER_BINARY_CANDIDATES = (
     "chromium",
     "chromium-browser",
@@ -153,6 +160,89 @@ def probe_godot_binary() -> ProbeResult:
             reason=(
                 f"{resolved} does not appear to be a Godot Mono/.NET build "
                 "required by the C# integration harness"
+            ),
+        )
+    return ProbeResult(available=True, path=resolved)
+
+
+def probe_godot_non_mono_binary() -> ProbeResult:
+    """Return whether a non-Mono Godot binary is discoverable and runnable.
+
+    Story 11.5's web-export proof path requires a non-Mono Godot 4.x binary
+    because Godot 4 explicitly refuses Web export from the C#/.NET editor
+    build, even when the staged project itself is pure GDScript. The
+    optional `GODOT_WEB_EXPORT_BIN` environment variable takes precedence
+    over the PATH-discovered `NON_MONO_GODOT_BINARY_CANDIDATES`; an unset or
+    empty `GODOT_WEB_EXPORT_BIN` falls back to PATH discovery (empty string
+    is treated as unset so a leftover `export GODOT_WEB_EXPORT_BIN=` in a
+    shell rc behaves the same as never having set the var). Mono builds are
+    rejected so the web-export lane skips with an explicit reason rather
+    than wedging at the rc=0/no-`index.html` failure mode that Godot's mono
+    build exhibits when asked to Web-export. Mono detection looks at both
+    `--version` stdout and stderr because some packaged Godot variants emit
+    the version banner to stderr only.
+    """
+    override = os.environ.get("GODOT_WEB_EXPORT_BIN")
+    candidates: tuple[str, ...]
+    using_override = bool(override and override.strip())
+    if using_override:
+        candidates = (override,)
+    else:
+        candidates = NON_MONO_GODOT_BINARY_CANDIDATES
+
+    resolved: str | None = None
+    for candidate in candidates:
+        found = shutil.which(candidate) if os.path.basename(candidate) == candidate else (
+            candidate if os.path.isfile(candidate) and os.access(candidate, os.X_OK) else None
+        )
+        if found:
+            resolved = found
+            break
+
+    if resolved is None:
+        if using_override:
+            reason = (
+                f"GODOT_WEB_EXPORT_BIN={override!r} did not resolve to a runnable "
+                "non-Mono Godot binary; point it at an absolute path to a non-Mono Godot 4.x build"
+            )
+        else:
+            reason = (
+                f"no non-Mono Godot binary found on PATH (tried {', '.join(candidates)}); "
+                "set GODOT_WEB_EXPORT_BIN=/path/to/godot to point at a non-Mono Godot 4.x binary"
+            )
+        return ProbeResult(available=False, reason=reason)
+
+    try:
+        result = subprocess.run(
+            [resolved, "--headless", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except FileNotFoundError:
+        return ProbeResult(
+            available=False,
+            reason=f"Godot binary at {resolved} disappeared before exec",
+        )
+    except subprocess.TimeoutExpired:
+        return ProbeResult(
+            available=False, reason="godot --version timed out after 15s"
+        )
+    if result.returncode != 0:
+        return ProbeResult(
+            available=False,
+            reason=f"{resolved} --version exited with {result.returncode}",
+        )
+    # Some packaged Godot variants print the version banner to stderr only;
+    # concatenate both so a Mono build cannot hide its `.mono.` marker by
+    # writing to the unchecked stream.
+    version_text = (result.stdout or "") + "\n" + (result.stderr or "")
+    if not _looks_like_non_mono_godot_build(resolved, version_text):
+        return ProbeResult(
+            available=False,
+            reason=(
+                f"{resolved} appears to be a Mono/.NET Godot build; "
+                "Web export requires a non-Mono binary"
             ),
         )
     return ProbeResult(available=True, path=resolved)
@@ -349,6 +439,22 @@ def _looks_like_mono_godot_build(path: str, version_output: str) -> bool:
         or ".net" in lowered_output
         or "dotnet" in lowered_output
     )
+
+
+def _looks_like_non_mono_godot_build(path: str, version_output: str) -> bool:
+    """Negation of `_looks_like_mono_godot_build`.
+
+    A binary qualifies as non-Mono only when the Mono detector fails to flag
+    it on the same surface (basename + combined `--version` stdout/stderr).
+    The gate is therefore only as strong as `_looks_like_mono_godot_build`'s
+    recall on the pinned Godot line. For the pinned Godot 4.6.x runtime, real
+    Mono builds always emit `.mono.` in their `--version` string (e.g.
+    `Godot Engine v4.6.3.stable.mono.arch_linux.<sha>`), so the negation
+    holds in practice — but a hypothetical Mono build with a stripped/custom
+    version banner and a non-`mono` basename would slip through. Callers
+    should not infer stronger guarantees than that.
+    """
+    return not _looks_like_mono_godot_build(path, version_output)
 
 
 def _server_nickname_configured(list_stdout: str, nickname: str) -> bool:
