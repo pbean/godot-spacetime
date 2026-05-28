@@ -793,8 +793,16 @@ def test_connection_service_on_subscription_error_closes_new_handle() -> None:
     assert error_start is not None, (
         "ISubscriptionEventSink.OnSubscriptionError must be implemented on SpacetimeConnectionService"
     )
-    # handle.Close() must appear within the method body (within 15 lines)
-    block = lines[error_start:error_start + 15]
+    # handle.Close() must appear within the method body. Slice to the next sink
+    # method rather than a fixed line window so the check is robust to lines
+    # inserted ahead of Close() (the gated snapshot+Unregister tombstone block —
+    # E7 re-entrance hardening, 2026-05-28).
+    next_method = None
+    for k in range(error_start + 1, len(lines)):
+        if "void IRowChangeEventSink." in lines[k]:
+            next_method = k
+            break
+    block = lines[error_start:next_method if next_method is not None else error_start + 40]
     assert any("handle.Close()" in ln for ln in block), (
         "SpacetimeConnectionService.OnSubscriptionError must call handle.Close() on the errored new handle (AC 5)"
     )

@@ -390,3 +390,152 @@ def test_connection_service_disconnect_cancels_pending_unsubscribe_then_callback
         "Disconnect teardown must cancel pending UnsubscribeThen completion callbacks to match the official "
         "C#/Unity SDK semantics when disconnect wins before UnsubscribeApplied"
     )
+
+
+# ---------------------------------------------------------------------------
+# E1 — cancel-on-disconnect is observable (SDK Q2 drop, now warned)
+# ---------------------------------------------------------------------------
+
+DOCS_MD = "docs/runtime-boundaries.md"
+ADAPTER_SIGNAL_CS = "addons/godot_spacetime/src/Internal/Events/GodotSignalAdapter.cs"
+
+
+def test_cancel_pending_unsubscribe_then_callbacks_emits_warning_per_callback() -> None:
+    """SDK Q2: Disconnect abandons pending onEnded. The addon's drop must be observable —
+    one SpacetimeLog.Warning per cancelled callback, snapshotted under the gate."""
+    content = _read(SERVICE_CS)
+    body = _method_body(content, "private void CancelPendingUnsubscribeThenCallbacks()")
+    assert "SpacetimeLog.Warning(" in body, (
+        "CancelPendingUnsubscribeThenCallbacks must emit a Warning per cancelled callback so the "
+        "SDK-aligned drop (probe Q2) is observable instead of silent (E1)"
+    )
+    assert "LogCategory.Subscription" in body, (
+        "The cancel-on-disconnect Warning must be categorized under LogCategory.Subscription (E1)"
+    )
+    # The count must be snapshotted under the gate before Clear() so the per-callback loop is accurate.
+    assert "_pendingUnsubscribeThenCallbacks.Count" in body, (
+        "CancelPendingUnsubscribeThenCallbacks must snapshot the pending count under the gate (E1)"
+    )
+    assert "_pendingUnsubscribeThenCallbacks.Clear()" in body, (
+        "CancelPendingUnsubscribeThenCallbacks must still clear the pending registry (E1)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E2 — OnSubscriptionError cancels (does NOT dispatch) the pending callback
+# ---------------------------------------------------------------------------
+
+def test_connection_service_declares_single_key_cancel_helper() -> None:
+    content = _strip(SERVICE_CS)
+    assert "private void CancelPendingUnsubscribeThenCallback(Guid handleId)" in content \
+        or "private void CancelPendingUnsubscribeThenCallback( Guid handleId )" in content, (
+        "SpacetimeConnectionService must expose a single-key CancelPendingUnsubscribeThenCallback(Guid) "
+        "to clear the leaked pending entry on the error path without firing it (E2)"
+    )
+
+
+def test_single_key_cancel_removes_without_dispatch_and_warns() -> None:
+    content = _read(SERVICE_CS)
+    body = _method_body(content, "private void CancelPendingUnsubscribeThenCallback(Guid handleId)")
+    assert "_pendingUnsubscribeThenCallbacks.Remove(handleId)" in body, (
+        "CancelPendingUnsubscribeThenCallback must Remove the single pending entry by handle id (E2)"
+    )
+    assert "SpacetimeLog.Warning(" in body and "LogCategory.Subscription" in body, (
+        "CancelPendingUnsubscribeThenCallback must warn under LogCategory.Subscription on cancellation (E2)"
+    )
+    # SDK Q3: must not fire the callback — no invocation, no shared dispatch helper.
+    assert "callback()" not in body, (
+        "CancelPendingUnsubscribeThenCallback must NOT invoke the callback (SDK Q3 abandons onEnded) (E2)"
+    )
+    assert "DispatchPendingUnsubscribeThenCallback(" not in body, (
+        "CancelPendingUnsubscribeThenCallback must NOT route through the dispatch helper (would fire) (E2)"
+    )
+
+
+def test_on_subscription_error_cancels_pending_callback_and_still_emits_failed() -> None:
+    content = _read(SERVICE_CS)
+    body = _method_body(content, "void ISubscriptionEventSink.OnSubscriptionError(")
+    assert "CancelPendingUnsubscribeThenCallback(handle.HandleId)" in body, (
+        "OnSubscriptionError must cancel the leaked pending onEnded entry by handle id (SDK Q3) (E2)"
+    )
+    assert "DispatchPendingUnsubscribeThenCallback(" not in body, (
+        "OnSubscriptionError must NOT dispatch the pending onEnded — that would fire it (E2)"
+    )
+    assert "OnSubscriptionFailed?.Invoke(" in body, (
+        "OnSubscriptionError must still emit SubscriptionFailed after cancelling the pending callback (E2)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E4 — adapter retains the narrow typeof(Action<>) match, documented via probe Q1
+# ---------------------------------------------------------------------------
+
+def test_adapter_try_unsubscribe_then_documents_narrow_action_match() -> None:
+    content = _read(ADAPTER_CS)
+    # The narrow match itself is still required.
+    body = _method_body(content, "internal bool TryUnsubscribeThen(")
+    assert "typeof(Action<>)" in body, (
+        "TryUnsubscribeThen must retain the narrow typeof(Action<>) match (E4)"
+    )
+    # XML-doc remark citing the probe-observed onEnded shape must accompany the method.
+    idx = content.find("internal bool TryUnsubscribeThen(")
+    preamble = content[:idx]
+    assert "SubscriptionEventContext" in preamble, (
+        "TryUnsubscribeThen XML doc must record the pinned 2.1.0 onEnded shape "
+        "Action<SubscriptionEventContext> (probe Q1) (E4)"
+    )
+    assert "Action<T1,T2>" in preamble or "Action&lt;T1,T2&gt;" in preamble, (
+        "TryUnsubscribeThen XML doc must note that the two-arg Action<T1,T2> error delegate is "
+        "deliberately excluded (E4)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E5 — GodotSignalAdapter.Dispatch carries the at-most-once / in-tree caveat doc
+# ---------------------------------------------------------------------------
+
+def test_signal_adapter_dispatch_documents_at_most_once_in_tree_caveat() -> None:
+    content = _read(ADAPTER_SIGNAL_CS)
+    idx = content.find("public void Dispatch(Action action)")
+    assert idx >= 0, "GodotSignalAdapter must declare public void Dispatch(Action action)"
+    preamble = content[:idx]
+    assert "at most once" in preamble, (
+        "Dispatch XML doc must state the callback is delivered at most once (E5)"
+    )
+    assert "tree" in preamble, (
+        "Dispatch XML doc must note delivery only while the owning Node remains in the tree (E5)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# E1/E2/E5/E6 — runtime-boundaries enumerates Unsubscribe/UnsubscribeThen + boundary
+# ---------------------------------------------------------------------------
+
+def test_runtime_boundaries_enumerates_unsubscribe_and_unsubscribe_then() -> None:
+    content = _strip(DOCS_MD)
+    assert "Unsubscribe(SubscriptionHandle handle)" in content, (
+        "runtime-boundaries must enumerate SpacetimeClient.Unsubscribe(handle) (E6)"
+    )
+    assert "UnsubscribeThen(SubscriptionHandle handle, Action onEnded)" in content, (
+        "runtime-boundaries must enumerate SpacetimeClient.UnsubscribeThen(handle, onEnded) (E6)"
+    )
+
+
+def test_runtime_boundaries_documents_completion_disconnect_error_exit_boundary() -> None:
+    content = _strip(DOCS_MD)
+    assert "exactly once" in content, (
+        "runtime-boundaries must state onEnded fires exactly once on confirmed end (E1)"
+    )
+    # cancelled, not fired, on both disconnect and error.
+    assert "cancelled" in content.lower(), (
+        "runtime-boundaries must state onEnded is cancelled (not fired) on disconnect/error (E1/E2)"
+    )
+    assert "Disconnect()" in content, (
+        "runtime-boundaries must reference the Disconnect boundary for onEnded (E1)"
+    )
+    assert "SubscriptionError" in content or "SubscriptionFailed" in content, (
+        "runtime-boundaries must reference the subscription-error boundary for onEnded (E2)"
+    )
+    assert "scene tree" in content, (
+        "runtime-boundaries must document the main-thread-while-in-tree delivery caveat (E5)"
+    )

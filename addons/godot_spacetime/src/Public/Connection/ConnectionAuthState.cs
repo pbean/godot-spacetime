@@ -12,6 +12,9 @@ public enum ConnectionAuthState
     /// <summary>Provided credentials were accepted by the server. The session is authenticated.</summary>
     TokenRestored,
 
+    /// <summary>Directly provided credentials were accepted by the server. The session is authenticated (not restored from a token store).</summary>
+    Authenticated,
+
     /// <summary>Provided credentials were rejected. The connection did not complete due to an authentication failure.</summary>
     AuthFailed,
 

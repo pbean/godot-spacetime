@@ -475,3 +475,21 @@ def test_connection_service_has_auth_error_classifier() -> None:
     assert "IsLikelyAuthError" in content, (
         "SpacetimeConnectionService.cs must have an IsLikelyAuthError classifier for exception-chain inspection"
     )
+
+
+# ---------------------------------------------------------------------------
+# Authenticated — direct (non-restored) credential success
+# ---------------------------------------------------------------------------
+
+def test_connection_auth_state_has_authenticated_value() -> None:
+    content = _read("addons/godot_spacetime/src/Public/Connection/ConnectionAuthState.cs")
+    assert "Authenticated" in content, (
+        "ConnectionAuthState.cs must contain an 'Authenticated' value for direct-credential success"
+    )
+
+
+def test_connection_service_has_authenticated_state() -> None:
+    content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
+    assert "ConnectionAuthState.Authenticated" in content, (
+        "SpacetimeConnectionService.cs must reference ConnectionAuthState.Authenticated for direct-credential success"
+    )

@@ -194,6 +194,10 @@ If a subscription is rejected or later enters an error path, the `SpacetimeClien
 | `ErrorMessage` | `string` | Human-readable failure detail from the runtime error, used to decide whether query correction, binding regeneration, or a retry is the right next step. |
 | `FailedAt` | `DateTimeOffset` | UTC timestamp at which the SDK recorded the failure event. |
 
+**Ending a subscription:** A subscription scope is torn down through [`SpacetimeClient.Unsubscribe(SubscriptionHandle handle)`](../addons/godot_spacetime/src/Public/SpacetimeClient.cs) or [`SpacetimeClient.UnsubscribeThen(SubscriptionHandle handle, Action onEnded)`](../addons/godot_spacetime/src/Public/SpacetimeClient.cs). `Unsubscribe(handle)` requests teardown and returns without waiting. `UnsubscribeThen(handle, onEnded)` additionally registers a one-shot `onEnded` completion callback. Both calls honor a no-throw contract: an SDK or callback fault is logged, never propagated to the caller.
+
+**Completion under disconnect / error / exit-tree:** The `onEnded` callback fires **exactly once** when the SDK confirms the subscription has ended (`UnsubscribeApplied`). It is **cancelled — not fired** when the session disconnects before that confirmation, and likewise when the subscription enters an error path (`SubscriptionFailed`). This matches the pinned SpacetimeDB ClientSDK 2.1.0, which abandons (does not re-fire) a pending `onEnded` on both `Disconnect()` and `SubscriptionError`; each cancellation surfaces one `SpacetimeLog.Warning` under `LogCategory.Subscription` so the drop is observable rather than silent. When `onEnded` does fire, it is marshaled onto the main thread via a deferred call on the owning client Node and is delivered **only while that Node remains in the scene tree** — if the Node leaves the tree (or is freed) mid-flight, the deferred completion call is dropped by design (there is no exit-tree completion registry).
+
 ### Cache — Reading Synchronized Local State
 
 The **Cache** is the local synchronized read model populated by active subscriptions. Reads from the cache are always local — no network round-trip. The cache is populated and kept current by the SDK runtime; you read from it after the `SubscriptionApplied` signal fires, on the same Godot main-thread lifecycle path that owns `_Process()` and deferred signal dispatch. If a replacement subscription fails, the previously authoritative synchronized state remains readable.
@@ -703,6 +707,31 @@ reference and old handle inside the gate, releases, and only then calls
 `OnSubscriptionApplied?.Invoke(...)` signal. The same pattern is used by
 `OnSubscriptionError`, `Unsubscribe`, `UnsubscribeThen`,
 `HandleDisconnectError`, and `ResetDisconnectedSessionState`.
+
+### Teardown/replace synchronous re-entry resolution (E7/E8)
+
+The teardown paths (`Unsubscribe`, `OnSubscriptionError`) snapshot the
+`SubscriptionEntry` and call `_subscriptionRegistry.Unregister(...)` in a
+single `lock (_connectionStateGate)` acquisition before releasing the gate,
+then call `TryUnsubscribe` outside the lock. This defuses a synchronous SDK
+re-entry: if the pinned ClientSDK `2.1.0` re-enters `OnSubscriptionError` for
+the same handle from inside the reflected `TryUnsubscribe`, the re-entry's
+gated `TryGetEntry` finds the entry already removed and issues no second
+adapter call. This matters because the `2.1.0`
+subscription handle is **not** idempotent — a second `Unsubscribe()` /
+`UnsubscribeThen()` throws `"Unsubscribe already called."` (and after the
+handle has ended, `"Cannot unsubscribe from inactive subscription."`). The
+local `SpacetimeSdkSubscriptionAdapter.TryUnsubscribe` catches that throw and
+returns `false`, so a double call cannot crash, but unregister-under-gate
+avoids the wasted reflected dispatch entirely.
+
+The `ReplaceSubscription` null window (E8) is already safe: a synchronous
+`OnSubscriptionApplied(newHandle)` arriving before `UpdateSdkSubscription`
+leaves `entry.SdkSubscription == null`, and an in-handler `Unsubscribe`
+forwards that null into `SpacetimeSdkSubscriptionAdapter.TryUnsubscribe`, whose
+first line `if (sdkSubscription == null) return false;` short-circuits before
+any SDK call. The handle is still marked `Closed`. No code change is required
+for E8.
 
 ### `_stats` reference-return out of scope
 

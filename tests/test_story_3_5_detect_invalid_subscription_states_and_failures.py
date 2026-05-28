@@ -610,7 +610,14 @@ def test_connection_service_on_subscription_error_remove_pending_before_try_get_
     )
 
 
-def test_connection_service_on_subscription_error_try_unsubscribe_before_unregister() -> None:
+def test_connection_service_on_subscription_error_unregister_before_try_unsubscribe() -> None:
+    # E7 re-entrance hardening (2026-05-28) refines the original Story 3.5 ordering:
+    # the registry entry is snapshotted then Unregister'd atomically under
+    # _connectionStateGate (tombstone) BEFORE the SDK adapter call, so a synchronous
+    # SDK re-entry finds no entry and issues no duplicate TryUnsubscribe. The
+    # snapshotted SdkSubscription is still handed to TryUnsubscribe outside the lock,
+    # so "SDK close" still happens with the correct subscription — only the registry-map
+    # removal moved ahead of the adapter call. (Was: TryUnsubscribe-before-Unregister.)
     content = _read("addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs")
     error_start = content.find("void ISubscriptionEventSink.OnSubscriptionError(")
     next_method = content.find("void IRowChangeEventSink.", error_start)
@@ -619,9 +626,11 @@ def test_connection_service_on_subscription_error_try_unsubscribe_before_unregis
     unregister_pos = error_section.find("Unregister(handle.HandleId)")
     assert unsub_pos != -1, "TryUnsubscribe must be called in OnSubscriptionError (AC 1, 2)"
     assert unregister_pos != -1, "Unregister must be called in OnSubscriptionError (AC 2)"
-    assert unsub_pos < unregister_pos, (
-        "TryUnsubscribe must be called BEFORE Unregister in OnSubscriptionError — "
-        "SDK close must precede registry cleanup (AC 1, 2)"
+    assert unregister_pos < unsub_pos, (
+        "Unregister must be called BEFORE TryUnsubscribe in OnSubscriptionError — the entry is "
+        "snapshotted and unregistered atomically under _connectionStateGate (tombstone) so a "
+        "synchronous SDK re-entry issues no duplicate adapter call; the snapshotted SdkSubscription "
+        "is still passed to TryUnsubscribe outside the lock (E7 re-entrance hardening)"
     )
 
 

@@ -286,13 +286,24 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
         RemovePendingReplacementReferences(handle.HandleId);
 
-        // Snapshot the registry entry under the gate; the SDK adapter call
-        // must run OUTSIDE the lock to honor the snapshot-then-emit rule.
+        // Snapshot AND unregister the registry entry atomically under the gate, so a
+        // synchronous SDK re-entry (e.g. OnSubscriptionError for the same handle from
+        // inside TryUnsubscribe) finds nothing in the registry and skips the duplicate
+        // adapter call (E7). The SDK adapter call must run OUTSIDE the lock to honor the
+        // snapshot-then-emit rule.
         SubscriptionEntry? entry = null;
         if (CurrentStatus.State == ConnectionState.Connected)
         {
             lock (_connectionStateGate)
+            {
                 _subscriptionRegistry.TryGetEntry(handle.HandleId, out entry);
+                _subscriptionRegistry.Unregister(handle.HandleId);
+            }
+        }
+        else
+        {
+            lock (_connectionStateGate)
+                _subscriptionRegistry.Unregister(handle.HandleId);
         }
 
         if (entry != null)
@@ -302,8 +313,6 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         }
 
         handle.Close();
-        lock (_connectionStateGate)
-            _subscriptionRegistry.Unregister(handle.HandleId);
     }
 
     /// <summary>
@@ -521,14 +530,21 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
         // Snapshot-then-emit under _connectionStateGate keeps SDK adapter calls + signal emission
         // outside every lock scope (see docs/runtime-boundaries.md `## Threading Model`).
         RemovePendingReplacementReferences(handle.HandleId);
+        // Snapshot AND unregister atomically under the gate so a synchronous SDK re-entry
+        // (OnSubscriptionError for the same handle from inside TryUnsubscribe) finds no entry
+        // and issues no duplicate adapter call (E7). TryUnsubscribe stays outside the lock.
         SubscriptionEntry? entry;
         lock (_connectionStateGate)
+        {
             _subscriptionRegistry.TryGetEntry(handle.HandleId, out entry);
+            _subscriptionRegistry.Unregister(handle.HandleId);
+        }
         if (entry != null)
             _subscriptionAdapter.TryUnsubscribe(entry.SdkSubscription);
-        lock (_connectionStateGate)
-            _subscriptionRegistry.Unregister(handle.HandleId);
         handle.Close();
+        // SDK Q3: the SDK abandons any pending onEnded on error, so clear the leaked registry entry
+        // here WITHOUT dispatching it (dispatching would fire onEnded, contradicting the SDK).
+        CancelPendingUnsubscribeThenCallback(handle.HandleId);
         OnSubscriptionFailed?.Invoke(new SubscriptionFailedEvent(handle, error));
     }
 
@@ -728,7 +744,9 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
             }
         }
 
-        var authState = _credentialsProvided ? ConnectionAuthState.TokenRestored : ConnectionAuthState.None;
+        var authState = _credentialsProvided
+            ? (_restoredFromStore ? ConnectionAuthState.TokenRestored : ConnectionAuthState.Authenticated)
+            : ConnectionAuthState.None;
 
         // Once the server accepts the token, the "restored from store" distinction is no longer
         // relevant for failure classification. A subsequent Degraded→Disconnected is a network
@@ -994,8 +1012,44 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
 
     private void CancelPendingUnsubscribeThenCallbacks()
     {
+        // SDK Q2: the pinned 2.1.0 SDK abandons (does not fire) onEnded when Disconnect() runs —
+        // FailPendingOperations ignores subscriptions — so the addon drops these pending callbacks
+        // to match. Snapshot the count under the gate and surface one Warning per dropped callback
+        // so the SDK-aligned drop is observable instead of silent (E1).
+        int cancelledCount;
         lock (_pendingUnsubscribeThenCallbacksGate)
+        {
+            cancelledCount = _pendingUnsubscribeThenCallbacks.Count;
             _pendingUnsubscribeThenCallbacks.Clear();
+        }
+
+        for (var i = 0; i < cancelledCount; i++)
+        {
+            SpacetimeLog.Warning(
+                LogCategory.Subscription,
+                "A pending UnsubscribeThen completion callback was cancelled because the session " +
+                "disconnected before the SDK confirmed the unsubscribe; onEnded will not fire " +
+                "(matches SDK 2.1.0 Disconnect behavior, which abandons pending onEnded callbacks).");
+        }
+    }
+
+    private void CancelPendingUnsubscribeThenCallback(Guid handleId)
+    {
+        // SDK Q3: on SubscriptionError the SDK sets Ended and invokes only onError, abandoning any
+        // pending onEnded. Remove the leaked registry entry WITHOUT firing it (no double-fire), and
+        // surface a Warning so the cancellation is observable (E2).
+        bool removed;
+        lock (_pendingUnsubscribeThenCallbacksGate)
+            removed = _pendingUnsubscribeThenCallbacks.Remove(handleId);
+
+        if (!removed)
+            return;
+
+        SpacetimeLog.Warning(
+            LogCategory.Subscription,
+            "A pending UnsubscribeThen completion callback was cancelled because the subscription " +
+            "errored before the SDK confirmed the unsubscribe; onEnded will not fire " +
+            "(matches SDK 2.1.0 SubscriptionError behavior, which abandons pending onEnded callbacks).");
     }
 
     private void RunConnectionTeardown(Action teardown)

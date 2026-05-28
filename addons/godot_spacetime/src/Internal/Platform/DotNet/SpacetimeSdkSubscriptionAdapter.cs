@@ -129,6 +129,14 @@ internal sealed class SpacetimeSdkSubscriptionAdapter
     /// the invocation throws). Callers that receive <c>false</c> should dispatch
     /// <paramref name="onEnded"/> inline as a graceful fall-back.
     /// </returns>
+    /// <remarks>
+    /// The pinned SpacetimeDB ClientSDK 2.1.0 exposes onEnded as a single-argument
+    /// <c>Action&lt;SubscriptionEventContext&gt;</c> (probe Q1), so the reflection match below
+    /// intentionally requires <c>typeof(Action&lt;&gt;)</c> — a one-arg generic <c>Action</c>.
+    /// The parameterless <c>Action</c> and the two-argument <c>Action&lt;T1,T2&gt;</c> are
+    /// deliberately excluded: the latter is the SDK's <c>onError</c> delegate shape, not
+    /// completion. Widening the match would risk binding to the error delegate.
+    /// </remarks>
     internal bool TryUnsubscribeThen(object? sdkSubscription, Action onEnded)
     {
         if (sdkSubscription == null)
