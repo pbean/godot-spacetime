@@ -13,11 +13,14 @@ green on any developer machine, with or without a real runtime present.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import socket
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 # Matches the CSI/SGR ANSI escape sequences `spacetime server ping` may emit
@@ -411,6 +414,102 @@ def probe_local_runtime(spacetime_cli_path: str) -> ProbeResult:
         host=host,
         server=server,
     )
+
+
+class SpacetimeIdentityShapeError(RuntimeError):
+    """Raised when `POST /v1/identity` returns a body that doesn't match the
+    pinned SpacetimeDB 2.1.0 contract — missing/empty `token`, non-JSON body,
+    JSON list/null root, or a JWT shape that wouldn't be accepted by the
+    server's WebSocket upgrade.
+
+    Callers that translate `RuntimeError` into `pytest.skip(...)` must NOT
+    swallow this subclass — shape drift is a "loud failure" signal under the
+    Empirical SDK Validation principle (a future server major changing the
+    response shape is a documentation defect to surface, not a transient
+    skip).
+    """
+
+
+def mint_anonymous_identity_token(runtime_host: str, *, timeout: float = 10.0) -> str:
+    """Mint a fresh anonymous SpacetimeDB JWT from a live local runtime.
+
+    POSTs to `<runtime_host>/v1/identity` and returns the `token` field. Story
+    11.5's web-export proof path passes this JWT as the `?token=` query
+    parameter on the WebSocket subscribe URL — placeholder strings get
+    rejected by SpacetimeDB 2.1.0 mid-handshake with `HTTP Authentication
+    failed; no valid credentials available` so the token must be a real
+    ES256-signed JWT the running server can verify.
+
+    Observed shape against the pinned spacetime 2.1.0 local runtime:
+        {"identity": "<64-hex-bytes>", "token": "<jwt, len≈386, starts with eyJ>"}
+
+    Raises:
+      - `RuntimeError` (plain) on a transient runtime/HTTP failure
+        (unreachable host, non-2xx status, connection error) — callers should
+        translate this into `pytest.skip(...)`.
+      - `SpacetimeIdentityShapeError` on response shape drift (non-JSON body,
+        list/null root, missing `token` key, empty/whitespace `token`, or a
+        value that fails the JWT shape canary `eyJ`-prefix + two dots).
+        Callers must let this surface — it indicates a server contract drift
+        from pinned 2.1.0, which should fail loud rather than skip.
+    """
+    normalized_host = (runtime_host or "").rstrip("/")
+    if not normalized_host:
+        raise RuntimeError("mint_anonymous_identity_token requires a non-empty runtime host URL")
+    url = f"{normalized_host}/v1/identity"
+    request = urllib.request.Request(url, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = response.getcode()
+            body = response.read()
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(
+            f"POST {url} returned HTTP {exc.code} {exc.reason}; "
+            "local SpacetimeDB runtime cannot mint an anonymous identity token"
+        ) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(
+            f"POST {url} failed: {exc.reason}; "
+            "local SpacetimeDB runtime is not reachable for token minting"
+        ) from exc
+
+    if status < 200 or status >= 300:
+        raise RuntimeError(
+            f"POST {url} returned non-2xx status {status}; "
+            "local SpacetimeDB runtime cannot mint an anonymous identity token"
+        )
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise SpacetimeIdentityShapeError(
+            f"POST {url} returned non-JSON body: {body[:120]!r}"
+        ) from exc
+
+    if not isinstance(payload, dict) or "token" not in payload:
+        observed_keys = sorted(payload.keys()) if isinstance(payload, dict) else type(payload).__name__
+        raise SpacetimeIdentityShapeError(
+            f"POST {url} response shape drifted from the pinned spacetime 2.1.0 contract: "
+            f"expected a JSON object with key 'token', observed {observed_keys}"
+        )
+
+    token = payload.get("token")
+    if not isinstance(token, str) or not token.strip():
+        raise SpacetimeIdentityShapeError(
+            f"POST {url} returned an empty or non-string 'token' field"
+        )
+    # JWT shape canary: pinned spacetime 2.1.0 emits an ES256-signed JWT that
+    # always starts with `eyJ` (base64-encoded `{"alg":...}` header) and has
+    # exactly two `.` separators (header.payload.signature). Anything else
+    # would be rejected by the server's WebSocket upgrade as malformed; better
+    # to surface the drift here than to debug an HTTP 401 mid-handshake.
+    if not token.startswith("eyJ") or token.count(".") != 2:
+        raise SpacetimeIdentityShapeError(
+            f"POST {url} returned a value in 'token' that does not match the pinned spacetime "
+            f"2.1.0 JWT shape (eyJ-prefix + two dots); observed prefix={token[:8]!r}, "
+            f"dot_count={token.count('.')}"
+        )
+    return token
 
 
 def _parse_ping_host(stdout: str) -> str:

@@ -16,6 +16,8 @@ from pathlib import Path
 import pytest
 
 from tests.fixtures.spacetime_runtime import (
+    SpacetimeIdentityShapeError,
+    mint_anonymous_identity_token,
     probe_browser_binary,
     probe_godot_non_mono_binary,
     probe_local_runtime,
@@ -97,6 +99,16 @@ def test_story_11_5_web_export_helper_reuses_shared_prerequisite_probes() -> Non
         "Compatibility",
         "export_presets.cfg",
         "index.html",
+        # The empirically validated ANGLE swiftshader headless flag set —
+        # `--disable-gpu` and `--virtual-time-budget` must NOT come back; they
+        # leave the runtime at a blank-splash DOM with no WebGL2.
+        "HEADLESS_BROWSER_FLAGS",
+        "--use-angle=swiftshader",
+        # The CDP wait is the only deterministic primitive that blocks until
+        # the runner reaches a terminal `data-story-11-5-phase`.
+        "MutationObserver",
+        "Runtime.evaluate",
+        "remote-debugging-port",
     ):
         assert expected in content, (
             "tests/fixtures/gdscript_web_export.py must stage the dedicated web-export fixture and reuse shared prerequisite probes. "
@@ -112,6 +124,15 @@ def test_story_11_5_web_export_integration_reuses_shared_runtime_probes() -> Non
         "probe_godot_non_mono_binary",
         "probe_browser_binary",
         "probe_loopback_http",
+        # The placeholder `query_token="story-11-5-browser-token"` previously
+        # baked into staging gets HTTP 401'd by SpacetimeDB 2.1.0 mid-
+        # handshake. The token must be minted from the live runtime at test
+        # time so the WebSocket upgrade actually succeeds.
+        "mint_anonymous_identity_token",
+        # The shape-drift exception subclass must not be silently caught by
+        # the test's RuntimeError handler — pinning ensures a regression that
+        # drops the subclass import or the explicit re-raise gets caught.
+        "SpacetimeIdentityShapeError",
     ):
         assert expected in content, (
             "Story 11.5 web-export integration coverage must stay skip-safe and use shared prerequisite probes. "
@@ -154,6 +175,28 @@ def test_story_11_5_gdscript_web_export_e2e(tmp_path: Path) -> None:
     except subprocess.TimeoutExpired:
         pytest.skip("SpacetimeDB runtime unavailable: smoke_test publish timed out after 180s")
 
+    # SpacetimeDB 2.1.0 rejects unsigned/placeholder query tokens during the
+    # WebSocket upgrade handshake with `HTTP Authentication failed; no valid
+    # credentials available`. Mint a real ES256-signed JWT from the live local
+    # runtime at test time — the previous fixture string `story-11-5-browser-
+    # token` cannot be valid across `spacetime start` resets.
+    #
+    # Catch plain `RuntimeError` only — `SpacetimeIdentityShapeError` (a
+    # subclass) intentionally bypasses this skip path so server contract
+    # drift from pinned 2.1.0 fails loud, per the spec's Code Map directive
+    # ("shape drift still fails loud") and the Empirical SDK Validation
+    # principle (a future server major changing the response shape is a
+    # documentation defect to surface, not a transient skip).
+    try:
+        query_token = mint_anonymous_identity_token(runtime_probe.host)
+    except SpacetimeIdentityShapeError:
+        raise
+    except RuntimeError as exc:
+        pytest.skip(
+            "SpacetimeDB runtime cannot mint an anonymous identity token for "
+            f"the Story 11.5 web-export proof path: {exc}"
+        )
+
     helper = _load_helper_module()
     project_dir = tmp_path / "web_project"
     export_dir = tmp_path / "web_export"
@@ -164,7 +207,7 @@ def test_story_11_5_gdscript_web_export_e2e(tmp_path: Path) -> None:
         bindings_dir=FIXTURE_DIR,
         host=runtime_probe.host,
         module_name=module_name,
-        query_token="story-11-5-browser-token",
+        query_token=query_token,
     )
 
     project_godot = (project_dir / "project.godot").read_text(encoding="utf-8")
