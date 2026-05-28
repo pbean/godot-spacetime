@@ -367,9 +367,14 @@ def run_headless_browser_capture(browser_path: str, url: str) -> str:
             # destroyed.`
             "about:blank",
         ]
+        # `stdout` is discarded, not piped: nothing consumes chromium's stdout,
+        # and an undrained `subprocess.PIPE` can block the process if it ever
+        # writes more than the OS pipe buffer (~64 KB) during the up-to-60 s CDP
+        # wait — surfacing as a spurious port/CDP deadline. Only `stderr` carries
+        # the `DevTools listening on …` banner the reader thread parses.
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
         )
