@@ -3,8 +3,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using GodotSpacetime.Editor.Codegen;
 using Xunit;
@@ -44,7 +46,9 @@ public sealed class EditorCodegenServiceHarness
     [Fact]
     public async Task GenerateBindingsAsync_AgainstLiveServer_ProducesGodotBindings_MatchingCliModulePath()
     {
-        var (cliPath, serverNickname, serverHost) = ResolveLiveRuntimeOrSkip();
+        // serverNickname is only needed inside ResolveLiveRuntimeOrSkip for the ping/list
+        // probes; publish/delete below target the resolved URL via the isolated config.
+        var (cliPath, _, serverHost) = ResolveLiveRuntimeOrSkip();
 
         var dashName = $"smoke-test-d3-{Guid.NewGuid():N}"[..("smoke-test-d3-".Length + 8)];
         var modulePath = Path.Combine(ProjectRoot, "spacetime", "modules", "smoke_test");
@@ -57,14 +61,44 @@ public sealed class EditorCodegenServiceHarness
         var absHarnessOutDir = Path.Combine(ProjectRoot, harnessOutDir);
         var absCliOutDir = Path.Combine(ProjectRoot, "tests", "fixtures", "generated", "d3-harness-cli");
 
+        // Per-run isolated CLI config. The minted-identity login below writes ONLY here,
+        // never the user's ~/.config/spacetime/cli.toml. Declared before the try so the
+        // finally can always remove it. (verified: `login` reports saving to this path.)
+        var tempConfigDir = Path.Combine(Path.GetTempPath(), "d3-harness-cfg-" + Guid.NewGuid().ToString("N"));
+        var tempConfig = Path.Combine(tempConfigDir, "cli.toml");
+
         try
         {
-            // (2) Publish the smoke_test module under a unique DASH name. The pinned
-            // spacetime 2.1.0 CLI/server reject underscores in DB names, so the harness
-            // MUST use a dash name (verified live — see spec Design Notes).
+            // (1) Mint a fresh server identity+token (POST /v1/identity, no auth). The
+            // harness OWNS this identity, so the finally can authenticate the cleanup
+            // delete as the owner. An --anonymous publish instead yields an ephemeral
+            // owner whose token is never surfaced, so a plain delete 401s (see Design Notes).
+            var token = await TryMintTokenAsync(serverHost);
+            if (token is null)
+            {
+                Assert.Skip("SpacetimeDB runtime unavailable: could not mint an identity token from POST /v1/identity");
+            }
+
+            // (2) Log that token into the ISOLATED config (never the user's global config).
+            Directory.CreateDirectory(tempConfigDir);
+            var login = await RunProcessAsync(
+                cliPath,
+                ["--config-path", tempConfig, "login", "--token", token!],
+                ProjectRoot);
+            if (login.ExitCode != 0)
+            {
+                Assert.Skip(
+                    "SpacetimeDB runtime unavailable: isolated `login --token` failed: " +
+                    Truncate((login.Stderr.Length > 0 ? login.Stderr : login.Stdout).Trim(), 240));
+            }
+
+            // (3) Publish the smoke_test module under a unique DASH name, OWNED by the
+            // minted identity (no --anonymous). Dash name because the pinned 2.1.0
+            // CLI/server reject underscores in DB names; --server takes the resolved URL
+            // since the isolated config carries no nicknames (verified live — see Design Notes).
             var publish = await RunProcessAsync(
                 cliPath,
-                ["publish", "--server", serverNickname, "--anonymous", "--module-path", modulePath, "--yes", dashName],
+                ["--config-path", tempConfig, "publish", "--server", serverHost, "--module-path", modulePath, "--yes", dashName],
                 ProjectRoot);
             if (publish.ExitCode != 0)
             {
@@ -73,7 +107,9 @@ public sealed class EditorCodegenServiceHarness
                     Truncate((publish.Stderr.Length > 0 ? publish.Stderr : publish.Stdout).Trim(), 240));
             }
 
-            // (3) Drive the REAL production generation path.
+            // (4) Drive the REAL production generation path. The schema GET stays
+            // anonymous and returns 200 even for an owned DB (verified), so the service
+            // is unchanged.
             var result = await new EditorCodegenService(ProjectRoot)
                 .GenerateBindingsAsync(serverHost, dashName, harnessOutDir, GeneratedNamespace);
 
@@ -106,6 +142,13 @@ public sealed class EditorCodegenServiceHarness
         {
             TryDeleteDirectory(absHarnessOutDir);
             TryDeleteDirectory(absCliOutDir);
+            // Delete the published DB authenticating as its minted owner via the isolated
+            // config, so successful runs don't accumulate orphaned databases on the
+            // local/CI server. Best-effort and guarded (publish/login may not have run),
+            // mirroring TryDeleteDirectory's swallow-on-failure contract.
+            TryDeleteDatabase(cliPath, tempConfig, serverHost, dashName);
+            // Remove the isolated config so no per-run auth state lingers on disk.
+            TryDeleteDirectory(tempConfigDir);
         }
     }
 
@@ -448,6 +491,62 @@ public sealed class EditorCodegenServiceHarness
         }
         catch (UnauthorizedAccessException)
         {
+        }
+    }
+
+    /// <summary>
+    /// Best-effort, guarded deletion of the live-lane fixture database this run published,
+    /// authenticating as its minted owner through the per-run isolated <paramref name="configPath"/>.
+    /// Uses the pinned 2.1.0 CLI shape <c>spacetime --config-path &lt;cfg&gt; delete --server &lt;url&gt; --yes &lt;db&gt;</c>
+    /// (<c>--yes</c> matches the publish call). Any failure, non-zero exit, or timeout is
+    /// swallowed via <see cref="TryRunProcess"/> so cleanup never alters the test's
+    /// skip/pass/fail outcome — deleting a never-published name is harmless.
+    /// </summary>
+    private static void TryDeleteDatabase(string cliPath, string configPath, string serverHost, string dashName)
+    {
+        _ = TryRunProcess(
+            cliPath,
+            ["--config-path", configPath, "delete", "--server", serverHost, "--yes", dashName],
+            timeout: TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary>
+    /// Mint a fresh SpacetimeDB identity+token via an unauthenticated <c>POST /v1/identity</c>
+    /// against <paramref name="serverHost"/>, returning the JWT <c>token</c> (the same pinned
+    /// 2.1.0 contract <c>mint_anonymous_identity</c> uses in <c>tests/fixtures/spacetime_runtime.py</c>).
+    /// Returns <see langword="null"/> on any failure so the caller can SKIP (never fail) when
+    /// the runtime is unavailable.
+    /// </summary>
+    private static async Task<string?> TryMintTokenAsync(string serverHost)
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            // No request body — matches the reference contract (`mint_anonymous_identity`
+            // in tests/fixtures/spacetime_runtime.py) and avoids sending a spurious
+            // text/plain Content-Type. The pinned 2.1.0 server returns 200 for a no-body POST.
+            using var response = await client
+                .PostAsync(serverHost.TrimEnd('/') + "/v1/identity", content: null)
+                .ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.TryGetProperty("token", out var tokenElement) &&
+                tokenElement.ValueKind == JsonValueKind.String)
+            {
+                var token = tokenElement.GetString();
+                return string.IsNullOrWhiteSpace(token) ? null : token;
+            }
+
+            return null;
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 
