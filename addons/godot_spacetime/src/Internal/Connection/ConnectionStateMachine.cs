@@ -5,14 +5,21 @@ namespace GodotSpacetime.Runtime.Connection;
 
 internal sealed class ConnectionStateMachine
 {
+    // ConnectionStatus is a reference type, so `volatile` supplies the publish/acquire
+    // fence symmetrically with SpacetimeLog._sink: a reader picking up CurrentStatus from
+    // a future background continuation observes either the previous or the post-Transition
+    // reference, never a torn or stale-after-publish value. See docs/runtime-boundaries.md
+    // `## Threading Model`.
+    private volatile ConnectionStatus _currentStatus;
+
     public ConnectionStateMachine()
     {
-        CurrentStatus = new ConnectionStatus(ConnectionState.Disconnected, "DISCONNECTED — not connected to SpacetimeDB");
+        _currentStatus = new ConnectionStatus(ConnectionState.Disconnected, "DISCONNECTED — not connected to SpacetimeDB");
     }
 
     public event Action<ConnectionStatus>? StateChanged;
 
-    public ConnectionStatus CurrentStatus { get; private set; }
+    public ConnectionStatus CurrentStatus => _currentStatus;
 
     public void Transition(
         ConnectionState next,
@@ -30,8 +37,8 @@ internal sealed class ConnectionStateMachine
         // Story 2.2 baseline constructor shape remains part of the contract:
         // new ConnectionStatus(next, description, authState)
         var nextCompressionMode = activeCompressionMode ?? CurrentStatus.ActiveCompressionMode;
-        CurrentStatus = new ConnectionStatus(next, description, authState, nextCompressionMode);
-        StateChanged?.Invoke(CurrentStatus);
+        _currentStatus = new ConnectionStatus(next, description, authState, nextCompressionMode);
+        StateChanged?.Invoke(_currentStatus);
     }
 
     private static bool IsValidTransition(ConnectionState current, ConnectionState next)

@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 LOG_REL = "addons/godot_spacetime/src/Public/Logging/SpacetimeLog.cs"
 SERVICE_REL = "addons/godot_spacetime/src/Internal/Connection/SpacetimeConnectionService.cs"
+STATEMACHINE_REL = "addons/godot_spacetime/src/Internal/Connection/ConnectionStateMachine.cs"
 DOCS_REL = "docs/runtime-boundaries.md"
 
 
@@ -60,6 +61,40 @@ def test_spacetimelog_sink_carries_volatile_reference_fence() -> None:
     )
     assert "var sink = _sink;" in content, (
         f"{LOG_REL} SafeWrite must keep the `var sink = _sink;` local-snapshot pattern."
+    )
+
+
+def test_connection_state_machine_current_status_carries_volatile_reference_fence() -> None:
+    content = _read(STATEMACHINE_REL)
+    # `ConnectionStatus` is a reference type, so a `volatile` backing field
+    # supplies the publish/acquire fence symmetrically with `SpacetimeLog._sink`.
+    # A reader picking up CurrentStatus from a future background continuation
+    # observes the previous or post-Transition reference, never a torn value.
+    assert re.search(
+        r"private\s+volatile\s+ConnectionStatus\s+_currentStatus",
+        content,
+    ), (
+        f"{STATEMACHINE_REL} must declare a `private volatile ConnectionStatus _currentStatus` "
+        "backing field. The volatile keyword is the reference-fence required by the "
+        "threading-model contract; an auto-property cannot carry it."
+    )
+
+    # The public property must be a manual getter over the fenced backing field
+    # (no `{ get; private set; }` auto-property, which has no fence). It stays
+    # `public ConnectionStatus CurrentStatus` so the public surface is unchanged.
+    assert re.search(
+        r"public\s+ConnectionStatus\s+CurrentStatus\s*(?:=>\s*_currentStatus|\{[^}]*get)",
+        content,
+    ), (
+        f"{STATEMACHINE_REL} CurrentStatus must be a manual getter over `_currentStatus` "
+        "(e.g. `public ConnectionStatus CurrentStatus => _currentStatus;`)."
+    )
+    assert not re.search(
+        r"ConnectionStatus\s+CurrentStatus\s*\{\s*get;\s*private\s+set;\s*\}",
+        content,
+    ), (
+        f"{STATEMACHINE_REL} CurrentStatus must NOT be a `{{ get; private set; }}` auto-property — "
+        "that shape carries no memory-barrier fence."
     )
 
 
