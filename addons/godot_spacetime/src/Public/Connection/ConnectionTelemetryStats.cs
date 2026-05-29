@@ -52,4 +52,57 @@ public partial class ConnectionTelemetryStats : RefCounted
     /// Resets to <c>0.0</c> on disconnect/reconnect.
     /// </summary>
     public double BytesSentPerSecond { get; internal set; }
+
+    /// <summary>
+    /// Per-category latency, sample count, and pending-request telemetry for client-driven
+    /// reducer calls. Populated on the pinned 2.1.0 client after real reducer traffic.
+    /// </summary>
+    public CategoryTelemetry Reducers { get; } = new();
+
+    /// <summary>
+    /// Per-category telemetry for procedure calls.
+    /// </summary>
+    public CategoryTelemetry Procedures { get; } = new();
+
+    /// <summary>
+    /// Per-category telemetry for subscription requests. Populated on the pinned 2.1.0 client
+    /// after real subscription traffic.
+    /// </summary>
+    public CategoryTelemetry Subscriptions { get; } = new();
+
+    /// <summary>
+    /// Per-category telemetry for one-off queries. Populated on the pinned 2.1.0 client after
+    /// real one-off query traffic.
+    /// </summary>
+    public CategoryTelemetry OneOffQueries { get; } = new();
+
+    /// <summary>
+    /// Aggregate "all reducers" tracker. Empirically expected-empty on the pinned 2.1.0
+    /// client (all six scalars stay <c>0.0</c>/<c>0</c>); see <c>docs/connection.md</c>.
+    /// </summary>
+    public CategoryTelemetry AllReducers { get; } = new();
+
+    /// <summary>
+    /// Aggregate message-parse-queue tracker. Empirically expected-empty on the pinned 2.1.0
+    /// client; see <c>docs/connection.md</c>.
+    /// </summary>
+    public CategoryTelemetry ParseMessageQueue { get; } = new();
+
+    /// <summary>
+    /// Per-message parse latency tracker. Populated on the pinned 2.1.0 client as inbound
+    /// messages are parsed.
+    /// </summary>
+    public CategoryTelemetry ParseMessage { get; } = new();
+
+    /// <summary>
+    /// Aggregate apply-message-queue tracker. Empirically expected-empty on the pinned 2.1.0
+    /// client; see <c>docs/connection.md</c>.
+    /// </summary>
+    public CategoryTelemetry ApplyMessageQueue { get; } = new();
+
+    /// <summary>
+    /// Per-message apply latency tracker. Populated on the pinned 2.1.0 client as inbound
+    /// messages are applied to the cache.
+    /// </summary>
+    public CategoryTelemetry ApplyMessage { get; } = new();
 }

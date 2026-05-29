@@ -40,6 +40,26 @@ public partial class TelemetrySmokeRunner : Node
     private static readonly StringName MessagesSentPerSecondMonitorId = new("GodotSpacetime/Connection/MessagesSentPerSecond");
     private static readonly StringName BytesReceivedPerSecondMonitorId = new("GodotSpacetime/Connection/BytesReceivedPerSecond");
     private static readonly StringName BytesSentPerSecondMonitorId = new("GodotSpacetime/Connection/BytesSentPerSecond");
+    // The four GodotSpacetime/Reducers/{LatencyMinMs,LatencyMaxMs,SampleCount,PendingRequests}
+    // monitor-equivalents are derived from the single CurrentTelemetry snapshot in
+    // CaptureTelemetrySnapshot (not via Performance.GetCustomMonitor), so the parity gate compares
+    // them against the SAME snapshot the categories are read from — no second pull, no drift.
+    // See the 2026-05-28 spec amendment (finding 1).
+
+    // Fixed order matches ConnectionTelemetryStats' 9 CategoryTelemetry properties and the
+    // adapter's TryReadCategoryTelemetry order. Used to emit per-category scalars in payloads.
+    private static readonly string[] CategoryNames =
+    {
+        "reducers",
+        "procedures",
+        "subscriptions",
+        "one_off_queries",
+        "all_reducers",
+        "parse_message_queue",
+        "parse_message",
+        "apply_message_queue",
+        "apply_message",
+    };
 
     private string _host = "";
     private string _moduleName = "";
@@ -467,6 +487,23 @@ public partial class TelemetrySmokeRunner : Node
             return;
         }
 
+        // The Reducers category (index 0) must populate after a real reducer round-trip.
+        // SampleCount reflects the completed ping_insert call; latency min/max are finite and
+        // >= 0 (windowed — may read 0.0 if the last 1s saw no traffic). Categories that stay
+        // empty on the 2.1.0 client are recorded in the payload, not asserted on.
+        var reducers = snapshot.Categories[0];
+        if (reducers.SampleCount < 1 ||
+            reducers.MinMs < 0 || reducers.MaxMs < 0 ||
+            double.IsNaN(reducers.MinMs) || double.IsNaN(reducers.MaxMs) ||
+            double.IsInfinity(reducers.MinMs) || double.IsInfinity(reducers.MaxMs))
+        {
+            EmitError(
+                "read_telemetry",
+                $"reducers category must populate after real reducer traffic: sample_count={reducers.SampleCount} min_ms={reducers.MinMs:F3} max_ms={reducers.MaxMs:F3}.");
+            Finish(pass: false);
+            return;
+        }
+
         EmitStepOk("read_telemetry", snapshot.ToPayload(includeMonitorComparison: true, includeSource: true));
 
         StartPhase(Phase.Disconnect);
@@ -545,7 +582,19 @@ public partial class TelemetrySmokeRunner : Node
 
     private TelemetrySnapshot CaptureTelemetrySnapshot()
     {
+        // Single shared CurrentTelemetry evaluation. Every scalar that participates in the
+        // monitor_matches_public_surface parity gate for the four Reducers/* monitors is read
+        // from THIS one ConnectionTelemetryStats reference (no second pull), so the sliding
+        // 1-second windowed-latency reads and the mutating SampleCount/PendingRequests counters
+        // cannot drift between the "monitor" operand and the "public surface" operand.
+        // See the 2026-05-28 spec amendment (finding 1): two separate CurrentTelemetry reads
+        // each re-evaluate GetMinMaxTimes(1) at a different wall-clock instant and would flake
+        // the hard parity boolean whenever a window rolls or an in-flight request completes.
         var telemetry = _client!.CurrentTelemetry;
+
+        // The Connection/* and per-second monitors are stable counters/derived rates, safe to
+        // read through Performance.GetCustomMonitor. The four Reducers/* monitor-equivalents are
+        // sourced from `telemetry` above (same single snapshot) rather than from a second pull.
         var monitorValues = new Dictionary<string, double>
         {
             ["GodotSpacetime/Connection/MessagesSent"] = ReadMonitor(MessagesSentMonitorId),
@@ -558,7 +607,43 @@ public partial class TelemetrySmokeRunner : Node
             ["GodotSpacetime/Connection/MessagesSentPerSecond"] = ReadMonitor(MessagesSentPerSecondMonitorId),
             ["GodotSpacetime/Connection/BytesReceivedPerSecond"] = ReadMonitor(BytesReceivedPerSecondMonitorId),
             ["GodotSpacetime/Connection/BytesSentPerSecond"] = ReadMonitor(BytesSentPerSecondMonitorId),
+            // Reducers/* monitor-equivalents derived from the single shared snapshot — these mirror
+            // the allocation-free Math.Max(0, CurrentTelemetry.Reducers.*) callables registered on
+            // SpacetimeClient, but read from `telemetry` so the parity gate compares like-for-like.
+            ["GodotSpacetime/Reducers/LatencyMinMs"] = Math.Max(0, telemetry.Reducers.MinMs),
+            ["GodotSpacetime/Reducers/LatencyMaxMs"] = Math.Max(0, telemetry.Reducers.MaxMs),
+            ["GodotSpacetime/Reducers/SampleCount"] = Math.Max(0, telemetry.Reducers.SampleCount),
+            ["GodotSpacetime/Reducers/PendingRequests"] = Math.Max(0, telemetry.Reducers.PendingRequests),
         };
+
+        // Capture all 9 categories' six scalars in the fixed CategoryNames order so the
+        // read_telemetry / read_telemetry_reconnect payloads record empirical per-tracker
+        // population (which trackers fill on the live 2.1.0 client vs. stay empty). These read
+        // from the SAME `telemetry` reference used for the Reducers/* monitor-equivalents above.
+        var categories = new[]
+        {
+            telemetry.Reducers,
+            telemetry.Procedures,
+            telemetry.Subscriptions,
+            telemetry.OneOffQueries,
+            telemetry.AllReducers,
+            telemetry.ParseMessageQueue,
+            telemetry.ParseMessage,
+            telemetry.ApplyMessageQueue,
+            telemetry.ApplyMessage,
+        };
+        var categoryReadings = new CategorySnapshot[categories.Length];
+        for (var index = 0; index < categories.Length; index++)
+        {
+            var category = categories[index];
+            categoryReadings[index] = new CategorySnapshot(
+                category.MinMs,
+                category.MaxMs,
+                category.AllTimeMinMs,
+                category.AllTimeMaxMs,
+                category.SampleCount,
+                category.PendingRequests);
+        }
 
         return new TelemetrySnapshot(
             telemetry.MessagesSent,
@@ -572,12 +657,23 @@ public partial class TelemetrySmokeRunner : Node
             telemetry.BytesReceivedPerSecond,
             telemetry.BytesSentPerSecond,
             monitorValues,
+            categoryReadings,
             _client.TelemetryBytesSentSource,
             _client.TelemetryBytesSentProven);
     }
 
     private static bool IsResetSnapshot(TelemetrySnapshot snapshot)
     {
+        foreach (var category in snapshot.Categories)
+        {
+            if (category.MinMs != 0 || category.MaxMs != 0 ||
+                category.AllTimeMinMs != 0 || category.AllTimeMaxMs != 0 ||
+                category.SampleCount != 0 || category.PendingRequests != 0)
+            {
+                return false;
+            }
+        }
+
         return snapshot.MessagesSent == 0 &&
                snapshot.MessagesReceived == 0 &&
                snapshot.BytesSent == 0 &&
@@ -719,6 +815,25 @@ public partial class TelemetrySmokeRunner : Node
         _ => "unknown",
     };
 
+    private sealed record CategorySnapshot(
+        double MinMs,
+        double MaxMs,
+        double AllTimeMinMs,
+        double AllTimeMaxMs,
+        long SampleCount,
+        long PendingRequests)
+    {
+        internal Dictionary<string, object?> ToPayload() => new()
+        {
+            ["min_ms"] = MinMs,
+            ["max_ms"] = MaxMs,
+            ["all_time_min_ms"] = AllTimeMinMs,
+            ["all_time_max_ms"] = AllTimeMaxMs,
+            ["sample_count"] = SampleCount,
+            ["pending_requests"] = PendingRequests,
+        };
+    }
+
     private sealed record TelemetrySnapshot(
         long MessagesSent,
         long MessagesReceived,
@@ -731,13 +846,19 @@ public partial class TelemetrySmokeRunner : Node
         double BytesReceivedPerSecond,
         double BytesSentPerSecond,
         IReadOnlyDictionary<string, double> PerformanceMonitors,
+        IReadOnlyList<CategorySnapshot> Categories,
         string BytesSentSource,
         bool BytesSentProven)
     {
         internal Dictionary<string, object?> ToPayload(bool includeMonitorComparison, bool includeSource = false)
         {
+            var categoriesPayload = new Dictionary<string, object?>();
+            for (var index = 0; index < Categories.Count; index++)
+                categoriesPayload[CategoryNames[index]] = Categories[index].ToPayload();
+
             var payload = new Dictionary<string, object?>
             {
+                ["categories"] = categoriesPayload,
                 ["messages_sent"] = MessagesSent,
                 ["messages_received"] = MessagesReceived,
                 ["bytes_sent"] = BytesSent,
@@ -757,6 +878,16 @@ public partial class TelemetrySmokeRunner : Node
 
             if (includeMonitorComparison)
             {
+                // Hard parity gate (asserted True by the live lane). The four Reducers/* monitor
+                // operands and the Categories[0] snapshot operands are sourced from the SAME single
+                // CurrentTelemetry evaluation in CaptureTelemetrySnapshot, so SampleCount and
+                // PendingRequests are exact (no in-flight request can tick between two pulls).
+                //
+                // The two WINDOWED latency monitors (LatencyMinMs/LatencyMaxMs) are deliberately
+                // EXCLUDED from this hard boolean and recorded as informational fields below: the
+                // 1-second GetMinMaxTimes window can legitimately read 0.0 when the last sample has
+                // aged past the boundary, so a 0.0 monitor read against a populated snapshot (or
+                // vice-versa) must NOT fail the gate (2026-05-28 amendment, finding 1).
                 payload["monitor_matches_public_surface"] =
                     Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/MessagesSent"] - MessagesSent) < 0.001 &&
                     Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/MessagesReceived"] - MessagesReceived) < 0.001 &&
@@ -767,7 +898,16 @@ public partial class TelemetrySmokeRunner : Node
                     Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/MessagesReceivedPerSecond"] - MessagesReceivedPerSecond) < 0.001 &&
                     Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/MessagesSentPerSecond"] - MessagesSentPerSecond) < 0.001 &&
                     Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/BytesReceivedPerSecond"] - BytesReceivedPerSecond) < 0.001 &&
-                    Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/BytesSentPerSecond"] - BytesSentPerSecond) < 0.001;
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Connection/BytesSentPerSecond"] - BytesSentPerSecond) < 0.001 &&
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Reducers/SampleCount"] - Math.Max(0, Categories[0].SampleCount)) < 0.001 &&
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Reducers/PendingRequests"] - Math.Max(0, Categories[0].PendingRequests)) < 0.001;
+
+                // Informational: windowed-latency monitor-vs-snapshot deltas. Recorded for the Dev
+                // Notes / observability of the live run; intentionally NOT part of the hard gate.
+                payload["reducers_latency_min_monitor_delta"] =
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Reducers/LatencyMinMs"] - Math.Max(0, Categories[0].MinMs));
+                payload["reducers_latency_max_monitor_delta"] =
+                    Math.Abs(PerformanceMonitors["GodotSpacetime/Reducers/LatencyMaxMs"] - Math.Max(0, Categories[0].MaxMs));
             }
 
             return payload;

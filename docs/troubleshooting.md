@@ -86,8 +86,22 @@ The key monitor IDs are:
 - `GodotSpacetime/Connection/BytesReceived`
 - `GodotSpacetime/Connection/UptimeSeconds`
 - `GodotSpacetime/Reducers/LastRoundTripMilliseconds`
+- `GodotSpacetime/Reducers/LatencyMinMs`
+- `GodotSpacetime/Reducers/LatencyMaxMs`
+- `GodotSpacetime/Reducers/SampleCount`
+- `GodotSpacetime/Reducers/PendingRequests`
 
 `ConnectionUptimeSeconds` is reported in seconds, reducer RTT is reported in milliseconds, and disconnect reset semantics are intentional.
+
+### Per-category telemetry
+
+`CurrentTelemetry` exposes nine nested `CategoryTelemetry` objects (`Reducers`, `Procedures`, `Subscriptions`, `OneOffQueries`, `AllReducers`, `ParseMessageQueue`, `ParseMessage`, `ApplyMessageQueue`, `ApplyMessage`). Each carries latency `MinMs`/`MaxMs`/`AllTimeMinMs`/`AllTimeMaxMs` (milliseconds), `SampleCount` (count), and `PendingRequests` (in-flight count). The four `GodotSpacetime/Reducers/{LatencyMinMs,LatencyMaxMs,SampleCount,PendingRequests}` monitors above mirror the `Reducers` category.
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| A category's `MinMs`/`MaxMs` reads `0.0` while connected | No traffic in the last 1-second window — the SDK tracker returns `null` and the flatten layer coalesces it to `0.0` | Expected. Drive fresh traffic and re-read; `AllTimeMinMs`/`AllTimeMaxMs` retain the session's all-time extremes |
+| `AllReducers` stays `0.0`/`0` even under reducer traffic (and `Procedures`/`OneOffQueries` stay empty until such a call is issued) | Measured (live lane, 2026-05-29): `AllReducers` is a client-side aggregate the pinned `2.1.0` client does not populate. The four pipeline trackers `ParseMessageQueue`/`ParseMessage`/`ApplyMessageQueue`/`ApplyMessage` and the `Reducers`/`Subscriptions` trackers DO populate from real/inbound traffic | Expected — the addon surfaces whatever the SDK tracker reports and never fabricates a value. For pipeline latency use `ParseMessage`/`ApplyMessage`; for app activity use `Reducers`/`Subscriptions` |
+| Per-category scalars read `0.0`/`0` after a disconnect | The nested `CategoryTelemetry` objects were reset in place on disconnect | Re-read `CurrentTelemetry` after the next `Connected` transition; reset-to-zero is the intended behavior and the object references are reused |
 
 Supported-stack caveat:
 
@@ -187,6 +201,16 @@ await Settings.TokenStore.ClearTokenAsync();
 before the next `Connect()` call.
 
 See `docs/runtime-boundaries.md` for the complete `ConnectionAuthState` reference and `ITokenStore` interface.
+
+### Reverse proxy strips the `Authorization` header (.NET path)
+
+| Visible Indicator | Likely Cause | Recovery Action |
+|-------------------|-------------|-----------------|
+| A .NET-path session connects anonymously (server assigns a fresh identity) even though `SpacetimeSettings.Credentials` is set, and a reverse proxy sits between the client and the server | The proxy is stripping the `Authorization: Bearer` header before it reaches SpacetimeDB | There is **no query-string workaround on the .NET path** with the pinned SDK — fix the proxy to pass the `Authorization` header through, or connect directly to the server without the header-stripping hop |
+
+On the .NET runtime path the credential is transmitted **only** via the `Authorization: Bearer` header. The pinned `SpacetimeDB.ClientSDK 2.1.0` `SpacetimeDB.WebSocket.Connect` composes the subscribe URL as `{host}/v1/database/{name}/subscribe?connection_id=...&compression=...` and offers no builder seam to inject a `?token=` query parameter (empirically observed by DLL decompilation; see the G10 entry in `_bmad-output/implementation-artifacts/deferred-work.md`). The `spacetime 2.1.0` **server itself** does authenticate a `?token=` query parameter, but the pinned .NET SDK cannot emit one — so a header-stripping proxy leaves .NET-path users with no transport workaround short of fixing the proxy.
+
+GDScript-path users hitting the same symptom **do** have a workaround: set `prefer_query_token` to force the `?<query_token_key>=<token>` URL transport. See [connection.md → Auth Token Transport](connection.md#auth-token-transport) for the platform-branch rule and the GDScript `prefer_query_token` / `query_token_key` override surface.
 
 ## Subscriptions
 

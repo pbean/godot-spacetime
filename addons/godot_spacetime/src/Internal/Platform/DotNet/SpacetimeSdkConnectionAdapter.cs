@@ -23,6 +23,43 @@ internal interface IConnectionTelemetrySink
 }
 
 /// <summary>
+/// Flattened, runtime-neutral reading for a single SpacetimeDB <c>NetworkRequestTracker</c>.
+/// All SDK-tuple/nullable unwrapping happens inside <see cref="SpacetimeSdkConnectionAdapter"/>
+/// before the reading crosses into the collector, so this struct carries only scalars.
+/// A <c>readonly struct</c> keeps the caller-supplied buffer value-typed and allocation-free.
+/// </summary>
+internal readonly struct CategoryTrackerReading
+{
+    internal CategoryTrackerReading(
+        double minMs,
+        double maxMs,
+        double allTimeMinMs,
+        double allTimeMaxMs,
+        long sampleCount,
+        long pendingRequests)
+    {
+        MinMs = minMs;
+        MaxMs = maxMs;
+        AllTimeMinMs = allTimeMinMs;
+        AllTimeMaxMs = allTimeMaxMs;
+        SampleCount = sampleCount;
+        PendingRequests = pendingRequests;
+    }
+
+    internal double MinMs { get; }
+
+    internal double MaxMs { get; }
+
+    internal double AllTimeMinMs { get; }
+
+    internal double AllTimeMaxMs { get; }
+
+    internal long SampleCount { get; }
+
+    internal long PendingRequests { get; }
+}
+
+/// <summary>
 /// Adapter for the SpacetimeDB .NET ClientSDK connection layer.
 ///
 /// This class is the ONLY location in the codebase where <c>SpacetimeDB.ClientSDK</c>
@@ -35,6 +72,18 @@ internal interface IConnectionTelemetrySink
 /// </summary>
 internal sealed class SpacetimeSdkConnectionAdapter
 {
+    /// <summary>
+    /// Number of category trackers surfaced by <see cref="TryReadCategoryTelemetry"/>, matching
+    /// the 9 public <c>CategoryTelemetry</c> properties on <c>ConnectionTelemetryStats</c>.
+    /// </summary>
+    internal const int CategoryTrackerCount = 9;
+
+    /// <summary>
+    /// Rolling latency window (seconds) handed to <c>NetworkRequestTracker.GetMinMaxTimes(int)</c>.
+    /// Reuses the same 1-second window the per-second rate path uses.
+    /// </summary>
+    private const int WindowSeconds = 1;
+
     private IDbConnection? _dbConnection;
     private object? _telemetryWebSocket;
     private Delegate? _inboundMessageHandler;
@@ -128,6 +177,89 @@ internal sealed class SpacetimeSdkConnectionAdapter
         trackerCounts = (outboundMessages, inboundMessages);
         return true;
     }
+
+    /// <summary>
+    /// Reads all 9 <c>NetworkRequestTracker</c>s in a fixed documented order and flattens each
+    /// tracker's windowed/all-time latency tuples and counts into the caller-supplied
+    /// preallocated <paramref name="buffer"/> (length <see cref="CategoryTrackerCount"/>). This
+    /// is the ONLY place the SDK tuple/nullable shapes are unwrapped — see Design Notes in the
+    /// g3/g4 observability spec for the empirically-confirmed shape:
+    /// <c>GetMinMaxTimes(int)</c> returns <c>((min,label),(max,label))?</c> and
+    /// <c>AllTimeMin</c>/<c>AllTimeMax</c> return <c>(TimeSpan,label)?</c>; the trailing label is
+    /// SDK-internal and discarded. A <c>null</c> (idle/empty window, or pre-first-sample all-time)
+    /// coalesces to <c>0.0</c>.
+    ///
+    /// Returns <c>false</c> and leaves <paramref name="buffer"/> untouched when no live session
+    /// exposes <c>stats</c>. Allocation-free: it only writes into the supplied buffer.
+    ///
+    /// Fixed order (index → category): 0 Reducers, 1 Procedures, 2 Subscriptions, 3 OneOffQueries,
+    /// 4 AllReducers, 5 ParseMessageQueue, 6 ParseMessage, 7 ApplyMessageQueue, 8 ApplyMessage.
+    /// </summary>
+    internal bool TryReadCategoryTelemetry(CategoryTrackerReading[] buffer)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+
+        // Runtime guard for the fixed-order coupling: this method writes indices [0..CategoryTrackerCount-1].
+        // CategoryTrackerCount is the single source of truth shared with the collector's _categories
+        // array length (asserted equal there). A too-small buffer is a programming fault, surfaced
+        // loudly here rather than as a torn/partial write (2026-05-28 amendment, finding 3).
+        if (buffer.Length < CategoryTrackerCount)
+        {
+            throw new ArgumentException(
+                $"Category telemetry buffer must hold at least {CategoryTrackerCount} readings; got {buffer.Length}.",
+                nameof(buffer));
+        }
+
+        var stats = TryGetStats();
+        if (stats == null)
+            return false;
+
+        buffer[0] = ReadTracker(stats.ReducerRequestTracker);
+        buffer[1] = ReadTracker(stats.ProcedureRequestTracker);
+        buffer[2] = ReadTracker(stats.SubscriptionRequestTracker);
+        buffer[3] = ReadTracker(stats.OneOffRequestTracker);
+        buffer[4] = ReadTracker(stats.AllReducersTracker);
+        buffer[5] = ReadTracker(stats.ParseMessageQueueTracker);
+        buffer[6] = ReadTracker(stats.ParseMessageTracker);
+        buffer[7] = ReadTracker(stats.ApplyMessageQueueTracker);
+        buffer[8] = ReadTracker(stats.ApplyMessageTracker);
+        return true;
+    }
+
+    private static CategoryTrackerReading ReadTracker(NetworkRequestTracker? tracker)
+    {
+        if (tracker == null)
+            return default;
+
+        // GetMinMaxTimes(int) → ((min: TimeSpan, label: string), (max: TimeSpan, label: string))?
+        // AllTimeMin/AllTimeMax → (TimeSpan, label: string)?  — labels discarded at the boundary.
+        // Every latency scalar is floored to 0.0: null (idle/empty window) coalesces to 0.0, and a
+        // non-positive/non-finite TimeSpan (e.g. a backward clock adjustment on the SDK side) is
+        // clamped to 0.0 by FloorLatencyMs. This keeps the public CurrentTelemetry.<Category>.*Ms
+        // scalars on the same 0.0 floor as the sibling RecordReducerRoundTrip path
+        // (LastReducerRoundTripMilliseconds clamps `elapsed < 0 ? 0`) and the Math.Max(0, ...)
+        // Performance-monitor callables, so the public surface never disagrees with the monitors.
+        var window = tracker.GetMinMaxTimes(WindowSeconds);
+        var minMs = FloorLatencyMs(window?.Item1.Item1.TotalMilliseconds ?? 0.0);
+        var maxMs = FloorLatencyMs(window?.Item2.Item1.TotalMilliseconds ?? 0.0);
+        var allTimeMinMs = FloorLatencyMs(tracker.AllTimeMin?.Item1.TotalMilliseconds ?? 0.0);
+        var allTimeMaxMs = FloorLatencyMs(tracker.AllTimeMax?.Item1.TotalMilliseconds ?? 0.0);
+
+        return new CategoryTrackerReading(
+            minMs,
+            maxMs,
+            allTimeMinMs,
+            allTimeMaxMs,
+            tracker.GetSampleCount(),
+            tracker.GetRequestsAwaitingResponse());
+    }
+
+    // Clamps a raw tracker latency (in ms) to the documented 0.0 floor: NaN/Infinity and negative
+    // durations (a non-monotonic clock between request start and completion on the SDK side) are
+    // mapped to 0.0. Allocation-free; keeps the flattened scalars finite and non-negative before
+    // they cross the isolation boundary into ConnectionTelemetryStats / the public surface.
+    private static double FloorLatencyMs(double milliseconds) =>
+        double.IsFinite(milliseconds) && milliseconds > 0.0 ? milliseconds : 0.0;
 
     internal static MessageCompressionMode GetEffectiveCompressionMode(MessageCompressionMode requestedCompressionMode)
     {

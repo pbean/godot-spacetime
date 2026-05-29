@@ -94,6 +94,45 @@ Supported-stack caveat:
 - Repo code therefore measures `BytesSent` from the supported runtime's `ClientMessage` serializer path inside `Internal/Platform/DotNet/`.
 - Story 9.3 validation treats runtime proof as authoritative here and avoids guessing undocumented transport counters.
 
+#### Per-category telemetry — the nine `CategoryTelemetry` objects
+
+`ConnectionTelemetryStats` additionally exposes nine nested
+[`CategoryTelemetry`](../addons/godot_spacetime/src/Public/Connection/CategoryTelemetry.cs)
+objects — `Reducers`, `Procedures`, `Subscriptions`, `OneOffQueries`, `AllReducers`,
+`ParseMessageQueue`, `ParseMessage`, `ApplyMessageQueue`, `ApplyMessage` — one per pinned-SDK
+`NetworkRequestTracker`. Each carries six runtime-neutral scalars:
+
+| Scalar | Units | Meaning |
+|--------|-------|---------|
+| `MinMs` / `MaxMs` | milliseconds | Min/max latency over the rolling 1-second window |
+| `AllTimeMinMs` / `AllTimeMaxMs` | milliseconds | Window-independent all-time min/max latency |
+| `SampleCount` | count | Cumulative completed requests since the active connection opened |
+| `PendingRequests` | in-flight count | Requests currently awaiting a response |
+
+The SDK isolation zone owns all raw tracker reads. `SpacetimeSdkConnectionAdapter.TryReadCategoryTelemetry`
+flattens the empirically-confirmed `GetMinMaxTimes(1)` tuple
+(`((min,label),(max,label))?`) and the `AllTimeMin`/`AllTimeMax` `(TimeSpan,label)?` values to
+plain `double`/`long` scalars into a preallocated `CategoryTrackerReading[9]` buffer before they
+cross into the collector — so `ConnectionTelemetryStats` and `CategoryTelemetry` stay free of
+`SpacetimeDB.*`, `NetworkRequestTracker`, `WebSocket`, `ClientMessage`, and `TimeSpan`-tuple
+types. A `null` window (idle, or pre-first-sample all-time) coalesces to `0.0`.
+
+The `Reducers` category is mirrored into a bounded set of Godot `Performance` custom monitors:
+
+- `GodotSpacetime/Reducers/LatencyMinMs`
+- `GodotSpacetime/Reducers/LatencyMaxMs`
+- `GodotSpacetime/Reducers/SampleCount`
+- `GodotSpacetime/Reducers/PendingRequests`
+
+Measured per-tracker population (live `TelemetrySmokeRunner` lane, 2026-05-29, `godot-mono 4.6.3.stable.mono`,
+pinned `2.1.0`): the client-driven `Reducers`/`Subscriptions` trackers and all four pipeline trackers
+(`ParseMessageQueue`, `ParseMessage`, `ApplyMessageQueue`, `ApplyMessage`) populate from real/inbound
+traffic. The one **expected-empty** tracker is `AllReducers` — a client-side aggregate the `2.1.0`
+client does not fill even under reducer traffic; `Procedures` and `OneOffQueries` stay empty only until
+such an operation is issued. The addon surfaces whatever the SDK tracker reports and never
+fabricates values. The nested objects are reset in place on `disconnect`/`reconnect` (zeroed, never
+reallocated), so their reference identity is preserved.
+
 ### Auth / Identity — `ITokenStore`
 
 Session identity is token-based. The SDK does not dictate how tokens are persisted; instead, you provide an [`ITokenStore`](../addons/godot_spacetime/src/Public/Auth/ITokenStore.cs) implementation:
@@ -655,6 +694,7 @@ later cannot silently corrupt SDK state.
 | Field | Location | Protection |
 |-------|----------|------------|
 | `_sink` | `Public/Logging/SpacetimeLog.cs` | `volatile ILogSink` reference fence |
+| `CurrentStatus` (backing field `_currentStatus`) | `Internal/Connection/ConnectionStateMachine.cs` | `volatile ConnectionStatus` reference fence |
 | `_subscriptionRegistry` | `Internal/Connection/SpacetimeConnectionService.cs` | `lock (_connectionStateGate)` on every read/write |
 | `_pendingReplacements` | `Internal/Connection/SpacetimeConnectionService.cs` | `lock (_connectionStateGate)` on every read/write |
 | `_reconnectPolicy` | `Internal/Connection/SpacetimeConnectionService.cs` | `lock (_connectionStateGate)` on every reference reassignment and method call (`Reset()`, `TryBeginRetry()`, `MaxAttempts`) |
@@ -691,6 +731,47 @@ of the process or wrap disposal in coordination with the logging callers.
 `CurrentIdentity` is `Identity?` (a `Nullable<Identity>` value type of about
 40 bytes); `volatile` cannot apply to value types and `Volatile.Read<T>` does
 not accept `Nullable<T>`. Locking is the only correct option.
+
+### `volatile CurrentStatus` rationale
+
+`ConnectionStateMachine.CurrentStatus` is published through a `private volatile
+ConnectionStatus _currentStatus` backing field behind a manual getter
+(`public ConnectionStatus CurrentStatus => _currentStatus;`). `ConnectionStatus`
+is a `public sealed`-style reference type (it derives from Godot `RefCounted`),
+so `volatile` is legal and supplies exactly the publish/acquire fence used for
+`_sink`: a reader picking up `CurrentStatus` from a future `Task.ContinueWith(...,
+TaskScheduler.Default)` continuation observes either the previous or the
+post-`Transition` reference, never a torn or stale-after-publish value. The
+state machine has no lock today and `Transition` must keep emitting
+`StateChanged?.Invoke` outside any gate (a user handler may re-enter), so a
+`volatile` reference fence — not a `lock` — is the symmetric, deadlock-free
+choice. This closes the asymmetry the shared-state thread-safety bundle left
+open, where `CurrentStatus` was a plain `{ get; private set; }` auto-property
+while its sibling connection-state fields were gate-protected.
+
+**Behavioral proof location.** Because `ConnectionStatus` derives from
+`Godot.RefCounted`, it cannot be constructed outside the Godot engine
+(constructing a `RefCounted` subclass without the engine bootstrap hard-crashes
+the process, exit 139, since GodotSharp's native interop pointers are null).
+The fence's behavioral proof therefore runs in the in-engine `godot-mono` lane
+(`tests/godot_integration/ConnectionStateMachineFenceRunner.cs`, driven by
+`tests/test_connection_state_machine_fence.py`), not the plain xUnit
+`GodotSpacetime.Tests` host. The fence declaration itself is pinned
+structurally by `tests/test_shared_state_thread_safety.py`.
+
+**Deferred — three-reader TOCTOU windows (out of scope here).** The fence makes
+each *read* of `CurrentStatus` correct, but it does NOT close the check-then-act
+(TOCTOU) windows in `SpacetimeConnectionService.Unsubscribe`,
+`HandleDisconnectError`, and `Disconnect`, which read `CurrentStatus.State`
+(check) and then act (transition the state machine / mutate the registry) after a
+window. Closing those requires bringing the *act* side
+(`_stateMachine.Transition(...)`) under `_connectionStateGate`, which the
+snapshot-then-emit contract above (and the
+`test_no_signal_emission_inside_connection_state_lock` static guard) forbids.
+On the pinned `2.1.0` SDK the windows are unreachable — subscription/disconnect
+callbacks drain on the single `FrameTick` synchronization context — so this is
+defense-in-depth, not a live bug. The full under-gate restructure is tracked by
+`_bmad-output/implementation-artifacts/spec-connection-statemachine-toctou-hardening.md`.
 
 ### Snapshot-then-emit pattern
 

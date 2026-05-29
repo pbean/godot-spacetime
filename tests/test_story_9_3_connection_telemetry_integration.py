@@ -41,6 +41,10 @@ EXPECTED_MONITOR_IDS = (
     "GodotSpacetime/Connection/MessagesSentPerSecond",
     "GodotSpacetime/Connection/BytesReceivedPerSecond",
     "GodotSpacetime/Connection/BytesSentPerSecond",
+    "GodotSpacetime/Reducers/LatencyMinMs",
+    "GodotSpacetime/Reducers/LatencyMaxMs",
+    "GodotSpacetime/Reducers/SampleCount",
+    "GodotSpacetime/Reducers/PendingRequests",
 )
 REQUIRED_STEPS = (
     "connect",

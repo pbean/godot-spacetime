@@ -47,6 +47,15 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
     private long _nextTransportSessionId;
     private long _currentTransportSessionId;
     private long _activeTelemetrySessionId;
+    // Preallocated once; reused on every CurrentTelemetry read so the category-telemetry
+    // sync stays allocation-free on the hot path. CurrentTelemetry is a public property reachable
+    // from arbitrary user code AND from the four Godot Performance monitor callbacks, with no
+    // enforced thread affinity, so two concurrent getters could otherwise race on this shared
+    // buffer (torn struct-array writes + re-entrant SDK reflection). The fill+forward is therefore
+    // serialized under _categoryTelemetryGate below; the buffer is never touched outside that lock.
+    private readonly object _categoryTelemetryGate = new();
+    private readonly CategoryTrackerReading[] _categoryTelemetryBuffer =
+        new CategoryTrackerReading[SpacetimeSdkConnectionAdapter.CategoryTrackerCount];
 
     private sealed class SessionBoundConnectionSink : IConnectionEventSink, IConnectionTelemetrySink
     {
@@ -909,6 +918,22 @@ internal sealed class SpacetimeConnectionService : IConnectionEventSink, ISubscr
                 sessionId,
                 trackerCounts.MessagesSent,
                 trackerCounts.MessagesReceived);
+        }
+
+        // Refresh the 9 per-category latency/count/pending scalars from the SDK trackers,
+        // flattened by the adapter into the service-owned preallocated buffer (no allocation).
+        //
+        // The fill (TryReadCategoryTelemetry writes the shared _categoryTelemetryBuffer) and the
+        // forward (SyncCategoryTelemetry copies it into the collector's stable objects) MUST run as
+        // one critical section: CurrentTelemetry is publicly reachable from arbitrary callers and
+        // from four Godot monitor callbacks with no thread affinity, so two concurrent readers would
+        // otherwise interleave writes to / reads from the single buffer (2026-05-28 amendment,
+        // finding 2). The dedicated _categoryTelemetryGate covers only this buffer and is held for
+        // the duration of fill+forward; the collector's own _gate still protects its internal state.
+        lock (_categoryTelemetryGate)
+        {
+            if (_adapter.TryReadCategoryTelemetry(_categoryTelemetryBuffer))
+                _telemetryCollector.SyncCategoryTelemetry(sessionId, _categoryTelemetryBuffer);
         }
     }
 

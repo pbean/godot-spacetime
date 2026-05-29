@@ -31,11 +31,11 @@ Light mode is opt-in through `SpacetimeSettings.LightMode`, and the product defa
 
 The client presents the auth token while opening the WebSocket connection. The transport depends on the platform because browsers cannot set custom WebSocket handshake headers.
 
-- **.NET runtime (headless and desktop):** when `SpacetimeSettings.Credentials` is non-empty, the adapter calls `builder.WithToken(settings.Credentials)` inside `addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkConnectionAdapter.cs`. The pinned `SpacetimeDB.ClientSDK 2.1.0` owns the wire-level framing; this repo only passes the token through.
+- **.NET runtime (headless and desktop):** when `SpacetimeSettings.Credentials` is non-empty, the adapter calls `builder.WithToken(settings.Credentials)` inside `addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkConnectionAdapter.cs`. The pinned `SpacetimeDB.ClientSDK 2.1.0` owns the wire-level framing; this repo only passes the token through. On this path the token is transmitted **only** via the `Authorization: Bearer` header: the pinned SDK's `SpacetimeDB.WebSocket.Connect` composes the subscribe URL as `{host}/v1/database/{name}/subscribe?connection_id=...&compression=...` (from the `WithUri` / `WithDatabaseName` builder values) and sends the credential exclusively through `Ws.Options.SetRequestHeader("Authorization", "Bearer " + auth)`. None of the builder methods (`WithUri` / `WithDatabaseName` / `WithToken` / `WithCompression` / `WithLightMode` / `WithConfirmedReads`) injects a token query parameter into that URL, so there is **no `?token=` query-string seam on the .NET path** — a reverse proxy that strips the `Authorization` header has no query-string workaround here on the pinned SDK (the only routes to emit it would be forking or reflecting around the vendored SDK, both forbidden by the `Internal/Platform/DotNet/` runtime-isolation contract and the pinned-baseline policy). Note that the `spacetime 2.1.0` **server itself** does accept and authenticate a `?token=` query parameter (empirically verified — see the G10 entry in `_bmad-output/implementation-artifacts/deferred-work.md`); the gap is on the SDK emit side, not the server.
 - **GDScript native (desktop):** the rule `allow_header_auth := not OS.has_feature("web")` in `addons/godot_spacetime/src/Internal/Platform/GDScript/gdscript_connection_service.gd` evaluates `true`, so `build_transport_request` in `addons/godot_spacetime/src/Internal/Platform/GDScript/connection_protocol.gd` sets `Authorization: Bearer <token>` as a handshake header on `WebSocketPeer`.
 - **GDScript web export (browser):** the same rule evaluates `false`, so `build_transport_request` appends `?<query_token_key>=<token>` to the WebSocket URL instead. The default parameter name is exposed as `DEFAULT_QUERY_TOKEN_KEY` in `connection_protocol.gd`.
 
-Non-web deployments that must force query-string transport — for example, reverse proxies that strip `Authorization` headers — can set `prefer_query_token` to `true` and optionally override the parameter name with `query_token_key`; those parameters are declared on `build_transport_request` in `connection_protocol.gd` and threaded through the GDScript runtime options by the `_prefer_query_token` / `_query_token_key` initialization in `gdscript_connection_service.gd`, then passed into the `build_transport_request` call site in `gdscript_connection_service.gd`.
+On the GDScript runtime path only, non-web deployments that must force query-string transport — for example, reverse proxies that strip `Authorization` headers — can set `prefer_query_token` to `true` and optionally override the parameter name with `query_token_key`; those parameters are declared on `build_transport_request` in `connection_protocol.gd` and threaded through the GDScript runtime options by the `_prefer_query_token` / `_query_token_key` initialization in `gdscript_connection_service.gd`, then passed into the `build_transport_request` call site in `gdscript_connection_service.gd`. This override does **not** exist on the .NET runtime path (see the `.NET runtime` bullet above): the pinned `SpacetimeDB.ClientSDK 2.1.0` provides no seam to emit a `?token=` query parameter, so there is no `prefer_query_token` equivalent for .NET-path connections.
 
 For current platform support boundaries, including Godot C# web export remaining Out-of-Scope, see the `Godot C# web export | N/A | Out-of-Scope` row in `docs/compatibility-matrix.md`.
 
@@ -91,6 +91,42 @@ Reset behavior is deliberate:
 - A later reconnect starts a fresh measurement window rather than carrying over the previous session.
 
 On the pinned stack, `BytesSent` is measured from the SDK's serialized outbound payload path rather than from a documented public wire-byte counter. Story 9.3 validation records that observed runtime behavior instead of guessing.
+
+### Per-category telemetry
+
+`CurrentTelemetry` also exposes nine nested `CategoryTelemetry` objects, one per SpacetimeDB request/message tracker, for full observability parity with the Unity SDK:
+
+- `Reducers`
+- `Procedures`
+- `Subscriptions`
+- `OneOffQueries`
+- `AllReducers`
+- `ParseMessageQueue`
+- `ParseMessage`
+- `ApplyMessageQueue`
+- `ApplyMessage`
+
+Each `CategoryTelemetry` carries six scalars:
+
+- `MinMs` / `MaxMs` — minimum/maximum latency in **milliseconds** over the rolling 1-second window.
+- `AllTimeMinMs` / `AllTimeMaxMs` — window-independent all-time minimum/maximum latency in **milliseconds**.
+- `SampleCount` — cumulative completed-request **count** since the active connection opened.
+- `PendingRequests` — number of requests currently **in flight** (awaiting response).
+
+Empty/idle convention: on an idle window (no traffic in the last second) the SDK tracker returns `null`, so `MinMs`/`MaxMs` read exactly `0.0`; before the first sample `AllTimeMinMs`/`AllTimeMaxMs` also read `0.0`. While disconnected every scalar reads `0.0`/`0`. This matches the `LastReducerRoundTripMilliseconds` reset convention.
+
+Measured per-tracker population (live `TelemetrySmokeRunner` lane, 2026-05-29, `godot-mono 4.6.3.stable.mono` against the pinned `2.1.0` client): `Reducers` and `Subscriptions` populate on their respective operations, and all four pipeline trackers — `ParseMessageQueue`, `ParseMessage`, `ApplyMessageQueue`, `ApplyMessage` — populate from inbound traffic (including the reconnect handshake). `AllReducers` stays `0.0`/`0` even under reducer traffic — it is a client-side aggregate the `2.1.0` client does not fill. `Procedures` and `OneOffQueries` stay empty only until a procedure or one-off query is actually issued. Note the windowed `MinMs`/`MaxMs` can read `0.0` once the rolling 1-second window passes the last sample even while `AllTimeMinMs`/`AllTimeMaxMs` retain the value. The addon never fabricates values for empty trackers — whatever the SDK tracker reports is surfaced as-is.
+
+The `Reducers` category — the highest-value category for game devs — is also mirrored into a bounded set of Godot `Performance` custom monitors:
+
+- `GodotSpacetime/Reducers/LatencyMinMs`
+- `GodotSpacetime/Reducers/LatencyMaxMs`
+- `GodotSpacetime/Reducers/SampleCount`
+- `GodotSpacetime/Reducers/PendingRequests`
+
+The other eight categories remain available via `CurrentTelemetry.<Category>`; surfacing all six scalars for all nine categories as monitors would exceed the bounded-monitor budget.
+
+The nested `CategoryTelemetry` objects follow the same reset semantics as the rest of the surface: `Disconnect()` zeroes their scalars in place (the object instances are reused across disconnect/reconnect, never reallocated), and a reconnect starts a fresh measurement window.
 
 ## Signals
 
