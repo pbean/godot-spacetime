@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <!-- The Editor/Codegen sources are `#if TOOLS`-guarded (they compile into the
+         addon only under the Godot editor-tools build). Define TOOLS here, scoped to
+         this test project only, so the source-linked EditorCodegenService/Result
+         below compile and the real production generation path can be driven from the
+         plain xUnit host (see Story 10.2 D3 headless harness). -->
+    <DefineConstants>$(DefineConstants);TOOLS</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.6.0" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="../../../addons/godot_spacetime/src/Public/Identity.cs" Link="Linked/Identity.cs" />
+    <Compile Include="../../../addons/godot_spacetime/src/Internal/Connection/ReconnectPolicy.cs" Link="Linked/ReconnectPolicy.cs" />
+    <!-- D3 headless codegen harness: source-link the REAL production generation path
+         so EditorCodegenServiceHarness drives EditorCodegenService.GenerateBindingsAsync
+         directly rather than a re-implementation. Both files carry zero Godot-runtime
+         references (pure System.* — HttpClient, Process, Text.Json), so they are safe to
+         link here, unlike CodegenValidationPanel (a [Tool] VBoxContainer that would
+         SIGSEGV outside the engine, per the RefCounted note above). Compiled into this
+         assembly under the TOOLS define, EditorCodegenService is same-assembly `internal`
+         and directly reachable from the harness with no InternalsVisibleTo shim. -->
+    <Compile Include="../../../addons/godot_spacetime/src/Editor/Codegen/EditorCodegenService.cs" Link="Linked/EditorCodegenService.cs" />
+    <Compile Include="../../../addons/godot_spacetime/src/Editor/Codegen/EditorCodegenResult.cs" Link="Linked/EditorCodegenResult.cs" />
+    <!-- NOTE: ConnectionStateMachine is intentionally NOT source-linked here.
+         Its CurrentStatus is a `ConnectionStatus`, which derives from Godot.RefCounted;
+         constructing a RefCounted-derived type outside the Godot native runtime hard-crashes
+         the process (SIGSEGV / exit 139) because GodotSharp's native interop pointers are
+         null without the engine bootstrap. The behavioral fence proof therefore lives in the
+         in-engine godot-mono lane (tests/godot_integration/ConnectionStateMachineFenceRunner.cs,
+         driven by tests/test_connection_state_machine_fence.py) rather than this plain
+         xUnit host. The volatile-fence contract itself is pinned structurally by
+         tests/test_shared_state_thread_safety.py. -->
+  </ItemGroup>
+</Project>

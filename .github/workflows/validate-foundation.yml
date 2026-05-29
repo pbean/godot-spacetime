@@ -27,3 +27,6 @@ jobs:
 
       - name: Run shared foundation validation lane
         run: python3 scripts/compatibility/validate-foundation.py
+
+      - name: Run .NET unit tests
+        run: dotnet test tests/dotnet/GodotSpacetime.Tests/GodotSpacetime.Tests.csproj -c Debug
