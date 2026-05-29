@@ -127,6 +127,93 @@ def test_cited_source_files_still_contain_cited_symbols():
     )
 
 
+def test_auth_token_transport_section_states_dotnet_header_only_constraint():
+    """G10 .NET resolution: the .NET branch of the Auth Token Transport section must
+    state the token is transmitted only via the Authorization header and that no
+    query-string workaround exists on the pinned SDK."""
+    body = _section(_read("docs/connection.md"), "Auth Token Transport")
+    assert "Authorization: Bearer" in body, (
+        ".NET bullet must name the header transport by its canonical form"
+    )
+    # The constraint phrase: no token-query-parameter seam exists on the pinned .NET SDK.
+    assert "no `?token=` query-string seam on the .NET path" in body, (
+        ".NET bullet must state that no token-query-string seam exists on the pinned SDK"
+    )
+    # The corrected record: the server itself accepts ?token= even though the SDK cannot emit it.
+    # Pin the affirmative sentence as one contiguous span (verb + `?token=` together) so the record
+    # cannot be deleted or inverted while still satisfying the assertion — `?token=` and "server
+    # itself" each also occur elsewhere in the section (the no-seam negation, the GDScript override),
+    # so a substring-anywhere conjunction would pass even with the corrected record removed/reversed.
+    assert "**server itself** does accept and authenticate a `?token=` query parameter" in body, (
+        ".NET bullet must still record, in one affirmative span, that the spacetime server accepts "
+        "and authenticates the ?token= query parameter"
+    )
+    # The empirical SDK URL-format basis.
+    assert "WebSocket.Connect" in body, (
+        ".NET bullet must anchor the constraint to the empirically-observed SDK WebSocket.Connect symbol"
+    )
+
+
+def test_auth_token_transport_prefer_query_token_is_gdscript_scoped():
+    """The prefer_query_token override paragraph must be unambiguously scoped to the
+    GDScript runtime path so a reader cannot infer a .NET override exists."""
+    body = _section(_read("docs/connection.md"), "Auth Token Transport")
+    assert "On the GDScript runtime path only" in body, (
+        "prefer_query_token override must lead with explicit GDScript-path scoping"
+    )
+    assert "does **not** exist on the .NET runtime path" in body, (
+        "the override paragraph must state the override does not exist on the .NET path"
+    )
+
+
+def test_troubleshooting_carries_dotnet_header_only_proxy_subsection():
+    """G10 .NET resolution: troubleshooting.md must carry a subsection under
+    ## Authentication for the proxy-strips-Authorization symptom on the .NET path."""
+    content = _read("docs/troubleshooting.md")
+    auth = _section(content, "Authentication")
+    assert "Reverse proxy strips the `Authorization` header" in auth, (
+        "Authentication section must add a proxy/header-stripping subsection for the .NET path"
+    )
+    assert "no query-string workaround on the .NET path" in auth, (
+        "the new subsection must state the .NET path has no query-string workaround"
+    )
+    assert "WebSocket.Connect" in auth, (
+        "the new subsection must cite the empirical SDK URL-format basis (WebSocket.Connect)"
+    )
+    assert "[connection.md → Auth Token Transport](connection.md#auth-token-transport)" in auth, (
+        "the new subsection must link to connection.md#auth-token-transport"
+    )
+    assert "prefer_query_token" in auth, (
+        "the new subsection must point GDScript-path users at the prefer_query_token override"
+    )
+
+
+def test_dotnet_settings_and_adapter_have_no_query_token_flag():
+    """Guardrail: the G10 decision is to NOT add PreferQueryToken/QueryTokenKey to the
+    .NET path because the pinned SDK offers no emit seam. Pin that the .NET source
+    files stay free of those symbols."""
+    for rel in (
+        "addons/godot_spacetime/src/Public/SpacetimeSettings.cs",
+        "addons/godot_spacetime/src/Internal/Platform/DotNet/SpacetimeSdkConnectionAdapter.cs",
+    ):
+        source = _read(rel)
+        assert "PreferQueryToken" not in source, (
+            f"{rel} must not declare PreferQueryToken — the pinned SDK has no query-token emit seam"
+        )
+        assert "QueryTokenKey" not in source, (
+            f"{rel} must not declare QueryTokenKey — the pinned SDK has no query-token emit seam"
+        )
+
+
+def test_deferred_work_records_g10_dotnet_resolution():
+    """The no-implement branch mandates a dated deferred-work entry recording the
+    SDK-emit gap and the latent GDScript-web identity follow-up."""
+    content = _read("_bmad-output/implementation-artifacts/deferred-work.md")
+    assert "G10 .NET query-token" in content, (
+        "deferred-work.md must carry the dated G10 .NET query-token resolution entry"
+    )
+
+
 def test_troubleshooting_web_export_row_links_to_auth_token_transport():
     row = _line_containing(
         "docs/troubleshooting.md",
