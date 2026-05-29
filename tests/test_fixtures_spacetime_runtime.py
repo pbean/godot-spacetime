@@ -9,6 +9,7 @@ and by stubbing `subprocess.run`.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -524,3 +525,96 @@ def test_probe_godot_non_mono_binary_accepts_dotnet_mentioning_banner(
     result = probe_godot_non_mono_binary()
     assert result.available
     assert result.path == path
+
+
+# ---------------------------------------------------------------------------
+# mint_anonymous_identity / mint_anonymous_identity_token
+# ---------------------------------------------------------------------------
+
+# A token that satisfies the pinned 2.1.0 JWT shape canary (eyJ-prefix, two dots)
+# and a 64-char hex identity. Uppercase here to confirm the `[0-9a-fA-F]{64}` validator
+# accepts uppercase hex; the case-insensitive *comparison* itself is exercised by the
+# live web-export e2e proof, not these mocked unit tests.
+_VALID_TOKEN = "eyJhbGciOiJFUzI1NiJ9.eyJoZXhfaWRlbnRpdHkiOiJhYmMifQ.c2lnbmF0dXJl"
+_VALID_IDENTITY = "C2008EC24BC2B2DB790A17EC53EC23D6C3835774ACBC0087AB2A40B44BA2EE7B"
+
+
+class _FakeHTTPResponse:
+    """Minimal stand-in for the `urllib.request.urlopen` context manager."""
+
+    def __init__(self, body: bytes, status: int = 200) -> None:
+        self._body = body
+        self._status = status
+
+    def __enter__(self) -> "_FakeHTTPResponse":
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+    def getcode(self) -> int:
+        return self._status
+
+    def read(self) -> bytes:
+        return self._body
+
+
+def _patch_identity_response(
+    monkeypatch: pytest.MonkeyPatch, payload: object, *, status: int = 200
+) -> None:
+    body = json.dumps(payload).encode("utf-8")
+
+    def _fake_urlopen(request: Any, timeout: float = 0.0) -> _FakeHTTPResponse:
+        return _FakeHTTPResponse(body, status)
+
+    monkeypatch.setattr(spacetime_runtime.urllib.request, "urlopen", _fake_urlopen)
+
+
+def test_mint_anonymous_identity_returns_identity_and_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_identity_response(
+        monkeypatch, {"identity": _VALID_IDENTITY, "token": _VALID_TOKEN}
+    )
+    minted = spacetime_runtime.mint_anonymous_identity("http://127.0.0.1:3000")
+    assert isinstance(minted, spacetime_runtime.MintedIdentity)
+    assert minted.identity == _VALID_IDENTITY
+    assert minted.token == _VALID_TOKEN
+
+
+def test_mint_anonymous_identity_token_wrapper_returns_only_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_identity_response(
+        monkeypatch, {"identity": _VALID_IDENTITY, "token": _VALID_TOKEN}
+    )
+    token = spacetime_runtime.mint_anonymous_identity_token("http://127.0.0.1:3000")
+    assert token == _VALID_TOKEN
+
+
+@pytest.mark.parametrize(
+    "bad_identity",
+    [
+        "",  # empty
+        "xyz",  # too short, non-hex
+        "C2008EC2",  # too short
+        _VALID_IDENTITY + "AB",  # too long (66 chars)
+        "ZZ" * 32,  # 64 chars but non-hex
+    ],
+)
+def test_mint_anonymous_identity_rejects_non_hex_identity(
+    monkeypatch: pytest.MonkeyPatch, bad_identity: str
+) -> None:
+    _patch_identity_response(
+        monkeypatch, {"identity": bad_identity, "token": _VALID_TOKEN}
+    )
+    with pytest.raises(spacetime_runtime.SpacetimeIdentityShapeError):
+        spacetime_runtime.mint_anonymous_identity("http://127.0.0.1:3000")
+
+
+def test_mint_anonymous_identity_rejects_missing_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_identity_response(monkeypatch, {"token": _VALID_TOKEN})
+    with pytest.raises(spacetime_runtime.SpacetimeIdentityShapeError):
+        spacetime_runtime.mint_anonymous_identity("http://127.0.0.1:3000")

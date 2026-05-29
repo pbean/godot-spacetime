@@ -10,6 +10,7 @@ const ATTR_TRANSPORT_MODE := "data-story-11-5-transport-mode"
 const ATTR_PROJECT_HAS_CSHARP := "data-story-11-5-project-has-csharp"
 const ATTR_RENDERER := "data-story-11-5-renderer"
 const ATTR_ERROR := "data-story-11-5-error"
+const ATTR_IDENTITY := "data-story-11-5-identity"
 
 enum Phase {
 	NONE,
@@ -25,6 +26,7 @@ var _phase_started_at: float = 0.0
 var _finished: bool = false
 var _connected: bool = false
 var _transport_mode: String = ""
+var _connection_identity: String = ""
 var _last_error: String = ""
 
 
@@ -81,11 +83,12 @@ func _process(delta: float) -> void:
 		_fail("timed out waiting for Story 11.5 web export milestone")
 
 
-func _on_connection_opened(_event: Dictionary) -> void:
+func _on_connection_opened(event: Dictionary) -> void:
 	if _finished or _phase != Phase.WAIT_CONNECT:
 		return
 
 	_connected = true
+	_connection_identity = String(event.get("identity", ""))
 	_publish_state("connected")
 
 	_set_phase(Phase.WAIT_SUBSCRIBE)
@@ -119,6 +122,7 @@ func _publish_state(phase_name: String, extra: Dictionary = {}) -> void:
 		"project-has-csharp": "true" if _project_has_csharp() else "false",
 		"renderer": StoryConfigScript.RENDERER_LABEL,
 		"error": _last_error,
+		"identity": _connection_identity,
 	}
 	for key in extra.keys():
 		state[key] = str(extra[key])
@@ -128,6 +132,7 @@ func _publish_state(phase_name: String, extra: Dictionary = {}) -> void:
 	_set_browser_attribute(ATTR_PROJECT_HAS_CSHARP, String(state["project-has-csharp"]))
 	_set_browser_attribute(ATTR_RENDERER, String(state["renderer"]))
 	_set_browser_attribute(ATTR_ERROR, String(state["error"]))
+	_set_browser_attribute(ATTR_IDENTITY, String(state["identity"]))
 	for key in extra.keys():
 		_set_browser_attribute("data-story-11-5-%s" % key, String(state[key]))
 	_set_browser_state_object(state)

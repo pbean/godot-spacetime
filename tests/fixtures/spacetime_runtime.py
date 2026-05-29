@@ -443,13 +443,29 @@ class SpacetimeIdentityShapeError(RuntimeError):
     """
 
 
-def mint_anonymous_identity_token(runtime_host: str, *, timeout: float = 10.0) -> str:
-    """Mint a fresh anonymous SpacetimeDB JWT from a live local runtime.
+@dataclass(frozen=True)
+class MintedIdentity:
+    """A freshly minted anonymous SpacetimeDB credential pair.
 
-    POSTs to `<runtime_host>/v1/identity` and returns the `token` field. Story
-    11.5's web-export proof path passes this JWT as the `?token=` query
-    parameter on the WebSocket subscribe URL — placeholder strings get
-    rejected by SpacetimeDB 2.1.0 mid-handshake with `HTTP Authentication
+    `identity` is the server-reported 64-char hex identity the `token`
+    authenticates as (the `/v1/identity` response's `identity` field). The
+    Story 11.5 web-export proof passes `token` as the `?token=` query parameter
+    and asserts the resulting `InitialConnection` identity equals `identity`.
+    """
+
+    identity: str
+    token: str
+
+
+def mint_anonymous_identity(runtime_host: str, *, timeout: float = 10.0) -> "MintedIdentity":
+    """Mint a fresh anonymous SpacetimeDB credential pair from a live runtime.
+
+    POSTs to `<runtime_host>/v1/identity` and returns both the server-reported
+    `identity` (64-char hex) and the `token` (ES256 JWT) as a `MintedIdentity`.
+    Story 11.5's web-export proof passes the JWT as the `?token=` query
+    parameter on the WebSocket subscribe URL and asserts the resulting
+    `InitialConnection` identity equals this `identity` — placeholder strings
+    get rejected by SpacetimeDB 2.1.0 mid-handshake with `HTTP Authentication
     failed; no valid credentials available` so the token must be a real
     ES256-signed JWT the running server can verify.
 
@@ -461,14 +477,15 @@ def mint_anonymous_identity_token(runtime_host: str, *, timeout: float = 10.0) -
         (unreachable host, non-2xx status, connection error) — callers should
         translate this into `pytest.skip(...)`.
       - `SpacetimeIdentityShapeError` on response shape drift (non-JSON body,
-        list/null root, missing `token` key, empty/whitespace `token`, or a
-        value that fails the JWT shape canary `eyJ`-prefix + two dots).
+        list/null root, missing `token` key, empty/whitespace `token`, a
+        value that fails the JWT shape canary `eyJ`-prefix + two dots, or an
+        `identity` that is not a 64-char hex string).
         Callers must let this surface — it indicates a server contract drift
         from pinned 2.1.0, which should fail loud rather than skip.
     """
     normalized_host = (runtime_host or "").rstrip("/")
     if not normalized_host:
-        raise RuntimeError("mint_anonymous_identity_token requires a non-empty runtime host URL")
+        raise RuntimeError("minting an anonymous identity requires a non-empty runtime host URL")
     url = f"{normalized_host}/v1/identity"
     request = urllib.request.Request(url, method="POST")
     try:
@@ -522,7 +539,28 @@ def mint_anonymous_identity_token(runtime_host: str, *, timeout: float = 10.0) -
             f"2.1.0 JWT shape (eyJ-prefix + two dots); observed prefix={token[:8]!r}, "
             f"dot_count={token.count('.')}"
         )
-    return token
+
+    # The `/v1/identity` response also carries the 64-char hex `identity` the
+    # token authenticates as. The web-export proof asserts the InitialConnection
+    # identity equals it, so validate its shape here and fail loud on drift like
+    # the token field.
+    identity = payload.get("identity")
+    if not isinstance(identity, str) or re.fullmatch(r"[0-9a-fA-F]{64}", identity.strip()) is None:
+        raise SpacetimeIdentityShapeError(
+            f"POST {url} returned an 'identity' field that is not a 64-char hex string "
+            f"(pinned spacetime 2.1.0 contract); observed {identity!r}"
+        )
+    return MintedIdentity(identity=identity.strip(), token=token)
+
+
+def mint_anonymous_identity_token(runtime_host: str, *, timeout: float = 10.0) -> str:
+    """Mint a fresh anonymous SpacetimeDB JWT and return only the `token`.
+
+    Thin back-compat wrapper over `mint_anonymous_identity`; see that function
+    for the full contract and raise semantics. Retained because existing
+    callers want just the JWT for the `?token=` query parameter.
+    """
+    return mint_anonymous_identity(runtime_host, timeout=timeout).token
 
 
 def _parse_ping_host(stdout: str) -> str:

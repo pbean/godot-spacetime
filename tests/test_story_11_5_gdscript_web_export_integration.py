@@ -17,7 +17,7 @@ import pytest
 
 from tests.fixtures.spacetime_runtime import (
     SpacetimeIdentityShapeError,
-    mint_anonymous_identity_token,
+    mint_anonymous_identity,
     probe_browser_binary,
     probe_godot_non_mono_binary,
     probe_local_runtime,
@@ -128,7 +128,7 @@ def test_story_11_5_web_export_integration_reuses_shared_runtime_probes() -> Non
         # baked into staging gets HTTP 401'd by SpacetimeDB 2.1.0 mid-
         # handshake. The token must be minted from the live runtime at test
         # time so the WebSocket upgrade actually succeeds.
-        "mint_anonymous_identity_token",
+        "mint_anonymous_identity",
         # The shape-drift exception subclass must not be silently caught by
         # the test's RuntimeError handler — pinning ensures a regression that
         # drops the subclass import or the explicit re-raise gets caught.
@@ -188,7 +188,7 @@ def test_story_11_5_gdscript_web_export_e2e(tmp_path: Path) -> None:
     # principle (a future server major changing the response shape is a
     # documentation defect to surface, not a transient skip).
     try:
-        query_token = mint_anonymous_identity_token(runtime_probe.host)
+        minted = mint_anonymous_identity(runtime_probe.host)
     except SpacetimeIdentityShapeError:
         raise
     except RuntimeError as exc:
@@ -196,6 +196,7 @@ def test_story_11_5_gdscript_web_export_e2e(tmp_path: Path) -> None:
             "SpacetimeDB runtime cannot mint an anonymous identity token for "
             f"the Story 11.5 web-export proof path: {exc}"
         )
+    query_token = minted.token
 
     helper = _load_helper_module()
     project_dir = tmp_path / "web_project"
@@ -244,4 +245,16 @@ def test_story_11_5_gdscript_web_export_e2e(tmp_path: Path) -> None:
     assert state.get("renderer") == "Compatibility", (
         "browser proof path must record the Compatibility renderer in machine-readable state. "
         f"Observed state: {state}"
+    )
+    # G10 identity-equality: the server is proven to authenticate `?token=` as the token's
+    # identity; this asserts the GDScript web client actually connects AS that identity over the
+    # web transport (not anonymously). The GDScript parser (connection_protocol.fixed_width_bytes_to_hex)
+    # reverses the little-endian wire identity bytes into the server's canonical byte order and
+    # uppercases them, so both strings carry the SAME byte order and differ only in case — hence
+    # `.lower()` is the correct, order-safe comparison (verified against the pinned wire fixture).
+    assert state.get("identity", "").lower() == minted.identity.lower(), (
+        "browser export over the ?token= transport must authenticate as the minted token's "
+        "identity — the InitialConnection identity must equal the server-reported identity for "
+        f"that token. minted identity={minted.identity!r}, observed identity={state.get('identity')!r}. "
+        f"Full state: {state}"
     )
