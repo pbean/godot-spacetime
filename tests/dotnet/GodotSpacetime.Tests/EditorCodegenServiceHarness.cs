@@ -217,6 +217,7 @@ public sealed class EditorCodegenServiceHarness
     [InlineData("abc")]
     [InlineData("NaN")]
     [InlineData("Infinity")]
+    [InlineData("1e309")] // parses to +Infinity → fails IsFinite → fallback (NOT the finite-huge clamp path)
     public void ResolveDefaultTimeout_UnsetOrInvalid_FallsBackTo300(string? env)
     {
         Assert.Equal(TimeSpan.FromSeconds(300), ResolveDefaultTimeout(env));
@@ -234,10 +235,16 @@ public sealed class EditorCodegenServiceHarness
     {
         // Finite but huge: must NOT throw OverflowException; clamped to the 24h ceiling.
         Assert.Equal(TimeSpan.FromSeconds(24 * 60 * 60), ResolveDefaultTimeout("1e308"));
+        // Pin the Math.Min clamp boundary exactly so a future off-by-one can't slip through:
+        // at the ceiling it is honored, one second over it is clamped back to the ceiling.
+        Assert.Equal(TimeSpan.FromSeconds(24 * 60 * 60), ResolveDefaultTimeout("86400"));
+        Assert.Equal(TimeSpan.FromSeconds(24 * 60 * 60), ResolveDefaultTimeout("86401"));
     }
 
     [Theory]
     [InlineData("error: failed to download `foo v1.0`\nCaused by:\n  attempting to make an HTTP request, but `--offline` was specified")]
+    // Real cargo (1.95.0) emits the flag BARE, no backticks — pin that literal wording too.
+    [InlineData("error: failed to download `foo v1.0`\nCaused by:\n  attempting to make an HTTP request, but --offline was specified")]
     [InlineData("error: no matching package; the lock file needs updating but CARGO_NET_OFFLINE is set")]
     [InlineData("error: failed to get `foo`: the package is not in the local cache")]
     public void LooksLikeColdCargoOfflineFailure_OfflineSignatures_AreDetected(string output)
