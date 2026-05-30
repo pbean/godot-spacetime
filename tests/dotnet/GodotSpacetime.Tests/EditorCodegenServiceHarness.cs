@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -198,6 +199,105 @@ public sealed class EditorCodegenServiceHarness
         Assert.Equal("BLOCKED — output directory outside safe boundary", result.StatusMessage);
     }
 
+    // ===== Server-independent guardrail facts for the harness's pure helpers =====
+    // These pin the I/O matrix's pure rows and run on EVERY host (incl. non-runtime CI),
+    // unlike the live [Fact] above which skips when the runtime is absent.
+
+    // A real pinned-2.1.0 identity (64-hex) and an eyJ-prefixed two-dot JWT skeleton. `const`
+    // so they can be concatenated inside [InlineData] (a constant-expression requirement).
+    private const string Hex64 = "c20096dc305b6e28a60c9867ecbe8103c0555714da646919e92de9c546b46775";
+    private const string JwtOk = "eyJ0eXAiOiJKV1Q.eyJoZXhfaWRl.bKFbd66orK4o";
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("0")]
+    [InlineData("-5")]
+    [InlineData("abc")]
+    [InlineData("NaN")]
+    [InlineData("Infinity")]
+    public void ResolveDefaultTimeout_UnsetOrInvalid_FallsBackTo300(string? env)
+    {
+        Assert.Equal(TimeSpan.FromSeconds(300), ResolveDefaultTimeout(env));
+    }
+
+    [Fact]
+    public void ResolveDefaultTimeout_PositiveValue_IsHonored()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(600), ResolveDefaultTimeout("600"));
+        Assert.Equal(TimeSpan.FromSeconds(45.5), ResolveDefaultTimeout("45.5"));
+    }
+
+    [Fact]
+    public void ResolveDefaultTimeout_ExtremeValue_IsClampedNotOverflowed()
+    {
+        // Finite but huge: must NOT throw OverflowException; clamped to the 24h ceiling.
+        Assert.Equal(TimeSpan.FromSeconds(24 * 60 * 60), ResolveDefaultTimeout("1e308"));
+    }
+
+    [Theory]
+    [InlineData("error: failed to download `foo v1.0`\nCaused by:\n  attempting to make an HTTP request, but `--offline` was specified")]
+    [InlineData("error: no matching package; the lock file needs updating but CARGO_NET_OFFLINE is set")]
+    [InlineData("error: failed to get `foo`: the package is not in the local cache")]
+    public void LooksLikeColdCargoOfflineFailure_OfflineSignatures_AreDetected(string output)
+    {
+        Assert.True(LooksLikeColdCargoOfflineFailure(output));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("error[E0425]: cannot find value `foo` in this scope")]
+    [InlineData("thread 'main' panicked at src/lib.rs:10:5")]
+    [InlineData("error: failed to download `foo v1.0` from registry: 503 Service Unavailable")] // online network failure — must NOT skip
+    [InlineData("Caused by:\n  unable to update registry `crates-io` (connection reset)")]      // online registry hiccup — must NOT skip
+    public void LooksLikeColdCargoOfflineFailure_RealErrorsAndEmpty_AreNotMatched(string output)
+    {
+        Assert.False(LooksLikeColdCargoOfflineFailure(output));
+    }
+
+    [Fact]
+    public void ParseMintedToken_ValidPinnedShape_ReturnsToken()
+    {
+        var token = ParseMintedToken("{\"identity\":\"" + Hex64 + "\",\"token\":\"" + JwtOk + "\"}");
+        Assert.Equal(JwtOk, token);
+    }
+
+    [Theory]
+    [InlineData("not json at all")]                                                    // non-JSON body
+    [InlineData("[1,2,3]")]                                                            // non-object root
+    [InlineData("{\"identity\":\"" + Hex64 + "\"}")]                                   // missing token
+    [InlineData("{\"identity\":\"" + Hex64 + "\",\"token\":\"\"}")]                    // empty token
+    [InlineData("{\"identity\":\"" + Hex64 + "\",\"token\":12345}")]                   // non-string token
+    [InlineData("{\"identity\":\"" + Hex64 + "\",\"token\":\"abc.def.ghi\"}")]         // not eyJ-prefixed
+    [InlineData("{\"identity\":\"" + Hex64 + "\",\"token\":\"eyJ.onedot\"}")]          // wrong dot count (1)
+    [InlineData("{\"identity\":\"" + Hex64 + "\",\"token\":\"eyJa.b.c.d\"}")]          // eyJ-prefix but 3 dots
+    [InlineData("{\"identity\":\"tooshort\",\"token\":\"" + JwtOk + "\"}")]            // identity not 64 chars
+    [InlineData("{\"identity\":\"zzzz96dc305b6e28a60c9867ecbe8103c0555714da646919e92de9c546b46775\",\"token\":\"" + JwtOk + "\"}")] // 64 chars but non-hex
+    public void ParseMintedToken_ShapeDrift_ThrowsFailLoud(string body)
+    {
+        Assert.Throws<SpacetimeIdentityShapeException>(() => ParseMintedToken(body));
+    }
+
+    [Fact]
+    public void TryDeleteDirectory_ExistingDirectory_IsRemoved()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "d3-harness-del-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(dir, "nested"));
+        File.WriteAllText(Path.Combine(dir, "nested", "f.txt"), "x");
+
+        TryDeleteDirectory(dir);
+
+        Assert.False(Directory.Exists(dir));
+    }
+
+    [Fact]
+    public void TryDeleteDirectory_NonexistentPath_IsSilentNoOp()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "d3-harness-absent-" + Guid.NewGuid().ToString("N"));
+        Assert.Null(Record.Exception(() => TryDeleteDirectory(dir)));
+    }
+
     /// <summary>
     /// Resolve the live runtime (CLI + reachable server) or <see cref="Assert.Skip"/>
     /// with a reason naming the missing prerequisite, mirroring the Python probe pattern:
@@ -285,9 +385,23 @@ public sealed class EditorCodegenServiceHarness
             ],
             ProjectRoot,
             extraEnv: ("CARGO_NET_OFFLINE", "true")).ConfigureAwait(false);
-        Assert.True(
-            generate.ExitCode == 0,
-            $"CLI --module-path generate failed.\nstdout:\n{generate.Stdout}\nstderr:\n{generate.Stderr}");
+        if (generate.ExitCode != 0)
+        {
+            // The parity baseline compiles the Rust module OFFLINE (CARGO_NET_OFFLINE=true),
+            // reusing the cache the online `publish` above just warmed. On a cold-offline cache
+            // cargo fails fast — an environment-setup condition, NOT a parity/codegen regression,
+            // and asymmetric with the online publish (which would simply fetch). Skip that case;
+            // any OTHER non-zero exit (a genuine generate/codegen regression) still fails loud.
+            if (LooksLikeColdCargoOfflineFailure(generate.Stdout + "\n" + generate.Stderr))
+            {
+                Assert.Skip(
+                    "SpacetimeDB runtime unavailable: parity `generate` hit a cold offline cargo cache " +
+                    "(CARGO_NET_OFFLINE) — warm the cache or raise SPACETIME_D3_TIMEOUT_SECONDS; not a parity regression");
+            }
+
+            Assert.Fail(
+                $"CLI --module-path generate failed.\nstdout:\n{generate.Stdout}\nstderr:\n{generate.Stderr}");
+        }
 
         var postProcess = await RunProcessAsync(
             "python3",
@@ -394,6 +508,58 @@ public sealed class EditorCodegenServiceHarness
         return hashes;
     }
 
+    private const int DefaultTimeoutSeconds = 300;
+
+    // Far above any legitimate cold-build threshold (the live lane completes in ~2s). Exists only
+    // so an extreme env value can't overflow TimeSpan.FromSeconds into an uncaught OverflowException.
+    private const double MaxTimeoutSeconds = 24 * 60 * 60;
+
+    /// <summary>
+    /// Resolve the live-lane subprocess "obviously hung" threshold. The default is
+    /// <see cref="DefaultTimeoutSeconds"/>s; <c>SPACETIME_D3_TIMEOUT_SECONDS</c> may RAISE it
+    /// (or otherwise tune it) for a host whose cold cargo cache makes a valid build legitimately
+    /// slow. Unset / blank / non-numeric / non-positive / non-finite values fall back to the
+    /// default — the env var can only make the lane more robust, never trip it on a bad value.
+    /// </summary>
+    private static TimeSpan ResolveDefaultTimeout(string? envSeconds)
+    {
+        if (!string.IsNullOrWhiteSpace(envSeconds) &&
+            double.TryParse(envSeconds, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds) &&
+            double.IsFinite(seconds) && seconds > 0)
+        {
+            // Clamp the upper end so an extreme value (e.g. "1e308") can't overflow
+            // TimeSpan.FromSeconds into an uncaught OverflowException on a path with no try/catch.
+            return TimeSpan.FromSeconds(Math.Min(seconds, MaxTimeoutSeconds));
+        }
+
+        return TimeSpan.FromSeconds(DefaultTimeoutSeconds);
+    }
+
+    /// <summary>
+    /// True when subprocess output carries a cargo "offline mode could not satisfy a dependency"
+    /// signature. Matched conservatively against cargo-offline-SPECIFIC tokens so a genuine
+    /// compile/codegen error (the regression the parity gate exists to catch) is NOT misread as
+    /// an environment-setup condition.
+    /// </summary>
+    private static bool LooksLikeColdCargoOfflineFailure(string output)
+    {
+        if (string.IsNullOrEmpty(output))
+        {
+            return false;
+        }
+
+        // Require an UNAMBIGUOUS offline-mode marker. Cargo's cold-offline cache-miss errors always
+        // echo the flag ("…but `--offline` was specified" / "…because `--offline` was specified", or
+        // the CARGO_NET_OFFLINE env), and "not in the local cache" is offline-cache-specific phrasing.
+        // Bare tokens like "failed to download" / "unable to update registry" ALSO appear on ONLINE
+        // network failures and on build-script fetches, so matching them alone would mis-skip a
+        // genuine regression — exactly what this parity gate must instead fail loud on.
+        var lowered = output.ToLowerInvariant();
+        return lowered.Contains("--offline")
+            || lowered.Contains("cargo_net_offline")
+            || lowered.Contains("not in the local cache");
+    }
+
     private static async Task<ProcessResult> RunProcessAsync(
         string executable,
         IReadOnlyList<string> arguments,
@@ -405,7 +571,10 @@ public sealed class EditorCodegenServiceHarness
         // complete well inside this, so tripping it means the subprocess is stuck. Bounding
         // here converts an indefinite hang — which the CI suite-level timeout would otherwise
         // report as a FAIL — into the intended Assert.Skip, uniformly for every live-lane call.
-        var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(300);
+        // The default is env-tunable (SPACETIME_D3_TIMEOUT_SECONDS) so a host with a cold cargo
+        // cache can RAISE the bound rather than have a valid-but-slow build false-trip the skip.
+        var effectiveTimeout = timeout
+            ?? ResolveDefaultTimeout(Environment.GetEnvironmentVariable("SPACETIME_D3_TIMEOUT_SECONDS"));
 
         var startInfo = new ProcessStartInfo
         {
@@ -555,11 +724,12 @@ public sealed class EditorCodegenServiceHarness
                 Directory.Delete(path, recursive: true);
             }
         }
-        catch (IOException)
+        catch (Exception)
         {
-        }
-        catch (UnauthorizedAccessException)
-        {
+            // Best-effort cleanup in a finally block: swallow EVERYTHING (not just IO/UAE) so an
+            // exotic exception (ArgumentException, SecurityException, a CLI-held handle surfacing
+            // a different type) can never replace the test's real skip/pass/fail outcome. Mirrors
+            // the blanket catch in the sibling TryRunProcess / TryMintTokenAsync helpers.
         }
     }
 
@@ -614,23 +784,119 @@ public sealed class EditorCodegenServiceHarness
                 .ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
+                // Runtime unavailable / non-2xx: SKIP (the caller treats null as skip), mirroring
+                // the Python reference's transient RuntimeError path.
                 return null;
             }
 
             var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-            using var doc = JsonDocument.Parse(body);
-            if (doc.RootElement.TryGetProperty("token", out var tokenElement) &&
-                tokenElement.ValueKind == JsonValueKind.String)
-            {
-                var token = tokenElement.GetString();
-                return string.IsNullOrWhiteSpace(token) ? null : token;
-            }
-
+            // A 2xx body whose shape drifts from the pinned 2.1.0 contract is a real regression,
+            // so ParseMintedToken THROWS SpacetimeIdentityShapeException — the one exception the
+            // outer catch deliberately lets escape (fail loud, never silently skip a drift).
+            return ParseMintedToken(body);
+        }
+        catch (Exception ex) when (ex is not SpacetimeIdentityShapeException)
+        {
+            // Any transient fault (network, timeout, IO, malformed URI) means the runtime is
+            // unavailable → SKIP. A SpacetimeIdentityShapeException is NOT caught here: it signals
+            // a 2xx-but-drifted contract and must fail loud per CLAUDE.md "measure the pinned runtime".
             return null;
         }
-        catch (Exception)
+    }
+
+    /// <summary>
+    /// Validate a 2xx <c>POST /v1/identity</c> body against the pinned spacetime 2.1.0 contract
+    /// and return the JWT <c>token</c>. Mirrors the canaries in <c>mint_anonymous_identity</c>
+    /// (tests/fixtures/spacetime_runtime.py): <c>token</c> is an <c>eyJ</c>-prefixed JWT with
+    /// exactly two dots (header.payload.signature) and <c>identity</c> is a 64-char hex string.
+    /// Throws <see cref="SpacetimeIdentityShapeException"/> on any drift — a successful response
+    /// with the wrong shape is a contract regression that must fail loud, not skip.
+    /// </summary>
+    private static string ParseMintedToken(string body)
+    {
+        JsonElement root;
+        try
         {
-            return null;
+            using var doc = JsonDocument.Parse(body);
+            root = doc.RootElement.Clone();
+        }
+        catch (JsonException ex)
+        {
+            throw new SpacetimeIdentityShapeException(
+                $"POST /v1/identity returned a non-JSON body: {Truncate(body, 120)}", ex);
+        }
+
+        if (root.ValueKind != JsonValueKind.Object ||
+            !root.TryGetProperty("token", out var tokenElement) ||
+            tokenElement.ValueKind != JsonValueKind.String)
+        {
+            throw new SpacetimeIdentityShapeException(
+                "POST /v1/identity response drifted from pinned 2.1.0: missing string 'token'");
+        }
+
+        var token = tokenElement.GetString();
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            throw new SpacetimeIdentityShapeException("POST /v1/identity returned an empty 'token'");
+        }
+
+        // JWT shape canary: pinned 2.1.0 emits an ES256 JWT — eyJ-prefix + exactly two dots.
+        if (!token.StartsWith("eyJ", StringComparison.Ordinal) || token.Count(c => c == '.') != 2)
+        {
+            throw new SpacetimeIdentityShapeException(
+                $"POST /v1/identity 'token' is not a pinned-2.1.0 JWT (eyJ-prefix + two dots); " +
+                $"prefix={Truncate(token, 8)}, dots={token.Count(c => c == '.')}");
+        }
+
+        if (!root.TryGetProperty("identity", out var identityElement) ||
+            identityElement.ValueKind != JsonValueKind.String)
+        {
+            throw new SpacetimeIdentityShapeException(
+                "POST /v1/identity response drifted from pinned 2.1.0: missing string 'identity'");
+        }
+
+        if (!IsSixtyFourHex(identityElement.GetString()?.Trim()))
+        {
+            throw new SpacetimeIdentityShapeException(
+                "POST /v1/identity 'identity' is not a pinned-2.1.0 64-char hex string");
+        }
+
+        return token!;
+    }
+
+    private static bool IsSixtyFourHex(string? value)
+    {
+        if (value is null || value.Length != 64)
+        {
+            return false;
+        }
+
+        foreach (var c in value)
+        {
+            if (c is not (>= '0' and <= '9' or >= 'a' and <= 'f' or >= 'A' and <= 'F'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// A 2xx <c>POST /v1/identity</c> response whose token/identity shape drifted from the pinned
+    /// spacetime 2.1.0 contract — a fail-loud regression signal, NOT a runtime-unavailable skip.
+    /// Mirrors <c>SpacetimeIdentityShapeError</c> in tests/fixtures/spacetime_runtime.py.
+    /// </summary>
+    private sealed class SpacetimeIdentityShapeException : Exception
+    {
+        public SpacetimeIdentityShapeException(string message)
+            : base(message)
+        {
+        }
+
+        public SpacetimeIdentityShapeException(string message, Exception inner)
+            : base(message, inner)
+        {
         }
     }
 
