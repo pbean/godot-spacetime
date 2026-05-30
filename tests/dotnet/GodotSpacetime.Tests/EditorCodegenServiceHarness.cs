@@ -120,13 +120,13 @@ public sealed class EditorCodegenServiceHarness
                 Assert.Skip("SpacetimeDB runtime unavailable: anonymous schema access rejected");
             }
 
-            // (4) Assert the production path succeeded with the OK status contract.
+            // (5) Assert the production path succeeded with the OK status contract.
             Assert.True(
                 result.IsSuccess,
                 $"GenerateBindingsAsync did not succeed. Status: {result.StatusMessage}\nDetail: {result.ErrorDetail}");
             Assert.StartsWith("OK — bindings generated from ", result.StatusMessage);
 
-            // (5) Assert .g.cs files exist under the out-dir.
+            // (6) Assert .g.cs files exist under the out-dir.
             var harnessTree = HashTree(absHarnessOutDir);
             Assert.NotEmpty(harnessTree);
             Assert.Contains(harnessTree.Keys, path => path.EndsWith(".g.cs", StringComparison.Ordinal));
