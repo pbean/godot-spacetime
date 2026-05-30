@@ -658,15 +658,18 @@ def test_v1_identity_fixture_provenance_pins_pinned_version() -> None:
         fixture["spacetime_version_line"]
         == "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;"
     )
-    # Guard the "document what you measured" provenance against silent rot: a
-    # re-capture that leaves an empty/malformed timestamp fails here.
-    assert datetime.fromisoformat(fixture["captured_at"])
+    # Guard the "document what you measured" provenance against silent rot: an
+    # empty/malformed timestamp raises in `fromisoformat`, and a naive
+    # (offset-stripped) re-capture fails the tz-aware pin — the captured body is
+    # timestamped with a real local offset, not a bare wall-clock string.
+    captured_at = datetime.fromisoformat(fixture["captured_at"])
+    assert captured_at.tzinfo is not None
 
 
 def test_v1_identity_fixture_response_body_matches_pinned_shape() -> None:
     body = _load_v1_identity_fixture()["response_body"]
     assert isinstance(body, dict)
-    assert set(body) >= {"identity", "token"}
+    assert set(body) == {"identity", "token"}
     # Lowercase hex exactly as the runtime emits it — not normalized.
     assert re.fullmatch(r"[0-9a-f]{64}", body["identity"]) is not None
     token = body["token"]
@@ -689,10 +692,12 @@ def test_v1_identity_fixture_body_satisfies_live_validator(
 
 
 def test_v1_identity_fixture_token_authenticates_as_top_level_identity() -> None:
-    # The fixture is self-proving: the committed JWT's `hex_identity` claim must
-    # equal the top-level `identity`. A fabricated or mismatched body would have
-    # to forge a self-consistent ES256 payload to pass. This mirrors offline the
-    # token-vs-connection-identity equality the live web-export proof asserts.
+    # Internal-consistency pin (NOT signature authenticity): the committed JWT's
+    # `hex_identity` claim must equal the top-level `identity`. This decodes the
+    # payload only — it does not verify the ES256 signature — so it catches a
+    # copy-paste/re-capture drift where one field is updated but the other is
+    # not, mirroring offline the token-vs-connection-identity equality the live
+    # web-export proof asserts end-to-end (where the server does verify the JWT).
     body = _load_v1_identity_fixture()["response_body"]
     payload_segment = body["token"].split(".")[1]
     # JWT base64url segments omit padding; restore it before decoding.
