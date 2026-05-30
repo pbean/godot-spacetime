@@ -112,6 +112,41 @@ def test_connection_telemetry_stats_declares_nine_categories_and_preserves_ten_f
         )
 
 
+# Reconciliation guard (2026-05-29 G3/G4 live-lane capture): each per-tracker XML doc comment on
+# ConnectionTelemetryStats must match the MEASURED population. ParseMessageQueue and ApplyMessageQueue
+# populate from inbound traffic (NOT expected-empty); AllReducers is the one aggregate the pinned 2.1.0
+# client never fills (expected-empty). Catches the comment regression shipped in b4ce0f5 and runs on every
+# host. The live counterpart asserts the same distribution in test_story_9_3_connection_telemetry_integration.py.
+def test_pipeline_tracker_doc_comments_match_measured_population() -> None:
+    content = _read(STATS_REL)
+
+    def _summary(prop: str) -> str:
+        # Isolate exactly this property's own <summary>...</summary> block (the nearest one preceding
+        # the declaration), bounded at </summary> so a neighbor's comment can never bleed in. Guarded
+        # so a removed declaration/summary fails with a clear message, not an opaque ValueError.
+        marker = f"public CategoryTelemetry {prop} {{ get; }}"
+        assert marker in content, f"ConnectionTelemetryStats must declare `{marker}`."
+        before = content[: content.index(marker)]
+        start = before.rindex("<summary>")
+        end = before.index("</summary>", start)
+        return before[start:end].lower()
+
+    for populated in ("ParseMessageQueue", "ApplyMessageQueue"):
+        summary = _summary(populated)
+        assert "expected-empty" not in summary, (
+            f"{populated} populates on the pinned 2.1.0 client (measured live lane); its XML doc must not "
+            "claim 'expected-empty'. See the 2026-05-29 G3/G4 live-lane reconciliation."
+        )
+        assert "populated" in summary, (
+            f"{populated}'s XML doc must state it is populated from inbound message traffic."
+        )
+
+    assert "expected-empty" in _summary("AllReducers"), (
+        "AllReducers is the one aggregate the pinned 2.1.0 client does not fill; its XML doc must keep the "
+        "'expected-empty' claim so the inverse direction stays pinned."
+    )
+
+
 # AC1 — the adapter is the only place SDK tuples are unwrapped; flatten reads all 9 trackers.
 def test_adapter_reads_all_nine_trackers_and_isolates_the_flatten() -> None:
     content = _read(ADAPTER_REL)

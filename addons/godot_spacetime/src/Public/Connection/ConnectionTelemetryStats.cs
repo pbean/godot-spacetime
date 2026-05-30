@@ -83,8 +83,9 @@ public partial class ConnectionTelemetryStats : RefCounted
     public CategoryTelemetry AllReducers { get; } = new();
 
     /// <summary>
-    /// Aggregate message-parse-queue tracker. Empirically expected-empty on the pinned 2.1.0
-    /// client; see <c>docs/connection.md</c>.
+    /// Aggregate message-parse-queue tracker. Populated on the pinned 2.1.0 client from inbound
+    /// message traffic — the initial subscription/transaction messages, and again on the reconnect
+    /// handshake (measured live lane); see <c>docs/connection.md</c>.
     /// </summary>
     public CategoryTelemetry ParseMessageQueue { get; } = new();
 
@@ -95,8 +96,9 @@ public partial class ConnectionTelemetryStats : RefCounted
     public CategoryTelemetry ParseMessage { get; } = new();
 
     /// <summary>
-    /// Aggregate apply-message-queue tracker. Empirically expected-empty on the pinned 2.1.0
-    /// client; see <c>docs/connection.md</c>.
+    /// Aggregate apply-message-queue tracker. Populated on the pinned 2.1.0 client from inbound
+    /// message traffic — the initial subscription/transaction messages, and again on the reconnect
+    /// handshake (measured live lane); see <c>docs/connection.md</c>.
     /// </summary>
     public CategoryTelemetry ApplyMessageQueue { get; } = new();
 

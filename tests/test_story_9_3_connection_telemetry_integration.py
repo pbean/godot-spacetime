@@ -293,6 +293,30 @@ def test_connection_telemetry_e2e() -> None:
     assert sorted(telemetry_step["performance_monitors"]) == sorted(EXPECTED_MONITOR_IDS)
     assert all(value >= 0 for value in telemetry_step["performance_monitors"].values())
 
+    # Per-tracker population distribution, pinned to the live capture against the pinned 2.1.0
+    # client (CLAUDE.md "measure the pinned runtime"). The client-driven Reducers/Subscriptions
+    # trackers and all four pipeline trackers populate from real/inbound traffic; AllReducers is a
+    # client-side aggregate the 2.1.0 client never fills even under reducer traffic. This is the
+    # live counterpart to the static comment-claim guard in test_story_g3g4_observability_parity.py,
+    # and the source of truth for the ConnectionTelemetryStats XML docs and docs/connection.md.
+    categories = telemetry_step["categories"]
+    for populated in (
+        "reducers",
+        "subscriptions",
+        "parse_message_queue",
+        "parse_message",
+        "apply_message_queue",
+        "apply_message",
+    ):
+        assert categories[populated]["sample_count"] >= 1, (
+            f"{populated} tracker must populate from real/inbound traffic on the pinned 2.1.0 client; "
+            f"got sample_count={categories[populated]['sample_count']}. categories={categories}"
+        )
+    assert categories["all_reducers"]["sample_count"] == 0, (
+        "AllReducers is a client-side aggregate the pinned 2.1.0 client does not populate even under "
+        f"reducer traffic; got sample_count={categories['all_reducers']['sample_count']}."
+    )
+
     assert disconnect_step["messages_sent"] == 0
     assert disconnect_step["messages_received"] == 0
     assert disconnect_step["bytes_sent"] == 0
