@@ -1,0 +1,11 @@
+{
+  "generated_by": "manual POST http://127.0.0.1:3000/v1/identity (curl) against the pinned local runtime",
+  "endpoint": "POST /v1/identity",
+  "spacetime_version_line": "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;",
+  "captured_at": "2026-05-30T15:20:03-07:00",
+  "note": "Real anonymous-identity response captured from the pinned spacetime 2.1.0 runtime. The token is an anonymous local-dev ES256 JWT (exp:null), matching the committed-token precedent in tests/fixtures/gdscript_wire/initial_connection_expected.json. Re-capture when `spacetime --version` changes.",
+  "response_body": {
+    "identity": "c200a2bdd7fa677f248ed285db29dda6704036fadf5824f92c7f83c0b4282503",
+    "token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.eyJoZXhfaWRlbnRpdHkiOiJjMjAwYTJiZGQ3ZmE2NzdmMjQ4ZWQyODVkYjI5ZGRhNjcwNDAzNmZhZGY1ODI0ZjkyYzdmODNjMGI0MjgyNTAzIiwic3ViIjoiYWQzNTQ3NmEtNDMyNS00OTE3LThiMTItZjZhYjQ4Yjc2MGFlIiwiaXNzIjoibG9jYWxob3N0IiwiYXVkIjpbInNwYWNldGltZWRiIl0sImlhdCI6MTc4MDE3OTYwNCwiZXhwIjpudWxsfQ.JTvWS22vdZZcr65q3LAyAcFQ9khNQ0FDYw8gB_4AvOvuy0bIQVJNejrKQD4-N71v72OtMyGoxPTYyirha-xhyA"
+  }
+}

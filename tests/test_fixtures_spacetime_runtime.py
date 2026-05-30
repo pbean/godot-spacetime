@@ -9,8 +9,11 @@ and by stubbing `subprocess.run`.
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -618,3 +621,81 @@ def test_mint_anonymous_identity_rejects_missing_identity(
     _patch_identity_response(monkeypatch, {"token": _VALID_TOKEN})
     with pytest.raises(spacetime_runtime.SpacetimeIdentityShapeError):
         spacetime_runtime.mint_anonymous_identity("http://127.0.0.1:3000")
+
+
+# ---------------------------------------------------------------------------
+# /v1/identity HTTP-response shape fixture (offline pin)
+# ---------------------------------------------------------------------------
+#
+# tests/fixtures/v1_identity_response_expected.json captures a REAL
+# POST /v1/identity body from the pinned spacetime 2.1.0 runtime. The mint unit
+# tests above exercise `mint_anonymous_identity` against *fabricated* bodies;
+# these tests pin the *measured* body's top-level shape OFFLINE (no server, no
+# Mono) and — the key tie — feed the captured body through the live validator
+# so the committed fixture and the validator cannot silently diverge.
+# Complements the InitialConnection *wire* fixture (which pins the WS
+# connection-identity vs. JWT equality, not the HTTP response body).
+# Per CLAUDE.md: "measure the pinned runtime; document what you measured."
+
+_V1_IDENTITY_FIXTURE = (
+    Path(__file__).resolve().parent / "fixtures" / "v1_identity_response_expected.json"
+)
+
+
+def _load_v1_identity_fixture() -> dict:
+    # A committed artifact, not an env-gated resource: a missing or unparseable
+    # fixture must FAIL loudly here, never skip.
+    return json.loads(_V1_IDENTITY_FIXTURE.read_text(encoding="utf-8"))
+
+
+def test_v1_identity_fixture_provenance_pins_pinned_version() -> None:
+    fixture = _load_v1_identity_fixture()
+    assert fixture["endpoint"] == "POST /v1/identity"
+    assert "response_body" in fixture
+    # A `spacetime --version` bump that could drift the response shape trips
+    # this assertion first, forcing a deliberate re-capture.
+    assert (
+        fixture["spacetime_version_line"]
+        == "spacetimedb tool version 2.1.0; spacetimedb-lib version 2.1.0;"
+    )
+    # Guard the "document what you measured" provenance against silent rot: a
+    # re-capture that leaves an empty/malformed timestamp fails here.
+    assert datetime.fromisoformat(fixture["captured_at"])
+
+
+def test_v1_identity_fixture_response_body_matches_pinned_shape() -> None:
+    body = _load_v1_identity_fixture()["response_body"]
+    assert isinstance(body, dict)
+    assert set(body) >= {"identity", "token"}
+    # Lowercase hex exactly as the runtime emits it — not normalized.
+    assert re.fullmatch(r"[0-9a-f]{64}", body["identity"]) is not None
+    token = body["token"]
+    assert isinstance(token, str)
+    assert token.startswith("eyJ") and token.count(".") == 2
+
+
+def test_v1_identity_fixture_body_satisfies_live_validator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The strongest offline pin: route the REAL captured body through the same
+    # validator the live lane calls, proving the measured artifact would pass
+    # production validation — with no server and no Mono binary in reach.
+    body = _load_v1_identity_fixture()["response_body"]
+    _patch_identity_response(monkeypatch, body)
+    minted = spacetime_runtime.mint_anonymous_identity("http://127.0.0.1:3000")
+    assert isinstance(minted, spacetime_runtime.MintedIdentity)
+    assert minted.identity == body["identity"]
+    assert minted.token == body["token"]
+
+
+def test_v1_identity_fixture_token_authenticates_as_top_level_identity() -> None:
+    # The fixture is self-proving: the committed JWT's `hex_identity` claim must
+    # equal the top-level `identity`. A fabricated or mismatched body would have
+    # to forge a self-consistent ES256 payload to pass. This mirrors offline the
+    # token-vs-connection-identity equality the live web-export proof asserts.
+    body = _load_v1_identity_fixture()["response_body"]
+    payload_segment = body["token"].split(".")[1]
+    # JWT base64url segments omit padding; restore it before decoding.
+    padded = payload_segment + "=" * (-len(payload_segment) % 4)
+    claims = json.loads(base64.urlsafe_b64decode(padded))
+    assert claims["hex_identity"].lower() == body["identity"].lower()
