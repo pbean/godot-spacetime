@@ -457,25 +457,34 @@ public sealed class EditorCodegenServiceHarness
             var stderr = await stderrTask.WaitAsync(cts.Token).ConfigureAwait(false);
             return new ProcessResult(process.ExitCode, stdout, stderr);
         }
-        catch (OperationCanceledException)
+        catch (Exception outer) when (outer is OperationCanceledException or IOException)
         {
+            // Two infrastructure faults land here, both meaning "the subprocess is not
+            // behaving — skip, never FAIL": the timeout (OperationCanceledException from the
+            // cts firing) and a broken redirected pipe (IOException re-raised by a read task).
+            // Unlike TryRunProcess, this method has no outer catch-all net, so the cleanup
+            // below must itself be fault-contained or a secondary throw would defeat the skip.
             try
             {
                 process.Kill(entireProcessTree: true);
             }
-            catch (InvalidOperationException)
+            catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or AggregateException)
             {
+                // Kill is best-effort — an already-exited process or an OS-refused tree kill
+                // must NOT turn the skip into a suite-level FAIL. (These are the documented
+                // Process.Kill(bool) failure modes.) ObserveAndIgnore still runs below.
             }
 
             // Observe the abandoned read tasks so a fault on the killed process' redirected
             // pipes cannot resurface later as an UnobservedTaskException in an unrelated test
-            // (mirrors the TryRunProcess timeout branch).
+            // (mirrors the TryRunProcess timeout branch). Runs regardless of the kill outcome.
             ObserveAndIgnore(stdoutTask);
             ObserveAndIgnore(stderrTask);
 
-            Assert.Skip(
-                $"SpacetimeDB runtime unavailable: '{executable}' did not exit within " +
-                $"{effectiveTimeout.TotalSeconds:0}s (treated as a hung subprocess)");
+            var reason = outer is OperationCanceledException
+                ? $"did not exit within {effectiveTimeout.TotalSeconds:0}s (treated as a hung subprocess)"
+                : $"its redirected output pipe faulted ({outer.GetType().Name}: {outer.Message})";
+            Assert.Skip($"SpacetimeDB runtime unavailable: '{executable}' {reason}");
             throw; // unreachable — Assert.Skip always throws; satisfies the compiler.
         }
     }
