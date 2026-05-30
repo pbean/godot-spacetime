@@ -69,6 +69,13 @@ release/
 spacetime/modules/*/target/
 spacetime/modules/*/Cargo.lock
 
+# Ephemeral per-run output dirs from the D3 live-lane harness
+# (EditorCodegenServiceHarness.cs). Each run uses a guid8-suffixed dir and deletes
+# it in its finally; this ignore only catches residue from a hard-killed run so it
+# is never committed. The rest of tests/fixtures/generated/ (e.g. multi_module_smoke/)
+# is tracked and intentionally NOT ignored.
+tests/fixtures/generated/d3-harness*/
+
 # General logs and patch leftovers
 *.log
 *.tmp

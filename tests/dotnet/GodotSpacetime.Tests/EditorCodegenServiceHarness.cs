@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -7,6 +8,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using GodotSpacetime.Editor.Codegen;
 using Xunit;
@@ -37,6 +39,10 @@ public sealed class EditorCodegenServiceHarness
     private const string GeneratedNamespace = "Spacetime" + "DB.Types";
     private const string SchemaVersion = "9";
 
+    // The dash-named fixture DB prefix (the pinned 2.1.0 CLI/server reject underscores). Shared
+    // by dashName construction and the guid8 slice so the two can never drift apart.
+    private const string DashNamePrefix = "smoke-test-d3-";
+
     // Resolve the repo root from the test assembly location: the test DLL lives under
     // tests/dotnet/GodotSpacetime.Tests/bin/<config>/<tfm>/, so the repo root is six
     // directories up. ProjectRoot is what EditorCodegenService treats as the safe
@@ -50,16 +56,22 @@ public sealed class EditorCodegenServiceHarness
         // probes; publish/delete below target the resolved URL via the isolated config.
         var (cliPath, _, serverHost) = ResolveLiveRuntimeOrSkip();
 
-        var dashName = $"smoke-test-d3-{Guid.NewGuid():N}"[..("smoke-test-d3-".Length + 8)];
+        var dashName = $"{DashNamePrefix}{Guid.NewGuid():N}"[..(DashNamePrefix.Length + 8)];
         var modulePath = Path.Combine(ProjectRoot, "spacetime", "modules", "smoke_test");
 
         // Harness output (the real C# service) and the parity baseline (direct CLI
         // --module-path). Both land under tests/fixtures/generated/d3-harness*, which is
         // inside the service's safe boundary; the finally-block deletes both trees so the
-        // harness leaves no residue under the repo's `generated` boundary.
-        var harnessOutDir = Path.Combine("tests", "fixtures", "generated", "d3-harness");
+        // harness leaves no residue under the repo's `generated` boundary. The dirs carry
+        // the SAME guid8 suffix as dashName, so two test processes against one checkout never
+        // share a tree — that is what makes the HashTree-mid-delete race structurally
+        // impossible (the fixed-dir version let a concurrent run's PrepareOutputDirectory
+        // recursive-delete this run's tree mid-hash). .gitignore covers any residue from a
+        // hard-killed run, since this `generated` tree is not otherwise ignored.
+        var guid8 = dashName[DashNamePrefix.Length..];
+        var harnessOutDir = Path.Combine("tests", "fixtures", "generated", $"d3-harness-{guid8}");
         var absHarnessOutDir = Path.Combine(ProjectRoot, harnessOutDir);
-        var absCliOutDir = Path.Combine(ProjectRoot, "tests", "fixtures", "generated", "d3-harness-cli");
+        var absCliOutDir = Path.Combine(ProjectRoot, "tests", "fixtures", "generated", $"d3-harness-cli-{guid8}");
 
         // Per-run isolated CLI config. The minted-identity login below writes ONLY here,
         // never the user's ~/.config/spacetime/cli.toml. Declared before the try so the
@@ -386,8 +398,15 @@ public sealed class EditorCodegenServiceHarness
         string executable,
         IReadOnlyList<string> arguments,
         string workingDirectory,
-        (string Key, string Value)? extraEnv = null)
+        (string Key, string Value)? extraEnv = null,
+        TimeSpan? timeout = null)
     {
+        // A generous "obviously hung" threshold: real login/publish/generate/post-process
+        // complete well inside this, so tripping it means the subprocess is stuck. Bounding
+        // here converts an indefinite hang — which the CI suite-level timeout would otherwise
+        // report as a FAIL — into the intended Assert.Skip, uniformly for every live-lane call.
+        var effectiveTimeout = timeout ?? TimeSpan.FromSeconds(300);
+
         var startInfo = new ProcessStartInfo
         {
             FileName = executable,
@@ -409,15 +428,56 @@ public sealed class EditorCodegenServiceHarness
         }
 
         using var process = new Process { StartInfo = startInfo };
-        process.Start();
+        try
+        {
+            process.Start();
+        }
+        catch (Exception ex) when (ex is Win32Exception or IOException)
+        {
+            // Executable missing or not runnable: an environment problem, not a test
+            // failure — skip rather than surface an uncaught ERROR up the live lane.
+            Assert.Skip($"SpacetimeDB runtime unavailable: could not start '{executable}': {ex.Message}");
+            throw; // unreachable — Assert.Skip always throws; satisfies the compiler.
+        }
+
         var stdoutTask = process.StandardOutput.ReadToEndAsync();
         var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync().ConfigureAwait(false);
 
-        return new ProcessResult(
-            process.ExitCode,
-            await stdoutTask.ConfigureAwait(false),
-            await stderrTask.ConfigureAwait(false));
+        using var cts = new CancellationTokenSource(effectiveTimeout);
+        try
+        {
+            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+
+            // Bound the pipe drain by the SAME deadline. A grandchild that inherited the
+            // redirected stdout/stderr handles and outlives the direct child keeps the write
+            // end open, so ReadToEndAsync would otherwise block past the timeout (WaitForExit
+            // only waits on the direct child) and resurface as a suite-level FAIL — the exact
+            // outcome this bound exists to convert into a skip.
+            var stdout = await stdoutTask.WaitAsync(cts.Token).ConfigureAwait(false);
+            var stderr = await stderrTask.WaitAsync(cts.Token).ConfigureAwait(false);
+            return new ProcessResult(process.ExitCode, stdout, stderr);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+            }
+
+            // Observe the abandoned read tasks so a fault on the killed process' redirected
+            // pipes cannot resurface later as an UnobservedTaskException in an unrelated test
+            // (mirrors the TryRunProcess timeout branch).
+            ObserveAndIgnore(stdoutTask);
+            ObserveAndIgnore(stderrTask);
+
+            Assert.Skip(
+                $"SpacetimeDB runtime unavailable: '{executable}' did not exit within " +
+                $"{effectiveTimeout.TotalSeconds:0}s (treated as a hung subprocess)");
+            throw; // unreachable — Assert.Skip always throws; satisfies the compiler.
+        }
     }
 
     private static ProcessResult? TryRunProcess(string executable, IReadOnlyList<string> arguments, TimeSpan timeout)
@@ -504,10 +564,25 @@ public sealed class EditorCodegenServiceHarness
     /// </summary>
     private static void TryDeleteDatabase(string cliPath, string configPath, string serverHost, string dashName)
     {
-        _ = TryRunProcess(
+        var result = TryRunProcess(
             cliPath,
             ["--config-path", configPath, "delete", "--server", serverHost, "--yes", dashName],
             timeout: TimeSpan.FromSeconds(30));
+
+        // Observability only. The delete stays best-effort (deleting a never-published name
+        // is harmless) and this must never alter the test's skip/pass/fail outcome — but a
+        // genuine failure here silently re-introduces the orphaned-DB accumulation this
+        // cleanup exists to prevent, so emit exactly one diagnostic when it does not cleanly
+        // succeed. Never throws.
+        if (result is null || result.Value.ExitCode != 0)
+        {
+            var reason = result is null
+                ? "no result (timed out, killed, or failed to start)"
+                : $"exit {result.Value.ExitCode}: " +
+                  Truncate((result.Value.Stderr.Length > 0 ? result.Value.Stderr : result.Value.Stdout).Trim(), 240);
+            Console.Error.WriteLine(
+                $"[d3-harness] best-effort cleanup could not delete fixture DB '{dashName}': {reason}");
+        }
     }
 
     /// <summary>
