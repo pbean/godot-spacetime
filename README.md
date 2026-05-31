@@ -1,5 +1,11 @@
 # godot-spacetime
 
+> # ⚠️ This project is deprecated and archived
+>
+> **SpacetimeDB now ships an official .NET SDK for Godot.** Since first-party support exists upstream, this community addon is no longer necessary and is no longer maintained.
+>
+> **Please use the official SpacetimeDB Godot SDK instead.** This repository has been archived and is kept read-only for historical reference only — no further development, bug fixes, or releases will be made.
+
 `godot-spacetime` is a Godot `.NET` addon that is being built as a maintained SpacetimeDB SDK for Godot projects. This repository is the root Godot development workspace and ships the addon from `addons/godot_spacetime/`.
 
 ## Current Foundation
